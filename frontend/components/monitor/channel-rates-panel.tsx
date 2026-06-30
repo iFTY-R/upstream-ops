@@ -7,7 +7,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { useChannels, useChannelRates } from "@/lib/queries"
-import { channelTypeLabel, relativeTime } from "@/lib/format"
+import { channelTypeLabel, formatRatio, relativeTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { Channel } from "@/lib/api-types"
 
@@ -78,7 +78,9 @@ function ChannelRateRow({ channel }: { channel: Channel }) {
                   )}
                 >
                   <span className="font-medium">{r.model_name}</span>
-                  <span className="font-semibold tabular-nums">{r.ratio.toFixed(2)}</span>
+                  <span className="rounded bg-primary/10 px-1 font-semibold tabular-nums text-primary ring-1 ring-inset ring-primary/15">
+                    {formatRatio(r.ratio)}
+                  </span>
                 </span>
               )
               return (

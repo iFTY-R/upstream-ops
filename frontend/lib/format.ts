@@ -64,10 +64,17 @@ export function decimal(value: number | null | undefined, digits = 2) {
   })
 }
 
+export function formatRatio(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return "—"
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 6,
+  })
+}
+
 /** 把倍率渲染成"1.20 → 1.50"。 */
 export function ratioArrow(from: number | null | undefined, to: number) {
-  const f = from == null ? "—" : from.toFixed(2)
-  return `${f} → ${to.toFixed(2)}`
+  return `${formatRatio(from)} → ${formatRatio(to)}`
 }
 
 /** 计算变化方向 / 百分比文案，比如 "+25.0%"。 */

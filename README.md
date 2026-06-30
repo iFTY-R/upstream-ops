@@ -85,6 +85,7 @@ UpstreamOps focuses on these problems:
 - Merges added and removed groups in the same scan into one structure-change notification.
 - Filters small rate changes by minimum percentage.
 - Supports notification subscriptions filtered by upstream channel and rate group.
+- Provides a full channel group overview with search and sorting by channel or rate.
 
 ### Subscription Management and Usage Monitoring
 
@@ -261,7 +262,7 @@ IMAGE_TAG=latest
 For production, pin a specific version:
 
 ```env
-IMAGE_TAG=v0.0.2
+IMAGE_TAG=v0.0.3
 ```
 
 ## MySQL Deployment

@@ -13,7 +13,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { apiFetch } from "@/lib/api"
 import type { RateChangeLog, RateChangeLogPage } from "@/lib/api-types"
-import { channelTypeLabel, ratioDelta, relativeTime, shortTime } from "@/lib/format"
+import { channelTypeLabel, formatRatio, ratioDelta, relativeTime, shortTime } from "@/lib/format"
 import { useChannels, useDashboardSummary } from "@/lib/queries"
 import { cn } from "@/lib/utils"
 
@@ -203,11 +203,11 @@ function MultiplierChangeRow({
             <span className="text-muted-foreground">{"倍率"}</span>
             <p className="mt-0.5 tabular-nums">
               <span className="text-muted-foreground">
-                {item.old_ratio == null ? "—" : item.old_ratio.toFixed(2)}
+                {formatRatio(item.old_ratio)}
               </span>
               <span className="mx-1 text-muted-foreground">{"→"}</span>
               <span className={cn("font-medium", isUp ? "text-danger" : "text-success")}>
-                {item.new_ratio.toFixed(2)}
+                {formatRatio(item.new_ratio)}
               </span>
             </p>
           </div>

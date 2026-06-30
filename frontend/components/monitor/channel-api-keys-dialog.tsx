@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/table"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { apiFetch } from "@/lib/api"
-import { channelTypeLabel, dateTime, decimal } from "@/lib/format"
+import { channelTypeLabel, dateTime, decimal, formatRatio } from "@/lib/format"
 import type {
   Channel,
   ChannelAPIKey,
@@ -605,7 +605,7 @@ export function ChannelAPIKeysDialog({
                                 {item.group_description || "无描述"}
                               </p>
                               {item.group_ratio > 0 ? (
-                                <p className="text-[11px] text-muted-foreground">倍率 {item.group_ratio.toFixed(2)}</p>
+                                <p className="text-[11px] text-muted-foreground">倍率 {formatRatio(item.group_ratio)}</p>
                               ) : null}
                             </div>
                           </TableCell>
@@ -828,7 +828,7 @@ function NewAPIFields({
           >
             <SelectTrigger className="w-full">
               {selectedGroup ? (
-                <SelectValue>{selectedGroup.name} · {selectedGroup.ratio.toFixed(2)}</SelectValue>
+                <SelectValue>{selectedGroup.name} · {formatRatio(selectedGroup.ratio)}</SelectValue>
               ) : (
                 <SelectValue placeholder={groupsLoading ? "加载中…" : "选择分组"} />
               )}
@@ -837,7 +837,7 @@ function NewAPIFields({
               {groups.map((group) => (
                 <SelectItem key={group.name} value={group.name}>
                   <span className="flex flex-col items-start">
-                    <span>{group.name} · {group.ratio.toFixed(2)}</span>
+                    <span>{group.name} · {formatRatio(group.ratio)}</span>
                     <span className="max-w-96 whitespace-normal break-words text-[11px] text-muted-foreground">
                       {group.description || "无描述"}
                     </span>
@@ -900,7 +900,7 @@ function Sub2APIFields({
           >
             <SelectTrigger className="w-full">
               {selectedGroup ? (
-                <SelectValue>{selectedGroup.name} · {selectedGroup.ratio.toFixed(2)}</SelectValue>
+                <SelectValue>{selectedGroup.name} · {formatRatio(selectedGroup.ratio)}</SelectValue>
               ) : (
                 <SelectValue placeholder={groupsLoading ? "加载中…" : "选择分组"} />
               )}
@@ -911,7 +911,7 @@ function Sub2APIFields({
                 .map((group) => (
                   <SelectItem key={group.id} value={String(group.id)}>
                     <span className="flex flex-col items-start">
-                      <span>{group.name} · {group.ratio.toFixed(2)}</span>
+                      <span>{group.name} · {formatRatio(group.ratio)}</span>
                       <span className="max-w-96 whitespace-normal break-words text-[11px] text-muted-foreground">
                         {group.description || "无描述"}
                       </span>
@@ -968,7 +968,7 @@ function GroupHint({ group }: { group?: ChannelAPIKeyGroup }) {
   if (!group) return null
   return (
     <p className="whitespace-normal break-words text-[11px] leading-4 text-muted-foreground">
-      {group.description || "无描述"} · 倍率 {group.ratio.toFixed(2)}
+      {group.description || "无描述"} · 倍率 {formatRatio(group.ratio)}
     </p>
   )
 }
