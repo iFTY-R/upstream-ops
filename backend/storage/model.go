@@ -39,6 +39,7 @@ type Channel struct {
 	Type                   ChannelType    `gorm:"size:32;not null;index" json:"type"`
 	SiteURL                string         `gorm:"size:512;not null" json:"site_url"`
 	Username               string         `gorm:"size:256;not null" json:"username"`
+	SortOrder              int            `gorm:"not null;default:1" json:"sort_order"`
 	PasswordCipher         string         `gorm:"size:4096;not null" json:"-"`
 	CredentialMode         CredentialMode `gorm:"size:16;not null;default:'password'" json:"credential_mode"`
 	LoginExtraParams       string         `gorm:"type:text" json:"login_extra_params"`

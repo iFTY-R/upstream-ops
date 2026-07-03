@@ -52,6 +52,7 @@ interface FormState {
   type: ChannelType
   site_url: string
   username: string
+  sort_order: string
   password: string
   login_extra_params: string
 
@@ -84,13 +85,14 @@ function initialState(c?: Channel | null): FormState {
     type: c?.type ?? "sub2api",
     site_url: c?.site_url ?? "",
     username: c?.username ?? "",
+    sort_order: c?.sort_order != null ? String(c.sort_order) : "1",
     password: "",
     login_extra_params: c?.login_extra_params ?? "",
     credential_mode: c?.credential_mode ?? "password",
     newapi_token_kind: "cookie",
     newapi_cookie: "",
     newapi_access_token: "",
-    newapi_user_id: "",
+    newapi_user_id: c?.type === "newapi" ? (c.user_id ?? "") : "",
     sub2api_access_token: "",
     sub2api_refresh_token: "",
     balance_threshold: c?.balance_threshold != null ? String(c.balance_threshold) : "0",
@@ -149,6 +151,7 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
   const supportsSubscription = form.type === "sub2api"
   // 编辑模式下，若 credential_mode 没变，token / password 都可以留空表示不修改。
   const modeChanged = isEdit && form.credential_mode !== (channel?.credential_mode ?? "password")
+  const existingNewAPIUserID = isEdit && channel?.type === "newapi" ? (channel.user_id ?? "").trim() : ""
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -158,6 +161,10 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
       const threshold = Number(form.balance_threshold)
       if (!Number.isFinite(threshold) || threshold < 0) {
         throw new Error("余额阈值必须是非负数")
+      }
+      const sortOrder = Number(form.sort_order)
+      if (!Number.isInteger(sortOrder)) {
+        throw new Error("排序必须是整数")
       }
       let rechargeMultiplier = 0
       const rechargeMultiplierText = form.recharge_multiplier.trim()
@@ -188,7 +195,9 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
             form.newapi_token_kind === "access_token"
               ? form.newapi_access_token.trim()
               : form.newapi_cookie.trim()
-          if (!isEdit || modeChanged || credField || form.newapi_user_id) {
+          const userID = form.newapi_user_id.trim()
+          const userIDChanged = isEdit ? userID !== existingNewAPIUserID : userID !== ""
+          if (!isEdit || modeChanged || credField || userIDChanged) {
             if (!credField) {
               throw new Error(
                 form.newapi_token_kind === "access_token"
@@ -196,7 +205,7 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
                   : "NewAPI token 模式必须填写 Cookie",
               )
             }
-            if (!form.newapi_user_id.trim()) throw new Error("NewAPI token 模式必须填写 User ID")
+            if (!userID) throw new Error("NewAPI token 模式必须填写 User ID")
           }
         } else {
           if (!isEdit || modeChanged || form.sub2api_access_token || form.sub2api_refresh_token) {
@@ -209,11 +218,13 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
           form.newapi_token_kind === "access_token"
             ? form.newapi_access_token
             : form.newapi_cookie
+        const newapiUserIDChanged =
+          form.type === "newapi" && form.newapi_user_id.trim() !== existingNewAPIUserID
         if (
           !isEdit ||
           modeChanged ||
           newapiCredFilled ||
-          form.newapi_user_id ||
+          newapiUserIDChanged ||
           form.sub2api_access_token ||
           form.sub2api_refresh_token
         ) {
@@ -240,6 +251,7 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
           name: form.name,
           site_url: form.site_url,
           username: form.username,
+          sort_order: sortOrder,
           credential_mode: form.credential_mode,
           login_extra_params: loginExtraParams,
           balance_threshold: threshold,
@@ -266,6 +278,7 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
             type: form.type,
             site_url: form.site_url,
             username: form.username,
+            sort_order: sortOrder,
             credential_mode: form.credential_mode,
             login_extra_params: loginExtraParams,
             password: isTokenMode ? "" : form.password,
@@ -303,15 +316,28 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="name">渠道名</Label>
-            <Input
-              id="name"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              required
-              disabled={submitting}
-            />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_120px]">
+            <div className="space-y-1.5">
+              <Label htmlFor="name">渠道名</Label>
+              <Input
+                id="name"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                required
+                disabled={submitting}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="sort-order">排序</Label>
+              <Input
+                id="sort-order"
+                type="number"
+                step="1"
+                value={form.sort_order}
+                onChange={(e) => setForm({ ...form, sort_order: e.target.value })}
+                disabled={submitting}
+              />
+            </div>
           </div>
 
           <div className="space-y-1.5">

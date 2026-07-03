@@ -58,6 +58,7 @@ UpstreamOps focuses on these problems:
 - Supports NewAPI and Sub2API upstreams.
 - Supports username/password credentials and token/cookie credentials.
 - Enables or disables monitoring per channel.
+- Supports custom channel sort order; higher values are displayed and monitored first.
 - Configures low-balance alert thresholds.
 - Tests login and manually syncs balances and rates.
 - Supports extra login form parameters for modified NewAPI or Sub2API login endpoints.
@@ -263,7 +264,7 @@ IMAGE_TAG=latest
 For production, pin a specific version:
 
 ```env
-IMAGE_TAG=v0.0.4
+IMAGE_TAG=v0.0.5
 ```
 
 ## MySQL Deployment
@@ -443,6 +444,8 @@ NewAPI token mode also supports the system access token (`user.access_token`, th
   "user_id": "123"
 }
 ```
+
+When editing a NewAPI token/cookie channel, the form shows the saved `user_id` for reuse, while the saved cookie or access token remains hidden.
 
 ### Sub2API
 

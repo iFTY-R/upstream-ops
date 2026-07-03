@@ -62,6 +62,7 @@ UpstreamOps 主要解决这些痛点：
 - 支持 NewAPI / Sub2API 两类上游。
 - 支持账号密码模式和 Token/Cookie 模式。
 - 支持启用或关闭单个渠道监控。
+- 支持自定义渠道排序，数值越大越靠前展示并优先参与监控。
 - 支持配置余额告警阈值。
 - 支持测试登录、手动同步余额、手动同步倍率。
 - 支持账号密码模式配置附加登录表单参数，适配需要额外字段的 NewAPI / Sub2API 魔改版登录接口。
@@ -276,7 +277,7 @@ IMAGE_TAG=latest
 生产环境建议锁定具体版本，例如：
 
 ```env
-IMAGE_TAG=v0.0.4
+IMAGE_TAG=v0.0.5
 ```
 
 ## MySQL 部署
@@ -461,6 +462,8 @@ NewAPI token 模式同样支持使用系统访问令牌（`user.access_token`，
 	"user_id": "123"
 }
 ```
+
+编辑 NewAPI Token/Cookie 渠道时，表单会回显已保存的 `user_id` 便于复用，但不会回显已保存的 Cookie 或访问令牌。
 
 ### Sub2API
 

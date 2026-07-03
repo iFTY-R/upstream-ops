@@ -53,6 +53,7 @@ type channelInput struct {
 	Type                   storage.ChannelType    `json:"type" binding:"required"`
 	SiteURL                string                 `json:"site_url" binding:"required"`
 	Username               string                 `json:"username"`
+	SortOrder              int                    `json:"sort_order"`
 	Password               string                 `json:"password"`
 	CredentialMode         storage.CredentialMode `json:"credential_mode"`
 	TokenCredential        string                 `json:"token_credential"` // JSON：token 模式时填写
@@ -72,6 +73,7 @@ type channelUpdateInput struct {
 	Name                   *string                 `json:"name"`
 	SiteURL                *string                 `json:"site_url"`
 	Username               *string                 `json:"username"`
+	SortOrder              *int                    `json:"sort_order"`
 	Password               *string                 `json:"password"`
 	CredentialMode         *storage.CredentialMode `json:"credential_mode"`
 	TokenCredential        *string                 `json:"token_credential"`
@@ -85,6 +87,11 @@ type channelUpdateInput struct {
 	RechargeMultiplier     *float64                `json:"recharge_multiplier"`
 	RechargeMultiplierMode *string                 `json:"recharge_multiplier_mode"`
 	MonitorEnabled         *bool                   `json:"monitor_enabled"`
+}
+
+type channelOutput struct {
+	storage.Channel
+	UserID string `json:"user_id,omitempty"`
 }
 
 type channelRedeemInput struct {
@@ -123,7 +130,7 @@ func listChannels(c *gin.Context, d *Deps) {
 			pages = int((total + int64(pageSize) - 1) / int64(pageSize))
 		}
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{
-			"items":     list,
+			"items":     channelOutputs(d, list),
 			"total":     total,
 			"page":      page,
 			"page_size": pageSize,
@@ -137,7 +144,7 @@ func listChannels(c *gin.Context, d *Deps) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": list})
+	c.JSON(http.StatusOK, gin.H{"data": channelOutputs(d, list)})
 }
 
 func createChannel(c *gin.Context, d *Deps) {
@@ -151,6 +158,7 @@ func createChannel(c *gin.Context, d *Deps) {
 		Type:                   in.Type,
 		SiteURL:                in.SiteURL,
 		Username:               in.Username,
+		SortOrder:              in.SortOrder,
 		Password:               in.Password,
 		CredentialMode:         in.CredentialMode,
 		TokenCredential:        in.TokenCredential,
@@ -169,7 +177,45 @@ func createChannel(c *gin.Context, d *Deps) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": created})
+	c.JSON(http.StatusOK, gin.H{"data": channelOutputFor(d, *created)})
+}
+
+func channelOutputs(d *Deps, list []storage.Channel) []channelOutput {
+	out := make([]channelOutput, 0, len(list))
+	for _, ch := range list {
+		out = append(out, channelOutputFor(d, ch))
+	}
+	return out
+}
+
+func channelOutputFor(d *Deps, ch storage.Channel) channelOutput {
+	out := channelOutput{Channel: ch}
+	out.UserID = channelUserID(d, &ch)
+	return out
+}
+
+func channelUserID(d *Deps, ch *storage.Channel) string {
+	if d == nil || ch == nil || ch.Type != storage.ChannelTypeNewAPI {
+		return ""
+	}
+	if ch.CredentialMode == storage.CredentialModeToken && d.Cipher != nil && ch.PasswordCipher != "" {
+		raw, err := d.Cipher.Decrypt(ch.PasswordCipher)
+		if err == nil {
+			var cred channel.NewAPITokenCredential
+			if json.Unmarshal([]byte(raw), &cred) == nil {
+				if userID := strings.TrimSpace(cred.UserID); userID != "" {
+					return userID
+				}
+			}
+		}
+	}
+	if d.Sessions != nil {
+		session, err := d.Sessions.FindByChannel(ch.ID)
+		if err == nil && session != nil {
+			return strings.TrimSpace(session.UserID)
+		}
+	}
+	return ""
 }
 
 func getChannel(c *gin.Context, d *Deps) {
@@ -183,7 +229,7 @@ func getChannel(c *gin.Context, d *Deps) {
 		fail(c, http.StatusNotFound, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": ch})
+	c.JSON(http.StatusOK, gin.H{"data": channelOutputFor(d, *ch)})
 }
 
 func updateChannel(c *gin.Context, d *Deps) {
@@ -211,6 +257,7 @@ func updateChannel(c *gin.Context, d *Deps) {
 		Name:                   in.Name,
 		SiteURL:                in.SiteURL,
 		Username:               in.Username,
+		SortOrder:              in.SortOrder,
 		Password:               in.Password,
 		CredentialMode:         in.CredentialMode,
 		TokenCredential:        in.TokenCredential,
@@ -229,7 +276,7 @@ func updateChannel(c *gin.Context, d *Deps) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": updated})
+	c.JSON(http.StatusOK, gin.H{"data": channelOutputFor(d, *updated)})
 }
 
 func deleteChannel(c *gin.Context, d *Deps) {
@@ -256,7 +303,7 @@ func clearChannelLoginInfo(c *gin.Context, d *Deps) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "data": updated})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": channelOutputFor(d, *updated)})
 }
 
 func toggleChannel(c *gin.Context, d *Deps, enabled bool) {

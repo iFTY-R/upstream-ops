@@ -145,6 +145,7 @@ type CreateInput struct {
 	Type                   storage.ChannelType
 	SiteURL                string
 	Username               string
+	SortOrder              int
 	Password               string
 	CredentialMode         storage.CredentialMode
 	TokenCredential        string // JSON：password 模式时为空
@@ -186,6 +187,7 @@ func (s *Service) Create(in CreateInput) (*storage.Channel, error) {
 		Type:                   in.Type,
 		SiteURL:                in.SiteURL,
 		Username:               in.Username,
+		SortOrder:              normalizeSortOrder(in.SortOrder),
 		PasswordCipher:         enc,
 		CredentialMode:         mode,
 		LoginExtraParams:       loginExtraParams,
@@ -214,6 +216,7 @@ type UpdateInput struct {
 	Name                   *string
 	SiteURL                *string
 	Username               *string
+	SortOrder              *int
 	Password               *string
 	CredentialMode         *storage.CredentialMode
 	TokenCredential        *string // JSON
@@ -242,6 +245,9 @@ func (s *Service) Update(id uint, in UpdateInput) (*storage.Channel, error) {
 	}
 	if in.Username != nil {
 		c.Username = *in.Username
+	}
+	if in.SortOrder != nil {
+		c.SortOrder = normalizeSortOrder(*in.SortOrder)
 	}
 
 	// 决定本次更新后的最终凭据模式。
@@ -344,6 +350,13 @@ func (s *Service) Update(id uint, in UpdateInput) (*storage.Channel, error) {
 func normalizeRechargeMultiplier(v *float64) *float64 {
 	if v == nil || *v <= 0 {
 		return nil
+	}
+	return v
+}
+
+func normalizeSortOrder(v int) int {
+	if v == 0 {
+		return 1
 	}
 	return v
 }

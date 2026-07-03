@@ -58,7 +58,7 @@ func (r *Channels) FindByID(id uint) (*Channel, error) {
 }
 func (r *Channels) List() ([]Channel, error) {
 	var list []Channel
-	if err := r.db.Order("id ASC").Find(&list).Error; err != nil {
+	if err := r.db.Order("sort_order DESC").Order("id ASC").Find(&list).Error; err != nil {
 		return nil, err
 	}
 	return list, nil
@@ -75,7 +75,7 @@ func (r *Channels) ListPage(page, pageSize int) ([]Channel, int64, error) {
 		return nil, 0, err
 	}
 	var list []Channel
-	q := r.db.Order("id ASC")
+	q := r.db.Order("sort_order DESC").Order("id ASC")
 	if pageSize != -1 {
 		q = q.Offset((page - 1) * pageSize).Limit(pageSize)
 	}
@@ -86,7 +86,7 @@ func (r *Channels) ListPage(page, pageSize int) ([]Channel, int64, error) {
 }
 func (r *Channels) ListMonitorEnabled() ([]Channel, error) {
 	var list []Channel
-	if err := r.db.Where("monitor_enabled = ?", true).Find(&list).Error; err != nil {
+	if err := r.db.Where("monitor_enabled = ?", true).Order("sort_order DESC").Order("id ASC").Find(&list).Error; err != nil {
 		return nil, err
 	}
 	return list, nil

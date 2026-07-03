@@ -266,6 +266,93 @@ func TestChannelsPageAll(t *testing.T) {
 	}
 }
 
+func TestChannelsListSortOrder(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db := openTestDB(t)
+	channels := storage.NewChannels(db)
+	items := []storage.Channel{
+		{Name: "low", Type: storage.ChannelTypeNewAPI, SiteURL: "https://a.example.com", Username: "u", PasswordCipher: "x", SortOrder: 1, MonitorEnabled: true},
+		{Name: "high", Type: storage.ChannelTypeNewAPI, SiteURL: "https://b.example.com", Username: "u", PasswordCipher: "x", SortOrder: 9, MonitorEnabled: true},
+	}
+	for i := range items {
+		if err := channels.Create(&items[i]); err != nil {
+			t.Fatalf("create channel: %v", err)
+		}
+	}
+
+	r := gin.New()
+	registerChannels(r.Group("/api"), &Deps{Channels: channels})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/channels", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data []storage.Channel `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Data) != 2 || resp.Data[0].Name != "high" || resp.Data[1].Name != "low" {
+		t.Fatalf("unexpected order: %#v", resp.Data)
+	}
+}
+
+func TestChannelsListIncludesNewAPIUserID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db := openTestDB(t)
+	channels := storage.NewChannels(db)
+	cipher, err := crypto.NewCipher("test-secret")
+	if err != nil {
+		t.Fatalf("cipher: %v", err)
+	}
+	enc, err := cipher.Encrypt(`{"cookie":"session=secret","user_id":"123"}`)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if err := channels.Create(&storage.Channel{
+		Name:           "newapi-token",
+		Type:           storage.ChannelTypeNewAPI,
+		SiteURL:        "https://example.com",
+		Username:       "u",
+		PasswordCipher: enc,
+		CredentialMode: storage.CredentialModeToken,
+		MonitorEnabled: true,
+	}); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	r := gin.New()
+	registerChannels(r.Group("/api"), &Deps{Channels: channels, Cipher: cipher})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/channels", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "session=secret") {
+		t.Fatalf("response leaked cookie: %s", rec.Body.String())
+	}
+	var resp struct {
+		Data []struct {
+			UserID string `json:"user_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Data) != 1 || resp.Data[0].UserID != "123" {
+		t.Fatalf("unexpected response: %#v", resp.Data)
+	}
+}
+
 func TestAnnouncementsPage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
