@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bejix/upstream-ops/backend/config"
-	"github.com/bejix/upstream-ops/backend/monitor"
-	"github.com/bejix/upstream-ops/backend/storage"
+	"github.com/ifty-r/upstream-ops/backend/config"
+	"github.com/ifty-r/upstream-ops/backend/monitor"
+	"github.com/ifty-r/upstream-ops/backend/storage"
 	"gorm.io/gorm"
 )
 
@@ -57,6 +57,7 @@ func TestRunRetentionDeletesAnnouncements(t *testing.T) {
 			},
 		},
 		&monitor.Service{},
+		nil,
 		monLogs,
 		rates,
 		notifies,

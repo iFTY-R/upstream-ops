@@ -149,6 +149,310 @@ func TestProxyEnabledPersistsForCaptchaAndNotification(t *testing.T) {
 	}
 }
 
+func TestShopTargetSyncResultUsesNicknameAsName(t *testing.T) {
+	db := openTestDB(t)
+	targets := NewShopTargets(db)
+	target := &ShopTarget{
+		Name:           "7FCVUA4X",
+		Platform:       ShopPlatformLDXP,
+		SiteURL:        "https://pay.ldxp.cn/shop/7FCVUA4X",
+		BaseURL:        "https://pay.ldxp.cn",
+		Token:          "7FCVUA4X",
+		MonitorEnabled: true,
+		ScopeMode:      ShopScopeAll,
+	}
+	if err := targets.Create(target); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+
+	now := time.Now()
+	if err := targets.SetSyncResult(target.ID, &now, "", "全网最低Team", 15, 7, 0); err != nil {
+		t.Fatalf("set sync result: %v", err)
+	}
+	got, err := targets.FindByID(target.ID)
+	if err != nil {
+		t.Fatalf("find target: %v", err)
+	}
+	if got.Name != "全网最低Team" || got.LastShopName != "全网最低Team" {
+		t.Fatalf("target name mismatch: name=%q last=%q", got.Name, got.LastShopName)
+	}
+	if got.LastGoodsCount != 15 || got.LastLowStockGoods != 7 {
+		t.Fatalf("sync counts mismatch: %#v", got)
+	}
+}
+
+func TestShopTargetSyncResultKeepsCountsWhenNicknameConflicts(t *testing.T) {
+	db := openTestDB(t)
+	targets := NewShopTargets(db)
+	first := &ShopTarget{
+		Name:           "重复店铺",
+		Platform:       ShopPlatformLDXP,
+		SiteURL:        "https://pay.ldxp.cn/shop/A",
+		BaseURL:        "https://pay.ldxp.cn",
+		Token:          "A",
+		MonitorEnabled: true,
+		ScopeMode:      ShopScopeAll,
+	}
+	second := &ShopTarget{
+		Name:           "B",
+		Platform:       ShopPlatformLDXP,
+		SiteURL:        "https://pay.ldxp.cn/shop/B",
+		BaseURL:        "https://pay.ldxp.cn",
+		Token:          "B",
+		MonitorEnabled: true,
+		ScopeMode:      ShopScopeAll,
+	}
+	if err := targets.Create(first); err != nil {
+		t.Fatalf("create first target: %v", err)
+	}
+	if err := targets.Create(second); err != nil {
+		t.Fatalf("create second target: %v", err)
+	}
+
+	now := time.Now()
+	if err := targets.SetSyncResult(second.ID, &now, "", "重复店铺", 9, 1, 2); err != nil {
+		t.Fatalf("set sync result with duplicate nickname: %v", err)
+	}
+	got, err := targets.FindByID(second.ID)
+	if err != nil {
+		t.Fatalf("find second target: %v", err)
+	}
+	if got.Name != "B" {
+		t.Fatalf("conflicting name should stay unchanged, got %q", got.Name)
+	}
+	if got.LastShopName != "重复店铺" || got.LastGoodsCount != 9 || got.LastChangedCount != 2 {
+		t.Fatalf("sync result should still persist: %#v", got)
+	}
+}
+
+func TestShopTargetsUpdateSortOrders(t *testing.T) {
+	db := openTestDB(t)
+	targets := NewShopTargets(db)
+	items := []*ShopTarget{
+		{Name: "shop-a", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/A", BaseURL: "https://example.invalid", Token: "A", MonitorEnabled: true, ScopeMode: ShopScopeAll, SortOrder: 1},
+		{Name: "shop-b", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/B", BaseURL: "https://example.invalid", Token: "B", MonitorEnabled: true, ScopeMode: ShopScopeAll, SortOrder: 2},
+		{Name: "shop-c", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/C", BaseURL: "https://example.invalid", Token: "C", MonitorEnabled: true, ScopeMode: ShopScopeAll, SortOrder: 3},
+	}
+	for _, item := range items {
+		if err := targets.Create(item); err != nil {
+			t.Fatalf("create %s: %v", item.Name, err)
+		}
+	}
+	if err := targets.UpdateSortOrders(map[uint]int{
+		items[0].ID: 30,
+		items[1].ID: 10,
+		items[2].ID: 20,
+	}); err != nil {
+		t.Fatalf("update sort orders: %v", err)
+	}
+	list, err := targets.List()
+	if err != nil {
+		t.Fatalf("list targets: %v", err)
+	}
+	if len(list) != 3 || list[0].Name != "shop-a" || list[1].Name != "shop-c" || list[2].Name != "shop-b" {
+		t.Fatalf("unexpected order: %#v", list)
+	}
+}
+
+func TestShopTargetsCreateAssignsNextSortOrder(t *testing.T) {
+	db := openTestDB(t)
+	targets := NewShopTargets(db)
+	first := &ShopTarget{
+		Name:           "shop-a",
+		Platform:       ShopPlatformLDXP,
+		SiteURL:        "https://example.invalid/shop/A",
+		BaseURL:        "https://example.invalid",
+		Token:          "A",
+		MonitorEnabled: true,
+		ScopeMode:      ShopScopeAll,
+		SortOrder:      7,
+	}
+	second := &ShopTarget{
+		Name:           "shop-b",
+		Platform:       ShopPlatformLDXP,
+		SiteURL:        "https://example.invalid/shop/B",
+		BaseURL:        "https://example.invalid",
+		Token:          "B",
+		MonitorEnabled: true,
+		ScopeMode:      ShopScopeAll,
+	}
+	if err := targets.Create(first); err != nil {
+		t.Fatalf("create first target: %v", err)
+	}
+	if err := targets.Create(second); err != nil {
+		t.Fatalf("create second target: %v", err)
+	}
+
+	if second.SortOrder != 8 {
+		t.Fatalf("second sort_order = %d, want 8", second.SortOrder)
+	}
+	list, err := targets.List()
+	if err != nil {
+		t.Fatalf("list targets: %v", err)
+	}
+	if len(list) != 2 || list[0].Name != "shop-b" || list[1].Name != "shop-a" {
+		t.Fatalf("unexpected order after create: %#v", list)
+	}
+}
+
+func TestShopGoodsSnapshotCategoriesAndFilters(t *testing.T) {
+	db := openTestDB(t)
+	goods := NewShopGoods(db)
+	now := time.Now()
+	removedAt := now.Add(time.Hour)
+
+	snapshots := []ShopGoodsSnapshot{
+		{
+			TargetID:     1,
+			GoodsKey:     "gpt-live",
+			GoodsType:    "card",
+			Name:         "GPT Pro",
+			CategoryID:   10,
+			CategoryName: "GPT",
+			Price:        1.2,
+			StockCount:   0,
+			FirstSeenAt:  now,
+			LastSeenAt:   now,
+		},
+		{
+			TargetID:     1,
+			GoodsKey:     "gpt-old",
+			GoodsType:    "card",
+			Name:         "GPT Old",
+			CategoryID:   10,
+			CategoryName: "GPT",
+			Price:        1.2,
+			StockCount:   8,
+			FirstSeenAt:  now,
+			LastSeenAt:   now,
+			RemovedAt:    &removedAt,
+		},
+		{
+			TargetID:     1,
+			GoodsKey:     "k12-live",
+			GoodsType:    "card",
+			Name:         "K12 Pack",
+			CategoryID:   20,
+			CategoryName: "K12",
+			Price:        3.4,
+			StockCount:   5,
+			FirstSeenAt:  now,
+			LastSeenAt:   now,
+		},
+		{
+			TargetID:    1,
+			GoodsKey:    "uncat-live",
+			GoodsType:   "card",
+			Name:        "No Category",
+			Price:       2.3,
+			StockCount:  1,
+			FirstSeenAt: now,
+			LastSeenAt:  now,
+		},
+		{
+			TargetID:     2,
+			GoodsKey:     "other-shop",
+			GoodsType:    "card",
+			Name:         "Other Shop",
+			CategoryID:   10,
+			CategoryName: "GPT",
+			Price:        9.9,
+			StockCount:   0,
+			FirstSeenAt:  now,
+			LastSeenAt:   now,
+		},
+	}
+	for _, snapshot := range snapshots {
+		snapshot := snapshot
+		if err := goods.CreateSnapshot(&snapshot); err != nil {
+			t.Fatalf("create snapshot %s: %v", snapshot.GoodsKey, err)
+		}
+	}
+
+	categories, err := goods.SnapshotCategories(1, 1)
+	if err != nil {
+		t.Fatalf("snapshot categories: %v", err)
+	}
+	byName := map[string]ShopSnapshotCategory{}
+	for _, category := range categories {
+		byName[category.CategoryName] = category
+	}
+	if len(byName) != 3 {
+		t.Fatalf("category count = %d, want 3: %#v", len(byName), categories)
+	}
+	if got := byName["GPT"]; got.GoodsCount != 2 || got.ActiveCount != 1 || got.RemovedCount != 1 || got.LowStockCount != 1 || got.OutOfStockCount != 1 {
+		t.Fatalf("GPT category mismatch: %#v", got)
+	}
+	if got := byName["K12"]; got.GoodsCount != 1 || got.ActiveCount != 1 || got.LowStockCount != 0 {
+		t.Fatalf("K12 category mismatch: %#v", got)
+	}
+	if got := byName[""]; got.GoodsCount != 1 || got.CategoryID != 0 || got.LowStockCount != 1 {
+		t.Fatalf("uncategorized mismatch: %#v", got)
+	}
+
+	categoryID := int64(10)
+	activeGPT, total, err := goods.ListPageFiltered(1, 1, 20, ShopGoodsFilter{CategoryID: &categoryID, Status: "active", StockThreshold: 1})
+	if err != nil {
+		t.Fatalf("list active GPT: %v", err)
+	}
+	if total != 1 || len(activeGPT) != 1 || activeGPT[0].GoodsKey != "gpt-live" {
+		t.Fatalf("active GPT mismatch: total=%d list=%#v", total, activeGPT)
+	}
+
+	lowStock, total, err := goods.ListPageFiltered(1, 1, 20, ShopGoodsFilter{Status: "low_stock", StockThreshold: 1})
+	if err != nil {
+		t.Fatalf("list low stock: %v", err)
+	}
+	if total != 2 || len(lowStock) != 2 {
+		t.Fatalf("low stock mismatch: total=%d list=%#v", total, lowStock)
+	}
+
+	inStock, total, err := goods.ListPageFiltered(1, 1, 20, ShopGoodsFilter{Status: "in_stock"})
+	if err != nil {
+		t.Fatalf("list in stock: %v", err)
+	}
+	if total != 2 || len(inStock) != 2 {
+		t.Fatalf("in stock mismatch: total=%d list=%#v", total, inStock)
+	}
+	for _, item := range inStock {
+		if item.StockCount <= 0 || item.RemovedAt != nil {
+			t.Fatalf("in stock item should be active with stock > 0: %#v", item)
+		}
+	}
+
+	removed, total, err := goods.ListPageFiltered(1, 1, 20, ShopGoodsFilter{Status: "removed"})
+	if err != nil {
+		t.Fatalf("list removed: %v", err)
+	}
+	if total != 1 || len(removed) != 1 || removed[0].GoodsKey != "gpt-old" {
+		t.Fatalf("removed mismatch: total=%d list=%#v", total, removed)
+	}
+
+	keyword, total, err := goods.ListPageFiltered(1, 1, 20, ShopGoodsFilter{Keyword: "Pack"})
+	if err != nil {
+		t.Fatalf("list keyword: %v", err)
+	}
+	if total != 1 || len(keyword) != 1 || keyword[0].GoodsKey != "k12-live" {
+		t.Fatalf("keyword mismatch: total=%d list=%#v", total, keyword)
+	}
+
+	defaultSorted, total, err := goods.ListPageFiltered(1, 1, 20, ShopGoodsFilter{})
+	if err != nil {
+		t.Fatalf("list default sort: %v", err)
+	}
+	if total != 4 || len(defaultSorted) != 4 || defaultSorted[0].GoodsKey != "uncat-live" {
+		t.Fatalf("default sort should use category/name, total=%d list=%#v", total, defaultSorted)
+	}
+
+	stockDesc, total, err := goods.ListPageFiltered(1, 1, 20, ShopGoodsFilter{Sort: "stock_desc"})
+	if err != nil {
+		t.Fatalf("list stock desc: %v", err)
+	}
+	if total != 4 || len(stockDesc) != 4 || stockDesc[0].GoodsKey != "k12-live" {
+		t.Fatalf("stock desc sort mismatch: total=%d list=%#v", total, stockDesc)
+	}
+}
+
 func TestAggregateBalanceTrendFillsMissingDays(t *testing.T) {
 	db := openTestDB(t)
 	rates := NewRates(db)

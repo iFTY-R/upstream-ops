@@ -512,7 +512,7 @@ export default function SettingsPage() {
             <SectionCard
               icon={<Clock3 className="size-4 text-sky-600" />}
               title="调度与保留策略"
-              description="管理余额采集、倍率采集和历史清理任务。"
+              description="管理余额采集、倍率采集、店铺监控和历史清理任务。"
             >
               <div className="grid gap-4 md:grid-cols-2">
                 <Field
@@ -550,6 +550,27 @@ export default function SettingsPage() {
                               scheduler: {
                                 ...prev.scheduler,
                                 rateCron: e.target.value,
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
+                <Field
+                  label="店铺监控 Cron"
+                  description="控制店铺商品快照同步的执行周期，留空可暂停定时店铺监控。"
+                >
+                  <Input
+                    value={form.scheduler.shopCron ?? ""}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                shopCron: e.target.value,
                               },
                             }
                           : prev,

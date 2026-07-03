@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bejix/upstream-ops/backend/config"
-	"github.com/bejix/upstream-ops/backend/connector"
-	"github.com/bejix/upstream-ops/backend/crypto"
-	"github.com/bejix/upstream-ops/backend/storage"
+	"github.com/ifty-r/upstream-ops/backend/config"
+	"github.com/ifty-r/upstream-ops/backend/connector"
+	"github.com/ifty-r/upstream-ops/backend/crypto"
+	"github.com/ifty-r/upstream-ops/backend/storage"
 )
 
 type fakeHTTPConfigConnector struct {

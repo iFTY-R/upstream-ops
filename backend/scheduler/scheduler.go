@@ -6,11 +6,12 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/bejix/upstream-ops/backend/captcha"
-	"github.com/bejix/upstream-ops/backend/config"
-	"github.com/bejix/upstream-ops/backend/crypto"
-	"github.com/bejix/upstream-ops/backend/monitor"
-	"github.com/bejix/upstream-ops/backend/storage"
+	"github.com/ifty-r/upstream-ops/backend/captcha"
+	"github.com/ifty-r/upstream-ops/backend/config"
+	"github.com/ifty-r/upstream-ops/backend/crypto"
+	"github.com/ifty-r/upstream-ops/backend/monitor"
+	"github.com/ifty-r/upstream-ops/backend/shopmonitor"
+	"github.com/ifty-r/upstream-ops/backend/storage"
 	"github.com/robfig/cron/v3"
 )
 
@@ -19,6 +20,7 @@ type Scheduler struct {
 	log           *slog.Logger
 	cron          *cron.Cron
 	monitor       *monitor.Service
+	shopMonitor   *shopmonitor.Service
 	monLogs       *storage.MonitorLogs
 	rates         *storage.Rates
 	notifies      *storage.Notifications
@@ -31,6 +33,7 @@ type Scheduler struct {
 func New(
 	cfg config.SchedulerConfig,
 	m *monitor.Service,
+	shop *shopmonitor.Service,
 	monLogs *storage.MonitorLogs,
 	rates *storage.Rates,
 	notifies *storage.Notifications,
@@ -45,6 +48,7 @@ func New(
 		log:           log,
 		cron:          cron.New(cron.WithSeconds()),
 		monitor:       m,
+		shopMonitor:   shop,
 		monLogs:       monLogs,
 		rates:         rates,
 		notifies:      notifies,
@@ -66,6 +70,11 @@ func (s *Scheduler) Start() error {
 			return err
 		}
 	}
+	if s.cfg.ShopCron != "" && s.shopMonitor != nil {
+		if _, err := s.cron.AddFunc(s.cfg.ShopCron, s.runShops); err != nil {
+			return err
+		}
+	}
 	if s.cfg.Retention.Cron != "" && s.hasRetention() {
 		if _, err := s.cron.AddFunc(s.cfg.Retention.Cron, s.runRetention); err != nil {
 			return err
@@ -75,6 +84,7 @@ func (s *Scheduler) Start() error {
 	s.log.Info("scheduler started",
 		"balanceCron", s.cfg.BalanceCron,
 		"rateCron", s.cfg.RateCron,
+		"shopCron", s.cfg.ShopCron,
 		"retentionCron", s.cfg.Retention.Cron,
 		"concurrency", s.cfg.Concurrency,
 	)
@@ -102,6 +112,15 @@ func (s *Scheduler) runRates() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	s.monitor.ScanAllRates(ctx)
+}
+
+func (s *Scheduler) runShops() {
+	if s.shopMonitor == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	s.shopMonitor.SyncAll(ctx)
 }
 
 func (s *Scheduler) hasRetention() bool {

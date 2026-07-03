@@ -1,0 +1,350 @@
+package storage
+
+import (
+	"errors"
+	"strings"
+	"time"
+
+	"gorm.io/gorm"
+)
+
+type ShopTargets struct{ db *gorm.DB }
+
+func NewShopTargets(db *gorm.DB) *ShopTargets { return &ShopTargets{db: db} }
+
+func (r *ShopTargets) Create(target *ShopTarget) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if target.SortOrder <= 0 {
+			var maxSortOrder int
+			if err := tx.Model(&ShopTarget{}).Select("COALESCE(MAX(sort_order), 0)").Scan(&maxSortOrder).Error; err != nil {
+				return err
+			}
+			target.SortOrder = maxSortOrder + 1
+		}
+		return tx.Create(target).Error
+	})
+}
+
+func (r *ShopTargets) Update(target *ShopTarget) error {
+	return r.db.Save(target).Error
+}
+
+func (r *ShopTargets) UpdateSortOrders(orders map[uint]int) error {
+	if len(orders) == 0 {
+		return nil
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		for id, sortOrder := range orders {
+			if id == 0 {
+				continue
+			}
+			if err := tx.Model(&ShopTarget{}).Where("id = ?", id).Update("sort_order", sortOrder).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (r *ShopTargets) Delete(id uint) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		for _, model := range []any{
+			&ShopGoodsSnapshot{},
+			&ShopGoodsChangeLog{},
+			&ShopMonitorLog{},
+		} {
+			if err := tx.Where("target_id = ?", id).Delete(model).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Delete(&ShopTarget{}, id).Error
+	})
+}
+
+func (r *ShopTargets) FindByID(id uint) (*ShopTarget, error) {
+	var target ShopTarget
+	if err := r.db.First(&target, id).Error; err != nil {
+		return nil, err
+	}
+	return &target, nil
+}
+
+func (r *ShopTargets) List() ([]ShopTarget, error) {
+	var list []ShopTarget
+	if err := r.db.Order("sort_order DESC").Order("id ASC").Find(&list).Error; err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+func (r *ShopTargets) ListMonitorEnabled() ([]ShopTarget, error) {
+	var list []ShopTarget
+	if err := r.db.Where("monitor_enabled = ?", true).Order("sort_order DESC").Order("id ASC").Find(&list).Error; err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+func (r *ShopTargets) SetSyncResult(id uint, at *time.Time, lastErr string, shopName string, goodsCount, lowStockGoods, changedCount int) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		updates := map[string]any{
+			"last_sync_at":         at,
+			"last_error":           lastErr,
+			"last_shop_name":       shopName,
+			"last_goods_count":     goodsCount,
+			"last_low_stock_goods": lowStockGoods,
+			"last_changed_count":   changedCount,
+		}
+		if err := tx.Model(&ShopTarget{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+			return err
+		}
+
+		normalizedName := normalizeShopTargetName(shopName)
+		if normalizedName == "" {
+			return nil
+		}
+		var conflict int64
+		if err := tx.Model(&ShopTarget{}).Where("id <> ? AND name = ?", id, normalizedName).Count(&conflict).Error; err != nil {
+			return err
+		}
+		if conflict > 0 {
+			return nil
+		}
+		return tx.Model(&ShopTarget{}).Where("id = ?", id).Update("name", normalizedName).Error
+	})
+}
+
+func normalizeShopTargetName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	runes := []rune(name)
+	if len(runes) > 128 {
+		return string(runes[:128])
+	}
+	return name
+}
+
+type ShopGoods struct{ db *gorm.DB }
+
+func NewShopGoods(db *gorm.DB) *ShopGoods { return &ShopGoods{db: db} }
+
+type ShopGoodsFilter struct {
+	CategoryID     *int64
+	CategoryName   string
+	Status         string
+	Keyword        string
+	Sort           string
+	StockThreshold int
+}
+
+type ShopSnapshotCategory struct {
+	CategoryID      int64  `json:"category_id"`
+	CategoryName    string `json:"category_name"`
+	GoodsCount      int64  `json:"goods_count"`
+	ActiveCount     int64  `json:"active_count"`
+	RemovedCount    int64  `json:"removed_count"`
+	LowStockCount   int64  `json:"low_stock_count"`
+	OutOfStockCount int64  `json:"out_of_stock_count"`
+}
+
+func (r *ShopGoods) ListByTarget(targetID uint) ([]ShopGoodsSnapshot, error) {
+	var list []ShopGoodsSnapshot
+	if err := r.db.Where("target_id = ?", targetID).Order("removed_at ASC").Order("category_name ASC").Order("name ASC").Find(&list).Error; err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+func (r *ShopGoods) ListActiveByTarget(targetID uint) ([]ShopGoodsSnapshot, error) {
+	var list []ShopGoodsSnapshot
+	if err := r.db.Where("target_id = ? AND removed_at IS NULL", targetID).Order("category_name ASC").Order("name ASC").Find(&list).Error; err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+func (r *ShopGoods) ListPage(targetID uint, page, pageSize int) ([]ShopGoodsSnapshot, int64, error) {
+	return r.ListPageFiltered(targetID, page, pageSize, ShopGoodsFilter{})
+}
+
+func (r *ShopGoods) ListPageFiltered(targetID uint, page, pageSize int, filter ShopGoodsFilter) ([]ShopGoodsSnapshot, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	q := r.db.Model(&ShopGoodsSnapshot{}).Where("target_id = ?", targetID)
+	q = applyShopGoodsFilter(q, filter)
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var list []ShopGoodsSnapshot
+	if err := applyShopGoodsSort(q, filter.Sort).
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
+		Find(&list).Error; err != nil {
+		return nil, 0, err
+	}
+	return list, total, nil
+}
+
+func (r *ShopGoods) SnapshotCategories(targetID uint, stockThreshold int) ([]ShopSnapshotCategory, error) {
+	threshold := stockThreshold
+	if threshold <= 0 {
+		threshold = 0
+	}
+	var list []ShopSnapshotCategory
+	if err := r.db.Model(&ShopGoodsSnapshot{}).
+		Select(`category_id,
+			category_name,
+			COUNT(*) AS goods_count,
+			SUM(CASE WHEN removed_at IS NULL THEN 1 ELSE 0 END) AS active_count,
+			SUM(CASE WHEN removed_at IS NOT NULL THEN 1 ELSE 0 END) AS removed_count,
+			SUM(CASE WHEN ? > 0 AND removed_at IS NULL AND stock_count <= ? THEN 1 ELSE 0 END) AS low_stock_count,
+			SUM(CASE WHEN removed_at IS NULL AND stock_count <= 0 THEN 1 ELSE 0 END) AS out_of_stock_count`, threshold, threshold).
+		Where("target_id = ?", targetID).
+		Group("category_id, category_name").
+		Order("removed_count ASC").
+		Order("category_name ASC").
+		Find(&list).Error; err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+func applyShopGoodsFilter(q *gorm.DB, filter ShopGoodsFilter) *gorm.DB {
+	if filter.CategoryID != nil {
+		q = q.Where("category_id = ?", *filter.CategoryID)
+	}
+	if filter.CategoryName != "" {
+		q = q.Where("category_name = ?", filter.CategoryName)
+	}
+	if filter.Keyword != "" {
+		like := "%" + filter.Keyword + "%"
+		q = q.Where("(name LIKE ? OR goods_key LIKE ? OR category_name LIKE ?)", like, like, like)
+	}
+	switch filter.Status {
+	case "active":
+		q = q.Where("removed_at IS NULL")
+	case "in_stock":
+		q = q.Where("removed_at IS NULL AND stock_count > 0")
+	case "removed":
+		q = q.Where("removed_at IS NOT NULL")
+	case "low_stock":
+		threshold := filter.StockThreshold
+		if threshold <= 0 {
+			q = q.Where("1 = 0")
+			break
+		}
+		q = q.Where("removed_at IS NULL AND stock_count <= ?", threshold)
+	case "out_of_stock":
+		q = q.Where("removed_at IS NULL AND stock_count <= 0")
+	}
+	return q
+}
+
+func applyShopGoodsSort(q *gorm.DB, sort string) *gorm.DB {
+	q = q.Order("removed_at ASC")
+	switch sort {
+	case "stock_asc":
+		return q.Order("stock_count ASC").Order("category_name ASC").Order("name ASC").Order("goods_key ASC")
+	case "stock_desc":
+		return q.Order("stock_count DESC").Order("category_name ASC").Order("name ASC").Order("goods_key ASC")
+	case "price_asc":
+		return q.Order("price ASC").Order("category_name ASC").Order("name ASC").Order("goods_key ASC")
+	case "price_desc":
+		return q.Order("price DESC").Order("category_name ASC").Order("name ASC").Order("goods_key ASC")
+	case "last_seen_desc":
+		return q.Order("last_seen_at DESC").Order("category_name ASC").Order("name ASC").Order("goods_key ASC")
+	default:
+		return q.Order("category_name ASC").Order("name ASC").Order("goods_key ASC")
+	}
+}
+
+func (r *ShopGoods) FindSnapshot(targetID uint, goodsKey string) (*ShopGoodsSnapshot, error) {
+	var snapshot ShopGoodsSnapshot
+	err := r.db.Where("target_id = ? AND goods_key = ?", targetID, goodsKey).First(&snapshot).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
+}
+
+func (r *ShopGoods) SaveSnapshot(snapshot *ShopGoodsSnapshot) error {
+	return r.db.Save(snapshot).Error
+}
+
+func (r *ShopGoods) CreateSnapshot(snapshot *ShopGoodsSnapshot) error {
+	return r.db.Create(snapshot).Error
+}
+
+func (r *ShopGoods) AppendChange(log *ShopGoodsChangeLog) error {
+	if log.ChangedAt.IsZero() {
+		log.ChangedAt = time.Now()
+	}
+	return r.db.Create(log).Error
+}
+
+func (r *ShopGoods) ListChangesPage(targetID uint, page, pageSize int) ([]ShopGoodsChangeLog, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	q := r.db.Model(&ShopGoodsChangeLog{})
+	if targetID != 0 {
+		q = q.Where("target_id = ?", targetID)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var list []ShopGoodsChangeLog
+	if err := q.Order("changed_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&list).Error; err != nil {
+		return nil, 0, err
+	}
+	return list, total, nil
+}
+
+func (r *ShopGoods) AppendMonitorLog(log *ShopMonitorLog) error {
+	if log.StartedAt.IsZero() {
+		log.StartedAt = time.Now()
+	}
+	if log.FinishedAt.IsZero() {
+		log.FinishedAt = time.Now()
+	}
+	if log.DurationMS == 0 {
+		log.DurationMS = log.FinishedAt.Sub(log.StartedAt).Milliseconds()
+	}
+	return r.db.Create(log).Error
+}
+
+func (r *ShopGoods) ListMonitorLogsPage(targetID uint, page, pageSize int) ([]ShopMonitorLog, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	q := r.db.Model(&ShopMonitorLog{})
+	if targetID != 0 {
+		q = q.Where("target_id = ?", targetID)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var list []ShopMonitorLog
+	if err := q.Order("started_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&list).Error; err != nil {
+		return nil, 0, err
+	}
+	return list, total, nil
+}

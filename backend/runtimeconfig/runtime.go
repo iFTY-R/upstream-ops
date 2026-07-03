@@ -6,12 +6,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bejix/upstream-ops/backend/auth"
-	"github.com/bejix/upstream-ops/backend/channel"
-	"github.com/bejix/upstream-ops/backend/config"
-	"github.com/bejix/upstream-ops/backend/notify"
-	"github.com/bejix/upstream-ops/backend/scheduler"
 	"github.com/gin-gonic/gin"
+	"github.com/ifty-r/upstream-ops/backend/auth"
+	"github.com/ifty-r/upstream-ops/backend/channel"
+	"github.com/ifty-r/upstream-ops/backend/config"
+	"github.com/ifty-r/upstream-ops/backend/notify"
+	"github.com/ifty-r/upstream-ops/backend/scheduler"
+	"github.com/ifty-r/upstream-ops/backend/shopmonitor"
 )
 
 type SchedulerFactory func(config.SchedulerConfig, config.ProxyConfig) *scheduler.Scheduler
@@ -23,6 +24,7 @@ type Manager struct {
 	log              *slog.Logger
 	dispatcher       *notify.Dispatcher
 	channelSvc       *channel.Service
+	shopMonitor      *shopmonitor.Service
 	schedulerFactory SchedulerFactory
 	auth             *auth.Service
 	scheduler        *scheduler.Scheduler
@@ -41,6 +43,7 @@ func New(
 	log *slog.Logger,
 	dispatcher *notify.Dispatcher,
 	channelSvc *channel.Service,
+	shopMonitorSvc *shopmonitor.Service,
 	authSvc *auth.Service,
 	schedulerSvc *scheduler.Scheduler,
 	proxyConfig config.ProxyConfig,
@@ -53,6 +56,7 @@ func New(
 		log:              log,
 		dispatcher:       dispatcher,
 		channelSvc:       channelSvc,
+		shopMonitor:      shopMonitorSvc,
 		schedulerFactory: schedulerFactory,
 		auth:             authSvc,
 		scheduler:        schedulerSvc,
@@ -115,6 +119,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 	secret := m.securitySecret
 	dispatcher := m.dispatcher
 	channelSvc := m.channelSvc
+	shopMonitorSvc := m.shopMonitor
 	factory := m.schedulerFactory
 	oldScheduler := m.scheduler
 	m.mu.RUnlock()
@@ -147,6 +152,10 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 	if channelSvc != nil {
 		channelSvc.UpdateProxyConfig(cfg.Proxy)
 		channelSvc.UpdateUpstreamConfig(cfg.Upstream)
+	}
+	if shopMonitorSvc != nil {
+		shopMonitorSvc.UpdateProxyConfig(cfg.Proxy)
+		shopMonitorSvc.UpdateUpstreamConfig(cfg.Upstream)
 	}
 
 	newScheduler := factory(cfg.Scheduler, cfg.Proxy)

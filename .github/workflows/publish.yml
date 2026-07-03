@@ -8,8 +8,8 @@ name: Publish Docker Image
 # 所有构建都附带一个 :sha-xxxxxxx 短 hash tag，方便回滚到任意 commit。
 on:
   push:
-    branches:
-      - main
+    # branches:
+      # - main
     tags:
       - 'v*.*.*'
   workflow_dispatch:
@@ -18,6 +18,10 @@ on:
         description: '额外推送的镜像 tag（可选，如 dev-test）'
         required: false
         default: ''
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -32,18 +36,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # QEMU 让 amd64 runner 能跑 arm64 emulation 出 ARM 镜像。
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # 用 GITHUB_TOKEN 登录 ghcr.io，不需要额外配 secret。
       - name: Log in to ghcr.io
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -53,7 +57,7 @@ jobs:
       # 任何场景都额外加一个 sha-xxxxxxx 作为不可变快照。
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -70,7 +74,7 @@ jobs:
       # 多架构构建 + 推送。GitHub Actions 内置 cache (type=gha) 把
       # 前端 pnpm install 和后端 go mod download 都缓存住，二次构建 1-2 分钟。
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile

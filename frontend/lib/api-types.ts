@@ -4,6 +4,8 @@
  */
 
 export type ChannelType = "newapi" | "sub2api"
+export type ShopPlatform = "ldxp"
+export type ShopScopeMode = "all" | "filters" | "goods_keys"
 
 export type CredentialMode = "password" | "token"
 
@@ -40,6 +42,22 @@ export type NotificationEvent =
   | "subscription_weekly_remaining_low"
   | "subscription_monthly_remaining_low"
   | "subscription_expiring"
+  | "shop_goods_added"
+  | "shop_goods_removed"
+  | "shop_price_changed"
+  | "shop_stock_changed"
+  | "shop_stock_low"
+  | "shop_goods_restocked"
+  | "shop_monitor_failed"
+
+export type ShopGoodsChangeEvent =
+  | "goods_added"
+  | "goods_removed"
+  | "price_changed"
+  | "stock_changed"
+  | "stock_low"
+  | "goods_restocked"
+  | "monitor_failed"
 
 export interface Channel {
   id: number
@@ -75,6 +93,156 @@ export interface ChannelPage {
   page: number
   page_size: number
   pages: number
+}
+
+export interface PageResult<T> {
+  items: T[]
+  total: number
+  page: number
+  page_size: number
+  pages: number
+}
+
+export interface ShopTarget {
+  id: number
+  name: string
+  platform: ShopPlatform
+  site_url: string
+  base_url: string
+  token: string
+  monitor_enabled: boolean
+  scope_mode: ShopScopeMode
+  goods_types_json: string
+  category_ids_json: string
+  category_names_json: string
+  keywords_json: string
+  goods_keys_json: string
+  stock_threshold: number
+  price_change_enabled: boolean
+  stock_change_enabled: boolean
+  low_stock_enabled: boolean
+  restock_enabled: boolean
+  new_goods_enabled: boolean
+  removed_goods_enabled: boolean
+  proxy_enabled: boolean
+  sort_order: number
+  last_sync_at?: string | null
+  last_error?: string
+  last_shop_name?: string
+  last_goods_count: number
+  last_low_stock_goods: number
+  last_changed_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ShopGoodsSnapshot {
+  id: number
+  target_id: number
+  goods_key: string
+  goods_type: string
+  name: string
+  category_id: number
+  category_name: string
+  link: string
+  price: number
+  market_price: number
+  stock_count: number
+  limit_count: number
+  send_order: number
+  contact_format: string
+  raw_json?: string
+  first_seen_at: string
+  last_seen_at: string
+  last_changed_at?: string | null
+  removed_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ShopGoodsStatus = "all" | "active" | "in_stock" | "removed" | "low_stock" | "out_of_stock"
+export type ShopGoodsSort = "category" | "stock_asc" | "stock_desc" | "price_asc" | "price_desc" | "last_seen_desc"
+
+export interface ShopSnapshotCategory {
+  category_id: number
+  category_name: string
+  goods_count: number
+  active_count: number
+  removed_count: number
+  low_stock_count: number
+  out_of_stock_count: number
+}
+
+export interface ShopRefreshGoodsResult {
+  snapshot: ShopGoodsSnapshot
+  found: boolean
+  changed: boolean
+}
+
+export interface ShopGoodsChangeLog {
+  id: number
+  target_id: number
+  goods_key: string
+  goods_name: string
+  event: ShopGoodsChangeEvent
+  old_value?: string
+  new_value?: string
+  summary: string
+  changed_at: string
+  created_at: string
+}
+
+export interface ShopMonitorLog {
+  id: number
+  target_id: number
+  success: boolean
+  error_message?: string
+  goods_count: number
+  changed_count: number
+  started_at: string
+  finished_at: string
+  duration_ms: number
+  created_at: string
+}
+
+export interface ShopCategory {
+  id: number
+  name: string
+  image?: string
+  goods_count: number
+}
+
+export interface ShopInfo {
+  name: string
+  link: string
+  avatar?: string
+  goods_count: number
+  raw_json?: string
+}
+
+export interface ShopTestResult {
+  info: ShopInfo
+  categories: ShopCategory[]
+}
+
+export interface ShopSyncResult {
+  goods_count: number
+  changed_count: number
+  events: Record<string, number>
+}
+
+export interface ShopSyncAllTargetResult {
+  target_id: number
+  name: string
+  result?: ShopSyncResult
+  error?: string
+}
+
+export interface ShopSyncAllResult {
+  total: number
+  success: number
+  failed: number
+  targets: ShopSyncAllTargetResult[]
 }
 
 export interface CaptchaConfig {
@@ -249,6 +417,7 @@ export interface SystemSchedulerRetentionConfig {
 export interface SystemSchedulerConfig {
   balanceCron: string
   rateCron: string
+  shopCron: string
   concurrency: number
   retention: SystemSchedulerRetentionConfig
 }

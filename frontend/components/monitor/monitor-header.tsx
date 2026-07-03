@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useTheme } from "next-themes"
-import { Activity, Github, Home, LogOut, RefreshCw, Sun, Moon, Settings, Upload } from "lucide-react"
+import { Activity, Github, Home, LogOut, RefreshCw, Sun, Moon, Settings, Store } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -107,7 +107,7 @@ export function MonitorHeader() {
                 </button>
                 {updateAvailable ? (
                   <a
-                    href={updateURL || "https://github.com/bejix/upstream-ops"}
+                    href={updateURL || "https://github.com/ifty-r/upstream-ops"}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="ml-2 font-medium text-emerald-600 underline-offset-2 hover:text-emerald-700 hover:underline"
@@ -187,6 +187,23 @@ export function MonitorHeader() {
             </TooltipContent>
           </Tooltip>
 
+          <Tooltip delayDuration={200}>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => navigate("/shops")}
+                className="size-8 border-border bg-background text-foreground hover:bg-muted"
+                aria-label="店铺监控"
+              >
+                <Store className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              {"店铺监控"}
+            </TooltipContent>
+          </Tooltip>
+
           {/* settings */}
           <Tooltip delayDuration={200}>
             <TooltipTrigger asChild>
@@ -215,7 +232,7 @@ export function MonitorHeader() {
                 aria-label="GitHub 仓库"
               >
                 <a
-                  href="https://github.com/bejix/upstream-ops"
+                  href="https://github.com/ifty-r/upstream-ops"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -224,7 +241,7 @@ export function MonitorHeader() {
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs">
-              {"GitHub · bejix/upstream-ops"}
+              {"GitHub · ifty-r/upstream-ops"}
             </TooltipContent>
           </Tooltip>
 

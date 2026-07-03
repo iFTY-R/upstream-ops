@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bejix/upstream-ops/backend/storage"
+	"github.com/ifty-r/upstream-ops/backend/storage"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
@@ -85,6 +85,7 @@ type AuthConfig struct {
 type SchedulerConfig struct {
 	BalanceCron string          `mapstructure:"balanceCron" yaml:"balanceCron" json:"balanceCron"`
 	RateCron    string          `mapstructure:"rateCron" yaml:"rateCron" json:"rateCron"`
+	ShopCron    string          `mapstructure:"shopCron" yaml:"shopCron" json:"shopCron"`
 	Concurrency int             `mapstructure:"concurrency" yaml:"concurrency" json:"concurrency"`
 	Retention   RetentionConfig `mapstructure:"retention" yaml:"retention" json:"retention"`
 }
@@ -169,6 +170,7 @@ type LogConfig struct {
 //	DATABASE_HOST        -> database.host
 //	SERVER_PORT          -> server.port
 //	SCHEDULER_BALANCECRON-> scheduler.balanceCron
+//	SCHEDULER_SHOPCRON   -> scheduler.shopCron
 func Load(path string) (*Config, error) {
 	cfg, _, err := load(path, true)
 	return cfg, err
@@ -220,6 +222,7 @@ func load(path string, withEnv bool) (*Config, string, error) {
 		_ = v.BindEnv("database.name", "DATABASE_NAME")
 		_ = v.BindEnv("server.port", "SERVER_PORT")
 		_ = v.BindEnv("server.mode", "SERVER_MODE")
+		_ = v.BindEnv("scheduler.shopCron", "SCHEDULER_SHOPCRON")
 		_ = v.BindEnv("log.level", "LOG_LEVEL")
 	}
 
@@ -305,6 +308,7 @@ func setDefaults(v *viper.Viper) {
 	// CLAUDE.md 默认建议：余额 15 分钟，倍率 30 分钟。
 	v.SetDefault("scheduler.balanceCron", "37 */15 * * * *")
 	v.SetDefault("scheduler.rateCron", "13 */30 * * * *")
+	v.SetDefault("scheduler.shopCron", "41 */10 * * * *")
 	v.SetDefault("scheduler.concurrency", 4)
 
 	// 历史清理：每天凌晨 3:17 跑一次（6 字段 cron 含秒），

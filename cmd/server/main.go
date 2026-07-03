@@ -12,23 +12,25 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bejix/upstream-ops/backend/api"
-	"github.com/bejix/upstream-ops/backend/auth"
-	"github.com/bejix/upstream-ops/backend/channel"
-	"github.com/bejix/upstream-ops/backend/config"
-	"github.com/bejix/upstream-ops/backend/crypto"
-	"github.com/bejix/upstream-ops/backend/logger"
-	"github.com/bejix/upstream-ops/backend/monitor"
-	"github.com/bejix/upstream-ops/backend/notify"
-	"github.com/bejix/upstream-ops/backend/runtimeconfig"
-	"github.com/bejix/upstream-ops/backend/scheduler"
-	"github.com/bejix/upstream-ops/backend/storage"
-	"github.com/bejix/upstream-ops/web"
 	"github.com/gin-gonic/gin"
+	"github.com/ifty-r/upstream-ops/backend/api"
+	"github.com/ifty-r/upstream-ops/backend/auth"
+	"github.com/ifty-r/upstream-ops/backend/channel"
+	"github.com/ifty-r/upstream-ops/backend/config"
+	"github.com/ifty-r/upstream-ops/backend/crypto"
+	"github.com/ifty-r/upstream-ops/backend/logger"
+	"github.com/ifty-r/upstream-ops/backend/monitor"
+	"github.com/ifty-r/upstream-ops/backend/notify"
+	"github.com/ifty-r/upstream-ops/backend/runtimeconfig"
+	"github.com/ifty-r/upstream-ops/backend/scheduler"
+	"github.com/ifty-r/upstream-ops/backend/shopmonitor"
+	"github.com/ifty-r/upstream-ops/backend/storage"
+	"github.com/ifty-r/upstream-ops/web"
 
 	// 注册 connector 实现。
-	_ "github.com/bejix/upstream-ops/backend/connector/newapi"
-	_ "github.com/bejix/upstream-ops/backend/connector/sub2api"
+	_ "github.com/ifty-r/upstream-ops/backend/connector/newapi"
+	_ "github.com/ifty-r/upstream-ops/backend/connector/sub2api"
+	_ "github.com/ifty-r/upstream-ops/backend/shopprovider/ldxp"
 )
 
 func main() {
@@ -96,6 +98,8 @@ func main() {
 	authSessions := storage.NewAuthSessions(db)
 	captchas := storage.NewCaptchas(db)
 	notifies := storage.NewNotifications(db)
+	shopTargets := storage.NewShopTargets(db)
+	shopGoods := storage.NewShopGoods(db)
 	announcements := storage.NewUpstreamAnnouncements(db)
 	rates := storage.NewRates(db)
 	monLogs := storage.NewMonitorLogs(db)
@@ -117,9 +121,11 @@ func main() {
 	})
 	dispatcher.UpdateProxyConfig(cfg.Proxy)
 	monitorSvc := monitor.NewService(channels, announcements, rates, monLogs, channelSvc, dispatcher, log)
+	shopMonitorSvc := shopmonitor.NewService(shopTargets, shopGoods, dispatcher, log, cfg.Proxy, cfg.Upstream)
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
-		return scheduler.New(scfg, monitorSvc, monLogs, rates, notifies, announcements, captchas, cipher, pcfg, log)
+		shopMonitorSvc.UpdateProxyConfig(pcfg)
+		return scheduler.New(scfg, monitorSvc, shopMonitorSvc, monLogs, rates, notifies, announcements, captchas, cipher, pcfg, log)
 	}
 	sch := schedulerFactory(cfg.Scheduler, cfg.Proxy)
 	if err := sch.Start(); err != nil {
@@ -134,6 +140,7 @@ func main() {
 		log,
 		dispatcher,
 		channelSvc,
+		shopMonitorSvc,
 		authSvc,
 		sch,
 		cfg.Proxy,
@@ -166,12 +173,15 @@ func main() {
 		Sessions:      authSessions,
 		Captchas:      captchas,
 		Notifies:      notifies,
+		ShopTargets:   shopTargets,
+		ShopGoods:     shopGoods,
 		Announcements: announcements,
 		Rates:         rates,
 		MonLogs:       monLogs,
 		ChannelSvc:    channelSvc,
 		Monitor:       monitorSvc,
 		Dispatcher:    dispatcher,
+		ShopMonitor:   shopMonitorSvc,
 		Log:           log,
 		Frontend:      frontendFS,
 	})

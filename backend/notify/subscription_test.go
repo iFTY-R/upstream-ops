@@ -3,7 +3,7 @@ package notify
 import (
 	"testing"
 
-	"github.com/bejix/upstream-ops/backend/storage"
+	"github.com/ifty-r/upstream-ops/backend/storage"
 )
 
 func TestSubscriptionMatchesLegacyAllEvents(t *testing.T) {
@@ -102,5 +102,19 @@ func TestParseSubscriptionsLegacyChannelID(t *testing.T) {
 	}
 	if len(list) != 1 || len(list[0].ChannelIDs) != 1 || list[0].ChannelIDs[0] != 7 {
 		t.Fatalf("legacy channel_id should migrate to ChannelIDs=[7], got %+v", list)
+	}
+}
+
+func TestSubscriptionMatchesGlobalSourceShopEvents(t *testing.T) {
+	sub := Subscription{
+		Mode:   SubscriptionModeAll,
+		Events: []storage.NotificationEvent{storage.EventShopStockChanged},
+	}
+
+	if !sub.Matches(Message{ChannelID: 0, Event: storage.EventShopStockChanged}) {
+		t.Fatal("global-source subscription should match shop event without upstream channel")
+	}
+	if sub.Matches(Message{ChannelID: 0, Event: storage.EventBalanceLow}) {
+		t.Fatal("global-source subscription should still respect selected events")
 	}
 }

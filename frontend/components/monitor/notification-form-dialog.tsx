@@ -129,6 +129,19 @@ const notificationEventOptions: Array<{ id: string; label: string; events: Notif
       "subscription_expiring",
     ],
   },
+  {
+    id: "shop_notice",
+    label: "店铺监控",
+    events: [
+      "shop_goods_added",
+      "shop_goods_removed",
+      "shop_price_changed",
+      "shop_stock_changed",
+      "shop_stock_low",
+      "shop_goods_restocked",
+      "shop_monitor_failed",
+    ],
+  },
 ]
 
 const allNotificationEvents = Array.from(
@@ -282,11 +295,7 @@ export function NotificationFormDialog({
     setError(null)
     setSubmitting(true)
     try {
-      // 校验订阅：未选上游的行禁止保存
       for (const s of form.subs) {
-        if (s.channel_ids.length === 0) {
-          throw new Error("订阅列表里有未选择上游的规则，请补全或删除")
-        }
         if (s.event_mode === "custom" && s.events.length === 0) {
           throw new Error("指定事件模式下至少选择一个事件")
         }
@@ -444,7 +453,7 @@ export function NotificationFormDialog({
               <div>
                 <p className="text-sm font-medium">订阅规则</p>
                 <p className="text-[11px] text-muted-foreground">
-                  留空 = 收到所有上游的所有事件；添加规则后只收命中的
+                  留空 = 收到所有来源的所有事件；规则内不选渠道表示匹配所有来源，适合店铺监控事件
                 </p>
               </div>
               <Button
@@ -845,9 +854,9 @@ function SubRowEditor({ rowIndex, row, channels, onChange, onRemove, disabled }:
 
   return (
     <div className="space-y-2 rounded-md border border-border p-2.5">
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between gap-2 text-xs">
-          <span className="font-medium">选择渠道</span>
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="font-medium">来源渠道（可选）</span>
           <div className="flex items-center gap-1">
             <span className="text-[11px] text-muted-foreground">
               已选 {selectedChannelCount}/{channels.length}
@@ -878,7 +887,7 @@ function SubRowEditor({ rowIndex, row, channels, onChange, onRemove, disabled }:
               >
                 <span className="truncate">
                   {selectedChannelCount === 0
-                    ? "请选择渠道"
+                    ? "全部来源 / 店铺事件"
                     : selectedChannelCount === channels.length
                       ? "全部渠道"
                       : `已选 ${selectedChannelCount} 个渠道`}

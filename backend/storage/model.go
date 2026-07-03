@@ -10,6 +10,20 @@ const (
 	ChannelTypeSub2API ChannelType = "sub2api"
 )
 
+type ShopPlatform string
+
+const (
+	ShopPlatformLDXP ShopPlatform = "ldxp"
+)
+
+type ShopScopeMode string
+
+const (
+	ShopScopeAll       ShopScopeMode = "all"
+	ShopScopeFilters   ShopScopeMode = "filters"
+	ShopScopeGoodsKeys ShopScopeMode = "goods_keys"
+)
+
 // CredentialMode 渠道凭据模式：
 //   - password: 经典模式，存账号 + 密码，由 Connector 走完整登录流程
 //   - token:    跳过登录，存用户已有的 cookie / access_token，直接构造 AuthSession
@@ -228,6 +242,13 @@ const (
 	EventSubscriptionWeeklyLow  NotificationEvent = "subscription_weekly_remaining_low"
 	EventSubscriptionMonthlyLow NotificationEvent = "subscription_monthly_remaining_low"
 	EventSubscriptionExpiring   NotificationEvent = "subscription_expiring"
+	EventShopGoodsAdded         NotificationEvent = "shop_goods_added"
+	EventShopGoodsRemoved       NotificationEvent = "shop_goods_removed"
+	EventShopPriceChanged       NotificationEvent = "shop_price_changed"
+	EventShopStockChanged       NotificationEvent = "shop_stock_changed"
+	EventShopStockLow           NotificationEvent = "shop_stock_low"
+	EventShopGoodsRestocked     NotificationEvent = "shop_goods_restocked"
+	EventShopMonitorFailed      NotificationEvent = "shop_monitor_failed"
 )
 
 // NotificationLog 通知发送记录。
@@ -287,3 +308,106 @@ type MonitorLog struct {
 }
 
 func (MonitorLog) TableName() string { return "monitor_logs" }
+
+type ShopTarget struct {
+	ID                  uint          `gorm:"primaryKey" json:"id"`
+	Name                string        `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	Platform            ShopPlatform  `gorm:"size:32;not null;index" json:"platform"`
+	SiteURL             string        `gorm:"size:512;not null" json:"site_url"`
+	BaseURL             string        `gorm:"size:512;not null" json:"base_url"`
+	Token               string        `gorm:"size:128;not null;index" json:"token"`
+	MonitorEnabled      bool          `gorm:"default:true" json:"monitor_enabled"`
+	ScopeMode           ShopScopeMode `gorm:"size:32;not null;default:'all'" json:"scope_mode"`
+	GoodsTypesJSON      string        `gorm:"type:text" json:"goods_types_json"`
+	CategoryIDsJSON     string        `gorm:"type:text" json:"category_ids_json"`
+	CategoryNamesJSON   string        `gorm:"type:text" json:"category_names_json"`
+	KeywordsJSON        string        `gorm:"type:text" json:"keywords_json"`
+	GoodsKeysJSON       string        `gorm:"type:text" json:"goods_keys_json"`
+	StockThreshold      int           `gorm:"default:0" json:"stock_threshold"`
+	PriceChangeEnabled  bool          `gorm:"default:true" json:"price_change_enabled"`
+	StockChangeEnabled  bool          `gorm:"default:true" json:"stock_change_enabled"`
+	LowStockEnabled     bool          `gorm:"default:true" json:"low_stock_enabled"`
+	RestockEnabled      bool          `gorm:"default:true" json:"restock_enabled"`
+	NewGoodsEnabled     bool          `gorm:"default:true" json:"new_goods_enabled"`
+	RemovedGoodsEnabled bool          `gorm:"default:true" json:"removed_goods_enabled"`
+	ProxyEnabled        bool          `gorm:"default:false" json:"proxy_enabled"`
+	SortOrder           int           `gorm:"not null;default:1" json:"sort_order"`
+	LastSyncAt          *time.Time    `json:"last_sync_at,omitempty"`
+	LastError           string        `gorm:"type:text" json:"last_error,omitempty"`
+	LastShopName        string        `gorm:"size:256" json:"last_shop_name,omitempty"`
+	LastGoodsCount      int           `gorm:"default:0" json:"last_goods_count"`
+	LastLowStockGoods   int           `gorm:"default:0" json:"last_low_stock_goods"`
+	LastChangedCount    int           `gorm:"default:0" json:"last_changed_count"`
+	CreatedAt           time.Time     `json:"created_at"`
+	UpdatedAt           time.Time     `json:"updated_at"`
+}
+
+func (ShopTarget) TableName() string { return "shop_targets" }
+
+type ShopGoodsSnapshot struct {
+	ID            uint       `gorm:"primaryKey" json:"id"`
+	TargetID      uint       `gorm:"not null;uniqueIndex:idx_shop_goods_target_key;index" json:"target_id"`
+	GoodsKey      string     `gorm:"size:128;not null;uniqueIndex:idx_shop_goods_target_key" json:"goods_key"`
+	GoodsType     string     `gorm:"size:32;not null;index" json:"goods_type"`
+	Name          string     `gorm:"size:512;not null" json:"name"`
+	CategoryID    int64      `gorm:"index" json:"category_id"`
+	CategoryName  string     `gorm:"size:256" json:"category_name"`
+	Link          string     `gorm:"size:512" json:"link"`
+	Price         float64    `gorm:"not null" json:"price"`
+	MarketPrice   float64    `json:"market_price"`
+	StockCount    int        `json:"stock_count"`
+	LimitCount    int        `json:"limit_count"`
+	SendOrder     int        `json:"send_order"`
+	ContactFormat string     `gorm:"size:64" json:"contact_format"`
+	RawJSON       string     `gorm:"type:text" json:"raw_json,omitempty"`
+	FirstSeenAt   time.Time  `gorm:"not null;index" json:"first_seen_at"`
+	LastSeenAt    time.Time  `gorm:"not null;index" json:"last_seen_at"`
+	LastChangedAt *time.Time `json:"last_changed_at,omitempty"`
+	RemovedAt     *time.Time `gorm:"index" json:"removed_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
+func (ShopGoodsSnapshot) TableName() string { return "shop_goods_snapshots" }
+
+type ShopGoodsChangeEvent string
+
+const (
+	ShopChangeGoodsAdded     ShopGoodsChangeEvent = "goods_added"
+	ShopChangeGoodsRemoved   ShopGoodsChangeEvent = "goods_removed"
+	ShopChangePriceChanged   ShopGoodsChangeEvent = "price_changed"
+	ShopChangeStockChanged   ShopGoodsChangeEvent = "stock_changed"
+	ShopChangeStockLow       ShopGoodsChangeEvent = "stock_low"
+	ShopChangeGoodsRestocked ShopGoodsChangeEvent = "goods_restocked"
+	ShopChangeMonitorFailed  ShopGoodsChangeEvent = "monitor_failed"
+)
+
+type ShopGoodsChangeLog struct {
+	ID        uint                 `gorm:"primaryKey" json:"id"`
+	TargetID  uint                 `gorm:"not null;index" json:"target_id"`
+	GoodsKey  string               `gorm:"size:128;index" json:"goods_key"`
+	GoodsName string               `gorm:"size:512" json:"goods_name"`
+	Event     ShopGoodsChangeEvent `gorm:"size:64;not null;index" json:"event"`
+	OldValue  string               `gorm:"type:text" json:"old_value,omitempty"`
+	NewValue  string               `gorm:"type:text" json:"new_value,omitempty"`
+	Summary   string               `gorm:"type:text" json:"summary"`
+	ChangedAt time.Time            `gorm:"not null;index" json:"changed_at"`
+	CreatedAt time.Time            `json:"created_at"`
+}
+
+func (ShopGoodsChangeLog) TableName() string { return "shop_goods_change_logs" }
+
+type ShopMonitorLog struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	TargetID     uint      `gorm:"not null;index" json:"target_id"`
+	Success      bool      `gorm:"not null;index" json:"success"`
+	ErrorMessage string    `gorm:"type:text" json:"error_message,omitempty"`
+	GoodsCount   int       `json:"goods_count"`
+	ChangedCount int       `json:"changed_count"`
+	StartedAt    time.Time `gorm:"not null;index" json:"started_at"`
+	FinishedAt   time.Time `json:"finished_at"`
+	DurationMS   int64     `json:"duration_ms"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+func (ShopMonitorLog) TableName() string { return "shop_monitor_logs" }

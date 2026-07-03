@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bejix/upstream-ops/backend/channel"
-	"github.com/bejix/upstream-ops/backend/connector"
-	"github.com/bejix/upstream-ops/backend/storage"
 	"github.com/gin-gonic/gin"
+	"github.com/ifty-r/upstream-ops/backend/channel"
+	"github.com/ifty-r/upstream-ops/backend/connector"
+	"github.com/ifty-r/upstream-ops/backend/storage"
 )
 
 type rechargeChannelServiceStub struct {

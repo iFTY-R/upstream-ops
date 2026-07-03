@@ -11,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bejix/upstream-ops/backend/config"
-	"github.com/bejix/upstream-ops/backend/global"
 	"github.com/gin-gonic/gin"
+	"github.com/ifty-r/upstream-ops/backend/config"
+	"github.com/ifty-r/upstream-ops/backend/global"
 )
 
 const (
-	githubRepoURL              = "https://github.com/bejix/upstream-ops"
-	defaultGitHubLatestRelease = "https://api.github.com/repos/bejix/upstream-ops/releases/latest"
+	githubRepoURL              = "https://github.com/ifty-r/upstream-ops"
+	defaultGitHubLatestRelease = "https://api.github.com/repos/ifty-r/upstream-ops/releases/latest"
 )
 
 var (

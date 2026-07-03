@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bejix/upstream-ops/backend/config"
 	"github.com/gin-gonic/gin"
 	"github.com/go-resty/resty/v2"
+	"github.com/ifty-r/upstream-ops/backend/config"
 )
 
 type proxyTestResult struct {

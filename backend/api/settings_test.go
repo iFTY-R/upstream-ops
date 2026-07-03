@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bejix/upstream-ops/backend/config"
-	"github.com/bejix/upstream-ops/backend/runtimeconfig"
 	"github.com/gin-gonic/gin"
+	"github.com/ifty-r/upstream-ops/backend/config"
+	"github.com/ifty-r/upstream-ops/backend/runtimeconfig"
 )
 
 func TestSaveSettingsKeepsAppVersion(t *testing.T) {
@@ -29,7 +29,7 @@ func TestSaveSettingsKeepsAppVersion(t *testing.T) {
 	r := gin.New()
 	api := r.Group("/api")
 	registerSettings(api, &Deps{
-		Runtime: runtimeconfig.New(path, "", nil, nil, nil, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{}, nil),
+		Runtime: runtimeconfig.New(path, "", nil, nil, nil, nil, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{}, nil),
 	})
 
 	body := `{

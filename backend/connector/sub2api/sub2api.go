@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bejix/upstream-ops/backend/connector"
 	"github.com/go-resty/resty/v2"
+	"github.com/ifty-r/upstream-ops/backend/connector"
 )
 
 func init() {

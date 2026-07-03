@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bejix/upstream-ops/backend/config"
-	"github.com/bejix/upstream-ops/backend/crypto"
-	"github.com/bejix/upstream-ops/backend/storage"
 	"github.com/go-resty/resty/v2"
+	"github.com/ifty-r/upstream-ops/backend/config"
+	"github.com/ifty-r/upstream-ops/backend/crypto"
+	"github.com/ifty-r/upstream-ops/backend/storage"
 )
 
 type BalanceResult struct {

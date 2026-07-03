@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/bejix/upstream-ops/backend/storage"
+	"github.com/ifty-r/upstream-ops/backend/storage"
 )
 
 // SubscriptionMode 倍率分组过滤维度。
@@ -67,16 +67,18 @@ func ParseSubscriptions(raw string) ([]Subscription, error) {
 }
 
 // Matches 判断这条订阅是否覆盖当前消息：
-//   - 上游 ID 必须在 ChannelIDs 中
+//   - ChannelIDs 为空表示全部来源；非空时上游 ID 必须在 ChannelIDs 中
 //   - Events 为空表示全部事件；非空时消息事件必须在 Events 中
 //   - 倍率相关事件 + mode=groups 时，model_name 必须在 Groups 中
 //   - 其它情况只要上游匹配即放行
 func (s Subscription) Matches(msg Message) bool {
-	if msg.ChannelID == 0 || !s.matchesChannel(msg.ChannelID) {
-		return false
-	}
 	if !s.matchesEvent(msg.Event) {
 		return false
+	}
+	if len(s.ChannelIDs) > 0 {
+		if msg.ChannelID == 0 || !s.matchesChannel(msg.ChannelID) {
+			return false
+		}
 	}
 	if !isRateEvent(msg.Event) || s.Mode != SubscriptionModeGroups {
 		return true

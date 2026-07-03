@@ -65,6 +65,13 @@ const eventMeta: Record<NotificationEvent, { icon: LucideIcon; cls: string }> = 
   subscription_weekly_remaining_low: { icon: AlertTriangle, cls: "text-warning" },
   subscription_monthly_remaining_low: { icon: AlertTriangle, cls: "text-warning" },
   subscription_expiring: { icon: Clock3, cls: "text-warning" },
+  shop_goods_added: { icon: Plus, cls: "text-success" },
+  shop_goods_removed: { icon: Trash2, cls: "text-warning" },
+  shop_price_changed: { icon: ArrowUpRight, cls: "text-brand" },
+  shop_stock_changed: { icon: RefreshCw, cls: "text-brand" },
+  shop_stock_low: { icon: AlertTriangle, cls: "text-warning" },
+  shop_goods_restocked: { icon: RefreshCw, cls: "text-success" },
+  shop_monitor_failed: { icon: ShieldX, cls: "text-danger" },
 }
 
 const FEED_PREVIEW_SIZE = 10

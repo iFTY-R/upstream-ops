@@ -3,10 +3,10 @@ package api
 import (
 	"net/http"
 
-	"github.com/bejix/upstream-ops/backend/captcha"
-	"github.com/bejix/upstream-ops/backend/config"
-	"github.com/bejix/upstream-ops/backend/storage"
 	"github.com/gin-gonic/gin"
+	"github.com/ifty-r/upstream-ops/backend/captcha"
+	"github.com/ifty-r/upstream-ops/backend/config"
+	"github.com/ifty-r/upstream-ops/backend/storage"
 )
 
 func registerCaptchas(g *gin.RouterGroup, d *Deps) {

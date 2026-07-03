@@ -17,6 +17,14 @@ import type {
   RateChangeLog,
   RateChangeLogPage,
   RateSnapshot,
+  PageResult,
+  ShopGoodsSort,
+  ShopGoodsChangeLog,
+  ShopGoodsStatus,
+  ShopGoodsSnapshot,
+  ShopMonitorLog,
+  ShopSnapshotCategory,
+  ShopTarget,
   SystemConfigResponse,
   UpstreamAnnouncementPage,
 } from "@/lib/api-types"
@@ -235,4 +243,52 @@ export function useCaptchaConfigs(enabled = true) {
 
 export function useSystemConfig() {
   return useApi<SystemConfigResponse>("/settings/config")
+}
+
+export function useShopTargets() {
+  return useApi<ShopTarget[]>("/shop-targets")
+}
+
+export interface ShopGoodsFilters {
+  category_id?: number
+  category_name?: string
+  status?: ShopGoodsStatus
+  keyword?: string
+  sort?: ShopGoodsSort
+}
+
+function shopGoodsQuery(page: number, pageSize: number, filters?: ShopGoodsFilters) {
+  const q = new URLSearchParams()
+  q.set("page", String(page))
+  q.set("page_size", String(pageSize))
+  if (filters?.category_id != null) q.set("category_id", String(filters.category_id))
+  if (filters?.category_name) q.set("category_name", filters.category_name)
+  if (filters?.status && filters.status !== "all") q.set("status", filters.status)
+  if (filters?.keyword?.trim()) q.set("keyword", filters.keyword.trim())
+  if (filters?.sort && filters.sort !== "category") q.set("sort", filters.sort)
+  return q.toString()
+}
+
+export function useShopGoods(targetID: number | null, page = 1, pageSize = 20, filters?: ShopGoodsFilters) {
+  return useApi<PageResult<ShopGoodsSnapshot>>(
+    targetID == null ? null : `/shop-targets/${targetID}/goods?${shopGoodsQuery(page, pageSize, filters)}`,
+  )
+}
+
+export function useShopSnapshotCategories(targetID: number | null) {
+  return useApi<ShopSnapshotCategory[]>(
+    targetID == null ? null : `/shop-targets/${targetID}/snapshot-categories`,
+  )
+}
+
+export function useShopChangeLogs(targetID: number | null, page = 1, pageSize = 20) {
+  return useApi<PageResult<ShopGoodsChangeLog>>(
+    targetID == null ? null : `/shop-targets/${targetID}/change-logs?page=${page}&page_size=${pageSize}`,
+  )
+}
+
+export function useShopMonitorLogs(targetID: number | null, page = 1, pageSize = 20) {
+  return useApi<PageResult<ShopMonitorLog>>(
+    targetID == null ? null : `/shop-targets/${targetID}/monitor-logs?page=${page}&page_size=${pageSize}`,
+  )
 }

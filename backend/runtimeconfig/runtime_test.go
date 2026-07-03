@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bejix/upstream-ops/backend/channel"
-	"github.com/bejix/upstream-ops/backend/config"
-	"github.com/bejix/upstream-ops/backend/connector"
-	"github.com/bejix/upstream-ops/backend/scheduler"
+	"github.com/ifty-r/upstream-ops/backend/channel"
+	"github.com/ifty-r/upstream-ops/backend/config"
+	"github.com/ifty-r/upstream-ops/backend/connector"
+	"github.com/ifty-r/upstream-ops/backend/scheduler"
 )
 
 type fakeHTTPConfigConnector struct {
@@ -48,10 +48,11 @@ func TestApplyFromFileUpdatesUpstreamConfig(t *testing.T) {
 		channelSvc,
 		nil,
 		nil,
+		nil,
 		config.ProxyConfig{},
 		config.UpstreamConfig{},
 		func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
-			return scheduler.New(scfg, nil, nil, nil, nil, nil, nil, nil, pcfg, log)
+			return scheduler.New(scfg, nil, nil, nil, nil, nil, nil, nil, nil, pcfg, log)
 		},
 	)
 

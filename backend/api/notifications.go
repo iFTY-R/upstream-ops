@@ -5,9 +5,9 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/bejix/upstream-ops/backend/notify"
-	"github.com/bejix/upstream-ops/backend/storage"
 	"github.com/gin-gonic/gin"
+	"github.com/ifty-r/upstream-ops/backend/notify"
+	"github.com/ifty-r/upstream-ops/backend/storage"
 )
 
 func registerNotifications(g *gin.RouterGroup, d *Deps) {

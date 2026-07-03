@@ -13,14 +13,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bejix/upstream-ops/backend/channel"
-	_ "github.com/bejix/upstream-ops/backend/connector/sub2api"
-	"github.com/bejix/upstream-ops/backend/crypto"
-	"github.com/bejix/upstream-ops/backend/monitor"
-	"github.com/bejix/upstream-ops/backend/notify"
-	"github.com/bejix/upstream-ops/backend/progress"
-	"github.com/bejix/upstream-ops/backend/storage"
 	"github.com/gin-gonic/gin"
+	"github.com/ifty-r/upstream-ops/backend/channel"
+	_ "github.com/ifty-r/upstream-ops/backend/connector/sub2api"
+	"github.com/ifty-r/upstream-ops/backend/crypto"
+	"github.com/ifty-r/upstream-ops/backend/monitor"
+	"github.com/ifty-r/upstream-ops/backend/notify"
+	"github.com/ifty-r/upstream-ops/backend/progress"
+	"github.com/ifty-r/upstream-ops/backend/storage"
 	"gorm.io/gorm"
 )
 

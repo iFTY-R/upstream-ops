@@ -10,13 +10,14 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/bejix/upstream-ops/backend/channel"
-	"github.com/bejix/upstream-ops/backend/connector"
-	"github.com/bejix/upstream-ops/backend/crypto"
-	"github.com/bejix/upstream-ops/backend/notify"
-	"github.com/bejix/upstream-ops/backend/runtimeconfig"
-	"github.com/bejix/upstream-ops/backend/storage"
 	"github.com/gin-gonic/gin"
+	"github.com/ifty-r/upstream-ops/backend/channel"
+	"github.com/ifty-r/upstream-ops/backend/connector"
+	"github.com/ifty-r/upstream-ops/backend/crypto"
+	"github.com/ifty-r/upstream-ops/backend/notify"
+	"github.com/ifty-r/upstream-ops/backend/runtimeconfig"
+	"github.com/ifty-r/upstream-ops/backend/shopmonitor"
+	"github.com/ifty-r/upstream-ops/backend/storage"
 	"gorm.io/gorm"
 )
 
@@ -55,12 +56,15 @@ type Deps struct {
 	Sessions      *storage.AuthSessions
 	Captchas      *storage.Captchas
 	Notifies      *storage.Notifications
+	ShopTargets   *storage.ShopTargets
+	ShopGoods     *storage.ShopGoods
 	Announcements *storage.UpstreamAnnouncements
 	Rates         *storage.Rates
 	MonLogs       *storage.MonitorLogs
 	ChannelSvc    channelService
 	Monitor       monitorService
 	Dispatcher    *notify.Dispatcher
+	ShopMonitor   *shopmonitor.Service
 	Log           *slog.Logger
 
 	// Frontend 可选：传入嵌入的前端 dist 文件系统。nil 表示不挂载（本地开发用 vite dev server）。
@@ -92,6 +96,7 @@ func Register(r *gin.Engine, d *Deps) {
 		registerChannels(api, d)
 		registerCaptchas(api, d)
 		registerNotifications(api, d)
+		registerShopTargets(api, d)
 		registerAnnouncements(api, d)
 		registerRates(api, d)
 		registerMonitorLogs(api, d)
