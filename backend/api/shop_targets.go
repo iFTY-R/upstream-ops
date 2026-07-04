@@ -24,6 +24,11 @@ func registerShopTargets(g *gin.RouterGroup, d *Deps) {
 	gp.GET("/:id", func(c *gin.Context) { getShopTarget(c, d) })
 	gp.PUT("/:id", func(c *gin.Context) { updateShopTarget(c, d) })
 	gp.DELETE("/:id", func(c *gin.Context) { deleteShopTarget(c, d) })
+	gp.GET("/:id/watch-rules", func(c *gin.Context) { listShopWatchRules(c, d) })
+	gp.POST("/:id/watch-rules", func(c *gin.Context) { createShopWatchRule(c, d) })
+	gp.POST("/:id/watch-rules/preview", func(c *gin.Context) { previewShopWatchRule(c, d) })
+	gp.PUT("/:id/watch-rules/:rule_id", func(c *gin.Context) { updateShopWatchRule(c, d) })
+	gp.DELETE("/:id/watch-rules/:rule_id", func(c *gin.Context) { deleteShopWatchRule(c, d) })
 	gp.POST("/:id/test", func(c *gin.Context) { testShopTarget(c, d) })
 	gp.POST("/:id/sync", func(c *gin.Context) { syncShopTarget(c, d) })
 	gp.GET("/:id/categories", func(c *gin.Context) { shopTargetCategories(c, d) })
@@ -41,6 +46,7 @@ type shopTargetInput struct {
 	BaseURL             string                `json:"base_url"`
 	Token               string                `json:"token"`
 	MonitorEnabled      *bool                 `json:"monitor_enabled"`
+	NotifyEnabled       *bool                 `json:"notify_enabled"`
 	ScopeMode           storage.ShopScopeMode `json:"scope_mode"`
 	GoodsTypes          []string              `json:"goods_types"`
 	CategoryIDs         []int64               `json:"category_ids"`
@@ -441,6 +447,7 @@ func buildShopTarget(in shopTargetInput, current *storage.ShopTarget) (*storage.
 		return nil, fmt.Errorf("base_url and token are required")
 	}
 	target.MonitorEnabled = boolDefault(in.MonitorEnabled, true)
+	target.NotifyEnabled = boolDefault(in.NotifyEnabled, target.NotifyEnabled)
 	target.ScopeMode = in.ScopeMode
 	if target.ScopeMode == "" {
 		target.ScopeMode = storage.ShopScopeAll

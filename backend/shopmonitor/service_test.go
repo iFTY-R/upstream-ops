@@ -89,7 +89,7 @@ func TestRefreshGoodsByKeyUpdatesOnlyOneSnapshot(t *testing.T) {
 		t.Fatalf("create other snapshot: %v", err)
 	}
 
-	service := NewService(targets, goodsRepo, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	service := NewService(targets, storage.NewShopWatchRules(db), goodsRepo, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
 	result, err := service.RefreshGoodsByKey(context.Background(), target.ID, "abc")
 	if err != nil {
 		t.Fatalf("refresh goods: %v", err)
@@ -136,7 +136,7 @@ func TestRefreshGoodsByKeyMarksMissingSnapshotRemoved(t *testing.T) {
 		t.Fatalf("create snapshot: %v", err)
 	}
 
-	service := NewService(targets, goodsRepo, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	service := NewService(targets, storage.NewShopWatchRules(db), goodsRepo, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
 	result, err := service.RefreshGoodsByKey(context.Background(), target.ID, "missing")
 	if err != nil {
 		t.Fatalf("refresh missing goods: %v", err)

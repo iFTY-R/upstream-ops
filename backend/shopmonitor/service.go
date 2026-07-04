@@ -18,6 +18,7 @@ import (
 
 type Service struct {
 	targets    *storage.ShopTargets
+	watchRules *storage.ShopWatchRules
 	goods      *storage.ShopGoods
 	dispatcher *notify.Dispatcher
 	log        *slog.Logger
@@ -27,6 +28,7 @@ type Service struct {
 
 func NewService(
 	targets *storage.ShopTargets,
+	watchRules *storage.ShopWatchRules,
 	goods *storage.ShopGoods,
 	dispatcher *notify.Dispatcher,
 	log *slog.Logger,
@@ -35,6 +37,7 @@ func NewService(
 ) *Service {
 	return &Service{
 		targets:    targets,
+		watchRules: watchRules,
 		goods:      goods,
 		dispatcher: dispatcher,
 		log:        log,
@@ -568,7 +571,10 @@ func (s *Service) recordFailure(target *storage.ShopTarget, started time.Time, e
 }
 
 func (s *Service) notifyFailure(ctx context.Context, target *storage.ShopTarget, err error) {
-	if s.dispatcher == nil || err == nil {
+	if s.dispatcher == nil || err == nil || target == nil || !target.NotifyEnabled {
+		return
+	}
+	if !s.hasMatchingWatchRule(target.ID, storage.ShopChangeMonitorFailed, nil, "", "") {
 		return
 	}
 	_ = s.dispatcher.Dispatch(ctx, notify.Message{
@@ -579,7 +585,11 @@ func (s *Service) notifyFailure(ctx context.Context, target *storage.ShopTarget,
 }
 
 func (s *Service) dispatchChanges(ctx context.Context, target *storage.ShopTarget, info *shopprovider.ShopInfo, changes []storage.ShopGoodsChangeLog) error {
-	if s.dispatcher == nil || len(changes) == 0 {
+	if s.dispatcher == nil || target == nil || !target.NotifyEnabled || len(changes) == 0 {
+		return nil
+	}
+	changes = s.filterWatchRuleChanges(target.ID, changes)
+	if len(changes) == 0 {
 		return nil
 	}
 	counts := map[storage.ShopGoodsChangeEvent]int{}
@@ -620,6 +630,61 @@ func (s *Service) dispatchChanges(ctx context.Context, target *storage.ShopTarge
 		}
 	}
 	return firstErr
+}
+
+func (s *Service) filterWatchRuleChanges(targetID uint, changes []storage.ShopGoodsChangeLog) []storage.ShopGoodsChangeLog {
+	if s.watchRules == nil {
+		return nil
+	}
+	rules, err := s.watchRules.ListEnabledByTarget(targetID)
+	if err != nil || len(rules) == 0 {
+		if err != nil && s.log != nil {
+			s.log.Warn("list shop watch rules failed", "target_id", targetID, "err", err)
+		}
+		return nil
+	}
+	out := make([]storage.ShopGoodsChangeLog, 0, len(changes))
+	snapshotCache := map[string]*storage.ShopGoodsSnapshot{}
+	for _, change := range changes {
+		var snapshot *storage.ShopGoodsSnapshot
+		if strings.TrimSpace(change.GoodsKey) != "" {
+			if cached, ok := snapshotCache[change.GoodsKey]; ok {
+				snapshot = cached
+			} else if s.goods != nil {
+				found, err := s.goods.FindSnapshot(targetID, change.GoodsKey)
+				if err == nil {
+					snapshot = found
+				}
+				snapshotCache[change.GoodsKey] = snapshot
+			}
+		}
+		for _, rule := range rules {
+			if storage.ShopWatchRuleMatchesChange(rule, change.Event, snapshot, change.GoodsKey, change.GoodsName) {
+				out = append(out, change)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func (s *Service) hasMatchingWatchRule(targetID uint, event storage.ShopGoodsChangeEvent, snapshot *storage.ShopGoodsSnapshot, goodsKey, goodsName string) bool {
+	if s.watchRules == nil {
+		return false
+	}
+	rules, err := s.watchRules.ListEnabledByTarget(targetID)
+	if err != nil {
+		if s.log != nil {
+			s.log.Warn("list shop watch rules failed", "target_id", targetID, "err", err)
+		}
+		return false
+	}
+	for _, rule := range rules {
+		if storage.ShopWatchRuleMatchesChange(rule, event, snapshot, goodsKey, goodsName) {
+			return true
+		}
+	}
+	return false
 }
 
 func snapshotFromGoods(targetID uint, item shopprovider.Goods, now time.Time) storage.ShopGoodsSnapshot {

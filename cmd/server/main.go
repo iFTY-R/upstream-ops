@@ -99,6 +99,7 @@ func main() {
 	captchas := storage.NewCaptchas(db)
 	notifies := storage.NewNotifications(db)
 	shopTargets := storage.NewShopTargets(db)
+	shopWatchRules := storage.NewShopWatchRules(db)
 	shopGoods := storage.NewShopGoods(db)
 	announcements := storage.NewUpstreamAnnouncements(db)
 	rates := storage.NewRates(db)
@@ -121,7 +122,7 @@ func main() {
 	})
 	dispatcher.UpdateProxyConfig(cfg.Proxy)
 	monitorSvc := monitor.NewService(channels, announcements, rates, monLogs, channelSvc, dispatcher, log)
-	shopMonitorSvc := shopmonitor.NewService(shopTargets, shopGoods, dispatcher, log, cfg.Proxy, cfg.Upstream)
+	shopMonitorSvc := shopmonitor.NewService(shopTargets, shopWatchRules, shopGoods, dispatcher, log, cfg.Proxy, cfg.Upstream)
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
 		shopMonitorSvc.UpdateProxyConfig(pcfg)
@@ -166,24 +167,25 @@ func main() {
 	}
 
 	api.Register(router, &api.Deps{
-		DB:            db,
-		Cipher:        cipher,
-		Runtime:       runtimeMgr,
-		Channels:      channels,
-		Sessions:      authSessions,
-		Captchas:      captchas,
-		Notifies:      notifies,
-		ShopTargets:   shopTargets,
-		ShopGoods:     shopGoods,
-		Announcements: announcements,
-		Rates:         rates,
-		MonLogs:       monLogs,
-		ChannelSvc:    channelSvc,
-		Monitor:       monitorSvc,
-		Dispatcher:    dispatcher,
-		ShopMonitor:   shopMonitorSvc,
-		Log:           log,
-		Frontend:      frontendFS,
+		DB:             db,
+		Cipher:         cipher,
+		Runtime:        runtimeMgr,
+		Channels:       channels,
+		Sessions:       authSessions,
+		Captchas:       captchas,
+		Notifies:       notifies,
+		ShopTargets:    shopTargets,
+		ShopWatchRules: shopWatchRules,
+		ShopGoods:      shopGoods,
+		Announcements:  announcements,
+		Rates:          rates,
+		MonLogs:        monLogs,
+		ChannelSvc:     channelSvc,
+		Monitor:        monitorSvc,
+		Dispatcher:     dispatcher,
+		ShopMonitor:    shopMonitorSvc,
+		Log:            log,
+		Frontend:       frontendFS,
 	})
 
 	srv := &http.Server{

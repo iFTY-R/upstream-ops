@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  Bell,
   CheckCircle2,
   ExternalLink,
   ListFilter,
@@ -15,6 +16,7 @@ import {
   RefreshCw,
   Search,
   ShoppingCart,
+  Star,
   Store,
   Trash2,
   X,
@@ -26,8 +28,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { ShopWatchRulesDrawer, type ShopWatchSeed } from "@/components/monitor/shop-watch-rules-drawer"
 import { apiFetch } from "@/lib/api"
-import { useShopChangeLogs, useShopGoods, useShopMonitorLogs, useShopSnapshotCategories, useShopTargets } from "@/lib/queries"
+import { useShopChangeLogs, useShopGoods, useShopMonitorLogs, useShopSnapshotCategories, useShopTargets, useShopWatchRules } from "@/lib/queries"
 import { useTriggerRefresh } from "@/lib/refresh-context"
 import { money, relativeTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -45,6 +48,7 @@ import type {
   ShopSyncResult,
   ShopTarget,
   ShopTestResult,
+  ShopWatchRule,
 } from "@/lib/api-types"
 
 type ShopForm = {
@@ -54,6 +58,7 @@ type ShopForm = {
   base_url: string
   token: string
   monitor_enabled: boolean
+  notify_enabled: boolean
   scope_mode: ShopScopeMode
   goods_types: string
   category_ids: string
@@ -78,6 +83,7 @@ const emptyForm: ShopForm = {
   base_url: "",
   token: "",
   monitor_enabled: true,
+  notify_enabled: false,
   scope_mode: "all",
   goods_types: "card",
   category_ids: "",
@@ -127,7 +133,7 @@ const goodsSortLabels: Record<ShopGoodsSort, string> = {
 function parseJSONList(raw: string): string[] {
   try {
     const value = JSON.parse(raw)
-    return Array.isArray(value) ? value : []
+    return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : []
   } catch {
     return []
   }
@@ -150,6 +156,7 @@ function formFromTarget(target: ShopTarget): ShopForm {
     base_url: target.base_url,
     token: target.token,
     monitor_enabled: target.monitor_enabled,
+    notify_enabled: target.notify_enabled,
     scope_mode: target.scope_mode,
     goods_types: parseJSONList(target.goods_types_json).join(", "),
     category_ids: parseJSONList(target.category_ids_json).join(", "),
@@ -166,6 +173,63 @@ function formFromTarget(target: ShopTarget): ShopForm {
     removed_goods_enabled: target.removed_goods_enabled,
     sort_order: target.sort_order,
   }
+}
+
+function shopTargetUpdateBody(target: ShopTarget, patch: Partial<ShopForm>) {
+  return {
+    name: target.name,
+    site_url: target.site_url,
+    platform: target.platform,
+    base_url: target.base_url,
+    token: target.token,
+    monitor_enabled: target.monitor_enabled,
+    notify_enabled: target.notify_enabled,
+    scope_mode: target.scope_mode,
+    goods_types: parseJSONList(target.goods_types_json),
+    category_ids: parseJSONList(target.category_ids_json).map(Number).filter((value) => Number.isFinite(value)),
+    category_names: parseJSONList(target.category_names_json),
+    keywords: parseJSONList(target.keywords_json),
+    goods_keys: parseJSONList(target.goods_keys_json),
+    stock_threshold: target.stock_threshold,
+    proxy_enabled: target.proxy_enabled,
+    price_change_enabled: target.price_change_enabled,
+    stock_change_enabled: target.stock_change_enabled,
+    low_stock_enabled: target.low_stock_enabled,
+    restock_enabled: target.restock_enabled,
+    new_goods_enabled: target.new_goods_enabled,
+    removed_goods_enabled: target.removed_goods_enabled,
+    sort_order: target.sort_order,
+    ...patch,
+  }
+}
+
+function shopRulesMatchRow(rules: ShopWatchRule[], row: ShopGoodsSnapshot): boolean {
+  return rules.some((rule) => {
+    if (!rule.enabled) return false
+    let hasCriteria = false
+    const goodsKeys = parseJSONList(rule.goods_keys_json)
+    if (goodsKeys.length > 0) {
+      hasCriteria = true
+      if (goodsKeys.some((key) => key.toLowerCase() === row.goods_key.toLowerCase())) return true
+    }
+    const categoryIDs = parseJSONList(rule.category_ids_json).map(Number).filter((value) => Number.isFinite(value))
+    if (categoryIDs.length > 0) {
+      hasCriteria = true
+      if (categoryIDs.includes(row.category_id)) return true
+    }
+    const categoryNames = parseJSONList(rule.category_names_json)
+    if (categoryNames.length > 0) {
+      hasCriteria = true
+      if (categoryNames.some((name) => name.toLowerCase() === row.category_name.toLowerCase())) return true
+    }
+    const keywords = parseJSONList(rule.keywords_json)
+    if (keywords.length > 0) {
+      hasCriteria = true
+      const haystack = `${row.name} ${row.goods_key} ${row.category_name}`.toLowerCase()
+      if (keywords.some((keyword) => haystack.includes(keyword.toLowerCase()))) return true
+    }
+    return !hasCriteria
+  })
 }
 
 function shopDisplayName(target: ShopTarget | null) {
@@ -190,6 +254,8 @@ export default function ShopsPage() {
   const [goodsSort, setGoodsSort] = useState<ShopGoodsSort>("category")
   const [goodsKeyword, setGoodsKeyword] = useState("")
   const [highlightedGoodsKey, setHighlightedGoodsKey] = useState<string | null>(null)
+  const [watchRulesOpen, setWatchRulesOpen] = useState(false)
+  const [watchSeed, setWatchSeed] = useState<ShopWatchSeed | null>(null)
   const goodsRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({})
   const goodsFilters = useMemo(
     () => ({
@@ -202,6 +268,7 @@ export default function ShopsPage() {
   )
   const goods = useShopGoods(selectedID, goodsPage, 25, goodsFilters)
   const snapshotCategories = useShopSnapshotCategories(selectedID)
+  const watchRules = useShopWatchRules(selectedID)
   const changes = useShopChangeLogs(selectedID, changesPage, 20)
   const monitorLogs = useShopMonitorLogs(selectedID, logsPage, 20)
 
@@ -238,6 +305,17 @@ export default function ShopsPage() {
   }, [goods.data?.items, highlightedGoodsKey])
 
   const selected = targets.data?.find((t) => t.id === selectedID) ?? null
+  const selectedWatchRules = useMemo(
+    () => (watchRules.data ?? []).filter((rule) => rule.target_id === selectedID),
+    [selectedID, watchRules.data],
+  )
+  const watchedGoodsKeys = useMemo(() => {
+    const out = new Set<string>()
+    for (const row of goods.data?.items ?? []) {
+      if (shopRulesMatchRow(selectedWatchRules, row)) out.add(row.goods_key)
+    }
+    return out
+  }, [goods.data?.items, selectedWatchRules])
   const summary = useMemo(() => {
     const list = targets.data ?? []
     return {
@@ -318,6 +396,27 @@ export default function ShopsPage() {
     } finally {
       setBusy(null)
     }
+  }
+
+  async function updateShopNotify(target: ShopTarget, enabled: boolean) {
+    const next = await apiFetch<ShopTarget>(`/shop-targets/${target.id}`, {
+      method: "PUT",
+      body: JSON.stringify(shopTargetUpdateBody(target, { notify_enabled: enabled })),
+    })
+    targets.setData((targets.data ?? []).map((item) => (item.id === next.id ? next : item)))
+    toast.success(enabled ? "店铺通知已开启" : "店铺通知已关闭")
+    refresh()
+  }
+
+  function openWatchRules(target: ShopTarget) {
+    setSelectedID(target.id)
+    setWatchSeed(null)
+    setWatchRulesOpen(true)
+  }
+
+  function watchGoods(row: ShopGoodsSnapshot) {
+    setWatchSeed({ ...row, nonce: Date.now() })
+    setWatchRulesOpen(true)
   }
 
   async function testTarget(target: ShopTarget) {
@@ -528,6 +627,8 @@ export default function ShopsPage() {
               onEdit={() => openEdit(target)}
               onTest={() => testTarget(target)}
               onSync={() => syncTarget(target)}
+              onWatchRules={() => openWatchRules(target)}
+              watchRuleCount={target.id === selectedID ? selectedWatchRules.length : undefined}
               onDelete={() => deleteTarget(target)}
             />
           ))}
@@ -556,6 +657,7 @@ export default function ShopsPage() {
             keyword={goodsKeyword}
             refreshingKey={busy?.startsWith("refresh-goods:") ? busy.slice("refresh-goods:".length) : null}
             highlightedGoodsKey={highlightedGoodsKey}
+            watchedGoodsKeys={watchedGoodsKeys}
             rowRefs={goodsRowRefs}
             onCategory={setSelectedCategoryID}
             onStatus={setGoodsStatus}
@@ -564,6 +666,7 @@ export default function ShopsPage() {
             onKeyword={setGoodsKeyword}
             onClearSearch={clearGoodsSearch}
             onRefreshGoods={refreshGoodsStock}
+            onWatchGoods={watchGoods}
             onPage={setGoodsPage}
           />
           <ChangePanel
@@ -643,6 +746,7 @@ export default function ShopsPage() {
           </div>
           <div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3 sm:grid-cols-3">
             <Check label="启用监控" checked={form.monitor_enabled} onChange={(v) => setForm({ ...form, monitor_enabled: v })} />
+            <Check label="启用通知" checked={form.notify_enabled} onChange={(v) => setForm({ ...form, notify_enabled: v })} />
             <Check label="价格变化" checked={form.price_change_enabled} onChange={(v) => setForm({ ...form, price_change_enabled: v })} />
             <Check label="库存变化" checked={form.stock_change_enabled} onChange={(v) => setForm({ ...form, stock_change_enabled: v })} />
             <Check label="低库存" checked={form.low_stock_enabled} onChange={(v) => setForm({ ...form, low_stock_enabled: v })} />
@@ -660,6 +764,20 @@ export default function ShopsPage() {
           </div>
         </DialogContent>
       </Dialog>
+      <ShopWatchRulesDrawer
+        open={watchRulesOpen}
+        onOpenChange={setWatchRulesOpen}
+        target={selected}
+        categories={snapshotCategories.data ?? []}
+        rules={selectedWatchRules}
+        loading={watchRules.loading}
+        seed={watchSeed}
+        onRulesChanged={watchRules.refetch}
+        onToggleNotify={async (enabled) => {
+          if (!selected) return
+          await updateShopNotify(selected, enabled)
+        }}
+      />
     </section>
   )
 }
@@ -685,6 +803,8 @@ function ShopCard(props: {
   onEdit: () => void
   onTest: () => void
   onSync: () => void
+  onWatchRules: () => void
+  watchRuleCount?: number
   onDelete: () => void
 }) {
   const { target, active, busy } = props
@@ -708,6 +828,13 @@ function ShopCard(props: {
         <Mini label="低库存" value={target.last_low_stock_goods} />
         <Mini label="变化" value={target.last_changed_count} />
       </div>
+      <div className="mt-2 flex items-center justify-between gap-2 rounded-md bg-muted/30 px-2 py-1.5 text-[11px] text-muted-foreground">
+        <span className={cn("inline-flex items-center gap-1", target.notify_enabled && "text-emerald-700")}>
+          <Bell className="size-3.5" />
+          {target.notify_enabled ? "通知开启" : "通知关闭"}
+        </span>
+        <span>{props.watchRuleCount == null ? "关注规则 -" : `关注规则 ${props.watchRuleCount}`}</span>
+      </div>
       {target.last_error ? <p className="mt-2 line-clamp-2 text-xs text-danger">{target.last_error}</p> : null}
       <div className="mt-3 flex items-center justify-between gap-2">
         <span className="text-[11px] text-muted-foreground">上次同步 {relativeTime(target.last_sync_at)}</span>
@@ -723,6 +850,9 @@ function ShopCard(props: {
           </Button>
           <Button variant="outline" size="icon" className="size-7" onClick={props.onSync} disabled={busy === `sync:${target.id}`}>
             {busy === `sync:${target.id}` ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+          </Button>
+          <Button variant="outline" size="icon" className={cn("size-7", target.notify_enabled && "border-emerald-500/40 text-emerald-700")} onClick={props.onWatchRules}>
+            <Bell className="size-3.5" />
           </Button>
           <Button variant="outline" size="icon" className="size-7" onClick={props.onEdit}><Pencil className="size-3.5" /></Button>
           <Button variant="outline" size="icon" className="size-7" onClick={props.onDelete} disabled={busy === `delete:${target.id}`}><Trash2 className="size-3.5" /></Button>
@@ -757,6 +887,7 @@ function GoodsPanel({
   keyword,
   refreshingKey,
   highlightedGoodsKey,
+  watchedGoodsKeys,
   rowRefs,
   onCategory,
   onStatus,
@@ -765,6 +896,7 @@ function GoodsPanel({
   onKeyword,
   onClearSearch,
   onRefreshGoods,
+  onWatchGoods,
   onPage,
 }: {
   target: ShopTarget | null
@@ -782,6 +914,7 @@ function GoodsPanel({
   keyword: string
   refreshingKey: string | null
   highlightedGoodsKey: string | null
+  watchedGoodsKeys: Set<string>
   rowRefs: React.MutableRefObject<Record<string, HTMLTableRowElement | null>>
   onCategory: (categoryID: number | null) => void
   onStatus: (status: GoodsStatusFilter) => void
@@ -790,6 +923,7 @@ function GoodsPanel({
   onKeyword: (keyword: string) => void
   onClearSearch: () => void
   onRefreshGoods: (row: ShopGoodsSnapshot) => void
+  onWatchGoods: (row: ShopGoodsSnapshot) => void
   onPage: (page: number) => void
 }) {
   const allCount = categories.reduce((sum, category) => sum + category.goods_count, 0)
@@ -909,6 +1043,7 @@ function GoodsPanel({
             {rows.map((row) => {
               const refreshing = refreshingKey === row.goods_key
               const canBuy = !row.removed_at && row.stock_count > 0 && row.link
+              const watched = watchedGoodsKeys.has(row.goods_key)
               return (
                 <TableRow
                   key={row.id}
@@ -922,7 +1057,23 @@ function GoodsPanel({
                   )}
                 >
                   <TableCell className="min-w-0">
-                    <div className="truncate font-medium" title={row.name}>{row.name}</div>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onWatchGoods(row)
+                        }}
+                        className={cn(
+                          "shrink-0 rounded-md p-1 transition hover:bg-muted",
+                          watched ? "text-amber-500" : "text-muted-foreground",
+                        )}
+                        title={watched ? "已被关注规则命中，点击编辑关注" : "重点关注该商品"}
+                      >
+                        <Star className={cn("size-4", watched && "fill-amber-400")} />
+                      </button>
+                      <div className="min-w-0 truncate font-medium" title={row.name}>{row.name}</div>
+                    </div>
                     <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                       <span className="shrink-0">{row.goods_key}</span>
                       {row.link ? <a href={row.link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-foreground">官方页 <ExternalLink className="size-3" /></a> : null}

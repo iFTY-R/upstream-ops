@@ -111,6 +111,7 @@ export interface ShopTarget {
   base_url: string
   token: string
   monitor_enabled: boolean
+  notify_enabled: boolean
   scope_mode: ShopScopeMode
   goods_types_json: string
   category_ids_json: string
@@ -134,6 +135,37 @@ export interface ShopTarget {
   last_changed_count: number
   created_at: string
   updated_at: string
+}
+
+export interface ShopWatchRule {
+  id: number
+  target_id: number
+  name: string
+  enabled: boolean
+  goods_keys_json: string
+  category_ids_json: string
+  category_names_json: string
+  keywords_json: string
+  events_json: string
+  stock_threshold: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ShopWatchRuleInput {
+  name: string
+  enabled: boolean
+  goods_keys: string[]
+  category_ids: number[]
+  category_names: string[]
+  keywords: string[]
+  events: ShopGoodsChangeEvent[]
+  stock_threshold: number
+}
+
+export interface ShopWatchRulePreview {
+  total: number
+  items: ShopGoodsSnapshot[]
 }
 
 export interface ShopGoodsSnapshot {

@@ -132,6 +132,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&NotificationCooldown{},
 		&MonitorLog{},
 		&ShopTarget{},
+		&ShopWatchRule{},
 		&ShopGoodsSnapshot{},
 		&ShopGoodsChangeLog{},
 		&ShopMonitorLog{},

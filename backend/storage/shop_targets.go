@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -49,6 +50,7 @@ func (r *ShopTargets) UpdateSortOrders(orders map[uint]int) error {
 func (r *ShopTargets) Delete(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		for _, model := range []any{
+			&ShopWatchRule{},
 			&ShopGoodsSnapshot{},
 			&ShopGoodsChangeLog{},
 			&ShopMonitorLog{},
@@ -126,6 +128,209 @@ func normalizeShopTargetName(name string) string {
 	return name
 }
 
+type ShopWatchRules struct{ db *gorm.DB }
+
+func NewShopWatchRules(db *gorm.DB) *ShopWatchRules { return &ShopWatchRules{db: db} }
+
+func (r *ShopWatchRules) ListByTarget(targetID uint) ([]ShopWatchRule, error) {
+	var list []ShopWatchRule
+	if err := r.db.Where("target_id = ?", targetID).Order("enabled DESC").Order("id ASC").Find(&list).Error; err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+func (r *ShopWatchRules) ListEnabledByTarget(targetID uint) ([]ShopWatchRule, error) {
+	var list []ShopWatchRule
+	if err := r.db.Where("target_id = ? AND enabled = ?", targetID, true).Order("id ASC").Find(&list).Error; err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+func (r *ShopWatchRules) FindByID(targetID, ruleID uint) (*ShopWatchRule, error) {
+	var rule ShopWatchRule
+	if err := r.db.Where("target_id = ? AND id = ?", targetID, ruleID).First(&rule).Error; err != nil {
+		return nil, err
+	}
+	return &rule, nil
+}
+
+func (r *ShopWatchRules) Create(rule *ShopWatchRule) error {
+	return r.db.Create(rule).Error
+}
+
+func (r *ShopWatchRules) Update(rule *ShopWatchRule) error {
+	return r.db.Save(rule).Error
+}
+
+func (r *ShopWatchRules) Delete(targetID, ruleID uint) error {
+	return r.db.Where("target_id = ? AND id = ?", targetID, ruleID).Delete(&ShopWatchRule{}).Error
+}
+
+func ShopWatchRuleMatchesChange(rule ShopWatchRule, event ShopGoodsChangeEvent, snapshot *ShopGoodsSnapshot, goodsKey, goodsName string) bool {
+	if !rule.Enabled {
+		return false
+	}
+	if !shopWatchRuleMatchesEvent(rule, event) {
+		return false
+	}
+	if event == ShopChangeMonitorFailed {
+		return true
+	}
+	if snapshot == nil {
+		if strings.TrimSpace(goodsKey) == "" && strings.TrimSpace(goodsName) == "" {
+			return false
+		}
+		snapshot = &ShopGoodsSnapshot{GoodsKey: goodsKey, Name: goodsName}
+	}
+	if event == ShopChangeStockLow && rule.StockThreshold > 0 && snapshot.StockCount > rule.StockThreshold {
+		return false
+	}
+	return shopWatchRuleMatchesSnapshot(rule, *snapshot)
+}
+
+func ShopWatchRuleMatchesSnapshot(rule ShopWatchRule, snapshot ShopGoodsSnapshot) bool {
+	return shopWatchRuleMatchesSnapshot(rule, snapshot)
+}
+
+func shopWatchRuleMatchesEvent(rule ShopWatchRule, event ShopGoodsChangeEvent) bool {
+	events := parseJSONStrings(rule.EventsJSON)
+	if len(events) == 0 {
+		return true
+	}
+	wanted := string(event)
+	for _, item := range events {
+		if item == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func shopWatchRuleMatchesSnapshot(rule ShopWatchRule, snapshot ShopGoodsSnapshot) bool {
+	hasCriteria := false
+	goodsKey := strings.TrimSpace(snapshot.GoodsKey)
+	goodsKeys := parseJSONStrings(rule.GoodsKeysJSON)
+	if len(goodsKeys) > 0 {
+		hasCriteria = true
+		for _, key := range goodsKeys {
+			if strings.EqualFold(key, goodsKey) {
+				return true
+			}
+		}
+	}
+
+	categoryIDs := parseJSONInt64s(rule.CategoryIDsJSON)
+	if len(categoryIDs) > 0 {
+		hasCriteria = true
+		for _, id := range categoryIDs {
+			if id == snapshot.CategoryID {
+				return true
+			}
+		}
+	}
+
+	categoryName := strings.ToLower(strings.TrimSpace(snapshot.CategoryName))
+	categoryNames := parseJSONStrings(rule.CategoryNamesJSON)
+	if len(categoryNames) > 0 {
+		hasCriteria = true
+		for _, name := range categoryNames {
+			if strings.EqualFold(name, categoryName) || strings.EqualFold(name, snapshot.CategoryName) {
+				return true
+			}
+		}
+	}
+
+	haystack := strings.ToLower(strings.Join([]string{
+		snapshot.Name,
+		snapshot.GoodsKey,
+		snapshot.CategoryName,
+	}, " "))
+	keywords := parseJSONStrings(rule.KeywordsJSON)
+	if len(keywords) > 0 {
+		hasCriteria = true
+		for _, keyword := range keywords {
+			if strings.Contains(haystack, strings.ToLower(keyword)) {
+				return true
+			}
+		}
+	}
+
+	return !hasCriteria
+}
+
+func applyShopWatchRuleFilter(q *gorm.DB, rule ShopWatchRule) *gorm.DB {
+	clauses := make([]string, 0, 4)
+	args := make([]any, 0)
+	if keys := parseJSONStrings(rule.GoodsKeysJSON); len(keys) > 0 {
+		clauses = append(clauses, "goods_key IN ?")
+		args = append(args, keys)
+	}
+	if ids := parseJSONInt64s(rule.CategoryIDsJSON); len(ids) > 0 {
+		clauses = append(clauses, "category_id IN ?")
+		args = append(args, ids)
+	}
+	if names := parseJSONStrings(rule.CategoryNamesJSON); len(names) > 0 {
+		clauses = append(clauses, "category_name IN ?")
+		args = append(args, names)
+	}
+	for _, keyword := range parseJSONStrings(rule.KeywordsJSON) {
+		like := "%" + keyword + "%"
+		clauses = append(clauses, "(name LIKE ? OR goods_key LIKE ? OR category_name LIKE ?)")
+		args = append(args, like, like, like)
+	}
+	if len(clauses) == 0 {
+		return q
+	}
+	return q.Where(strings.Join(clauses, " OR "), args...)
+}
+
+func parseJSONStrings(raw string) []string {
+	var list []string
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(list))
+	seen := map[string]struct{}{}
+	for _, item := range list {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		key := strings.ToLower(item)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func parseJSONInt64s(raw string) []int64 {
+	var list []int64
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return nil
+	}
+	out := make([]int64, 0, len(list))
+	seen := map[int64]struct{}{}
+	for _, item := range list {
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
 type ShopGoods struct{ db *gorm.DB }
 
 func NewShopGoods(db *gorm.DB) *ShopGoods { return &ShopGoods{db: db} }
@@ -163,6 +368,25 @@ func (r *ShopGoods) ListActiveByTarget(targetID uint) ([]ShopGoodsSnapshot, erro
 		return nil, err
 	}
 	return list, nil
+}
+
+func (r *ShopGoods) ListFirstMatchingWatchRule(rule ShopWatchRule, limit int) ([]ShopGoodsSnapshot, int64, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	q := r.db.Model(&ShopGoodsSnapshot{}).Where("target_id = ?", rule.TargetID)
+	q = applyShopWatchRuleFilter(q, rule)
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var list []ShopGoodsSnapshot
+	if err := q.Order("removed_at ASC").Order("category_name ASC").Order("name ASC").Order("goods_key ASC").
+		Limit(limit).
+		Find(&list).Error; err != nil {
+		return nil, 0, err
+	}
+	return list, total, nil
 }
 
 func (r *ShopGoods) ListPage(targetID uint, page, pageSize int) ([]ShopGoodsSnapshot, int64, error) {

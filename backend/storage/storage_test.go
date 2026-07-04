@@ -295,6 +295,92 @@ func TestShopTargetsCreateAssignsNextSortOrder(t *testing.T) {
 	}
 }
 
+func TestShopWatchRuleMatchesSnapshotAndChange(t *testing.T) {
+	rule := ShopWatchRule{
+		Enabled:           true,
+		GoodsKeysJSON:     `["sku-1"]`,
+		CategoryNamesJSON: `["会员"]`,
+		KeywordsJSON:      `["Claude"]`,
+		EventsJSON:        `["stock_low","goods_restocked"]`,
+		StockThreshold:    3,
+	}
+	snapshot := &ShopGoodsSnapshot{
+		GoodsKey:     "sku-2",
+		Name:         "Claude Pro 月卡",
+		CategoryName: "AI 会员",
+		StockCount:   2,
+	}
+
+	if !ShopWatchRuleMatchesChange(rule, ShopChangeStockLow, snapshot, snapshot.GoodsKey, snapshot.Name) {
+		t.Fatalf("watch rule should match keyword and stock threshold")
+	}
+	snapshot.StockCount = 4
+	if ShopWatchRuleMatchesChange(rule, ShopChangeStockLow, snapshot, snapshot.GoodsKey, snapshot.Name) {
+		t.Fatalf("watch rule should not match stock_low above threshold")
+	}
+	if ShopWatchRuleMatchesChange(rule, ShopChangePriceChanged, snapshot, snapshot.GoodsKey, snapshot.Name) {
+		t.Fatalf("watch rule should not match events outside configured set")
+	}
+}
+
+func TestShopWatchRulesPreviewAndDeleteWithTarget(t *testing.T) {
+	db := openTestDB(t)
+	targets := NewShopTargets(db)
+	rules := NewShopWatchRules(db)
+	goods := NewShopGoods(db)
+
+	target := &ShopTarget{
+		Name:           "watch-shop",
+		Platform:       ShopPlatformLDXP,
+		SiteURL:        "https://pay.ldxp.cn/shop/watch",
+		BaseURL:        "https://pay.ldxp.cn",
+		Token:          "watch",
+		MonitorEnabled: true,
+		NotifyEnabled:  true,
+		ScopeMode:      ShopScopeAll,
+	}
+	if err := targets.Create(target); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	snapshots := []ShopGoodsSnapshot{
+		{TargetID: target.ID, GoodsKey: "a", GoodsType: "card", Name: "重点套餐", CategoryID: 1, CategoryName: "A", StockCount: 1, FirstSeenAt: time.Now(), LastSeenAt: time.Now()},
+		{TargetID: target.ID, GoodsKey: "b", GoodsType: "card", Name: "普通套餐", CategoryID: 2, CategoryName: "B", StockCount: 5, FirstSeenAt: time.Now(), LastSeenAt: time.Now()},
+	}
+	for i := range snapshots {
+		if err := goods.CreateSnapshot(&snapshots[i]); err != nil {
+			t.Fatalf("create snapshot: %v", err)
+		}
+	}
+	rule := &ShopWatchRule{
+		TargetID:       target.ID,
+		Name:           "重点商品",
+		Enabled:        true,
+		KeywordsJSON:   `["重点"]`,
+		EventsJSON:     `["stock_changed"]`,
+		StockThreshold: 1,
+	}
+	if err := rules.Create(rule); err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+	preview, total, err := goods.ListFirstMatchingWatchRule(*rule, 10)
+	if err != nil {
+		t.Fatalf("preview rule: %v", err)
+	}
+	if total != 1 || len(preview) != 1 || preview[0].GoodsKey != "a" {
+		t.Fatalf("preview = total %d rows %#v, want goods a", total, preview)
+	}
+	if err := targets.Delete(target.ID); err != nil {
+		t.Fatalf("delete target: %v", err)
+	}
+	list, err := rules.ListByTarget(target.ID)
+	if err != nil {
+		t.Fatalf("list rules after delete: %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("rules after target delete = %d, want 0", len(list))
+	}
+}
+
 func TestShopGoodsSnapshotCategoriesAndFilters(t *testing.T) {
 	db := openTestDB(t)
 	goods := NewShopGoods(db)

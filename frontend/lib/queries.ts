@@ -25,6 +25,7 @@ import type {
   ShopMonitorLog,
   ShopSnapshotCategory,
   ShopTarget,
+  ShopWatchRule,
   SystemConfigResponse,
   UpstreamAnnouncementPage,
 } from "@/lib/api-types"
@@ -247,6 +248,12 @@ export function useSystemConfig() {
 
 export function useShopTargets() {
   return useApi<ShopTarget[]>("/shop-targets")
+}
+
+export function useShopWatchRules(targetID: number | null) {
+  return useApi<ShopWatchRule[]>(
+    targetID == null ? null : `/shop-targets/${targetID}/watch-rules`,
+  )
 }
 
 export interface ShopGoodsFilters {
