@@ -7,7 +7,6 @@ import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Separator } from "@/components/ui/separator"
 import {
   Sheet,
   SheetContent,
@@ -191,9 +190,9 @@ export function ShopWatchRulesDrawer({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full overflow-hidden p-0 sm:max-w-3xl">
-        <SheetHeader className="border-b border-border bg-[radial-gradient(circle_at_20%_0%,rgba(16,185,129,0.16),transparent_28%),linear-gradient(135deg,rgba(15,23,42,0.04),transparent)] p-5">
-          <div className="flex items-start justify-between gap-4 pr-8">
+      <SheetContent className="h-[100dvh] w-full gap-0 overflow-hidden p-0 sm:max-w-3xl">
+        <SheetHeader className="shrink-0 border-b border-border bg-[radial-gradient(circle_at_20%_0%,rgba(16,185,129,0.16),transparent_28%),linear-gradient(135deg,rgba(15,23,42,0.04),transparent)] p-4 sm:p-5">
+          <div className="flex flex-col gap-3 pr-8 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
             <div>
               <SheetTitle className="flex items-center gap-2 text-lg">
                 <Bell className="size-5 text-emerald-600" />
@@ -203,7 +202,7 @@ export function ShopWatchRulesDrawer({
                 {target ? `${target.last_shop_name || target.name} · 用规则决定哪些商品变化需要通知。` : "选择店铺后配置关注规则。"}
               </SheetDescription>
             </div>
-            <div className="flex items-center gap-2 rounded-full border border-border bg-background/80 px-3 py-2 text-xs">
+            <div className="flex w-fit items-center gap-2 rounded-full border border-border bg-background/80 px-3 py-2 text-xs">
               {notifySaving ? <Loader2 className="size-3 animate-spin" /> : null}
               <span className="text-muted-foreground">店铺通知</span>
               <Switch
@@ -213,16 +212,16 @@ export function ShopWatchRulesDrawer({
               />
             </div>
           </div>
-          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+          <div className="mt-4 grid grid-cols-3 gap-2">
             <Metric label="启用规则" value={activeRules.length} />
             <Metric label="规则总数" value={rules.length} />
             <Metric label="精确商品" value={totalExplicitGoods} />
           </div>
         </SheetHeader>
 
-        <ScrollArea className="h-[calc(100vh-190px)]">
-          <div className="grid gap-4 p-4 lg:grid-cols-[minmax(240px,0.8fr)_minmax(0,1.2fr)]">
-            <div className="space-y-3">
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="grid gap-4 p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:p-4 lg:grid-cols-[minmax(240px,0.8fr)_minmax(0,1.2fr)]">
+            <div className="order-2 space-y-3 lg:order-1">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold">规则列表</h3>
                 <Button size="sm" variant="outline" onClick={resetForm} className="h-8 gap-1.5">
@@ -252,7 +251,7 @@ export function ShopWatchRulesDrawer({
               ))}
             </div>
 
-            <div className="space-y-4">
+            <div className="order-1 space-y-4 lg:order-2">
               <Card className="overflow-hidden">
                 <div className="border-b border-border p-4">
                   <h3 className="text-sm font-semibold">{editing ? "编辑规则" : "新建规则"}</h3>
@@ -364,19 +363,18 @@ export function ShopWatchRulesDrawer({
                     </div>
                   </div>
 
-                  <Separator />
-                  <div className="flex justify-end gap-2">
-                    {editing ? (
-                      <Button variant="outline" onClick={resetForm} disabled={saving}>
-                        <X className="mr-2 size-4" />
-                        {"取消编辑"}
-                      </Button>
-                    ) : null}
-                    <Button onClick={saveRule} disabled={saving || !target} className="gap-2">
-                      {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-                      {editing ? "保存规则" : "创建规则"}
+                </div>
+                <div className="sticky bottom-0 z-10 flex flex-col-reverse gap-2 border-t border-border bg-card/95 p-3 shadow-[0_-12px_24px_rgba(15,23,42,0.08)] backdrop-blur sm:flex-row sm:justify-end sm:p-4">
+                  {editing ? (
+                    <Button variant="outline" onClick={resetForm} disabled={saving} className="w-full sm:w-auto">
+                      <X className="mr-2 size-4" />
+                      {"取消编辑"}
                     </Button>
-                  </div>
+                  ) : null}
+                  <Button onClick={saveRule} disabled={saving || !target} className="w-full gap-2 sm:w-auto">
+                    {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                    {editing ? "保存规则" : "创建规则"}
+                  </Button>
                 </div>
               </Card>
             </div>

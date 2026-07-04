@@ -7,7 +7,7 @@
 #   3) runtime          — 极小 alpine 镜像只放一个静态二进制
 #
 # 由于第二阶段需要 frontend 产物，构建 context 必须是 repo 根目录：
-#   docker build -t upstream-ops:dev .
+#   docker build --build-arg VERSION=0.0.7 -t upstream-ops:0.0.7 .
 #   或在 docker-compose 里写 context: .
 
 # ---------- Stage 1: 前端 ----------
@@ -37,6 +37,7 @@ FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS go-builder
 WORKDIR /src
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
+ARG VERSION=0.0.0-dev
 ENV GOMODCACHE=/go/pkg/mod \
     GOCACHE=/root/.cache/go-build
 
@@ -55,7 +56,7 @@ COPY --from=frontend-builder /web/dist ./web/dist
 RUN --mount=type=cache,id=upstream-ops-go-build,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
         -trimpath \
-        -ldflags="-s -w" \
+        -ldflags="-s -w -X github.com/ifty-r/upstream-ops/backend/global.VERSION=${VERSION}" \
         -o /out/upstream-ops \
         ./cmd/server
 

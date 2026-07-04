@@ -71,6 +71,21 @@ jobs:
           flavor: |
             latest=false
 
+      - name: Resolve build version
+        id: version
+        shell: bash
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          elif [[ -n "${DISPATCH_TAG}" ]]; then
+            version="${DISPATCH_TAG}"
+          else
+            version="edge-${GITHUB_SHA::7}"
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
       # 多架构构建 + 推送。GitHub Actions 内置 cache (type=gha) 把
       # 前端 pnpm install 和后端 go mod download 都缓存住，二次构建 1-2 分钟。
       - name: Build and push
@@ -82,6 +97,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
@@ -92,3 +109,4 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "Build version: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY

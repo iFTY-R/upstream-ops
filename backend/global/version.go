@@ -1,3 +1,3 @@
 package global
 
-const VERSION = "0.0.6"
+var VERSION = "0.0.0-dev"
