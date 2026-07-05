@@ -165,6 +165,13 @@ func (s *Service) ListPolicies() ([]PolicyView, error) {
 	return out, nil
 }
 
+func (s *Service) ReorderPolicies(ids []uint) ([]PolicyView, error) {
+	if err := s.Repo.ReorderPolicies(ids); err != nil {
+		return nil, err
+	}
+	return s.ListPolicies()
+}
+
 func (s *Service) GetPolicy(id uint) (*PolicyView, error) {
 	p, err := s.Repo.FindPolicy(id)
 	if err != nil {

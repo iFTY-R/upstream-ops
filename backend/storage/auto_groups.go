@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -66,8 +67,12 @@ func (r *AutoGroups) FindPolicyByChannelTarget(channelID uint, targetKeyName str
 func (r *AutoGroups) ListPoliciesByChannel(channelID uint) ([]AutoGroupPolicy, error) {
 	var list []AutoGroupPolicy
 	if err := r.db.Where("channel_id = ?", channelID).
-		Order("CASE WHEN target_key_name = 'auto' THEN 0 ELSE 1 END").
+		Order("CASE WHEN sort_order > 0 THEN 0 ELSE 1 END").
+		Order("sort_order ASC").
+		Order("CASE WHEN sort_order > 0 THEN 0 WHEN target_key_name = 'auto' THEN 0 ELSE 1 END").
 		Order("target_key_name ASC").
+		Order("updated_at DESC").
+		Order("id ASC").
 		Find(&list).Error; err != nil {
 		return nil, err
 	}
@@ -76,7 +81,7 @@ func (r *AutoGroups) ListPoliciesByChannel(channelID uint) ([]AutoGroupPolicy, e
 
 func (r *AutoGroups) ListPolicies() ([]AutoGroupPolicy, error) {
 	var list []AutoGroupPolicy
-	if err := r.db.Order("updated_at DESC").Order("id ASC").Find(&list).Error; err != nil {
+	if err := r.db.Scopes(autoGroupPolicyOrder).Find(&list).Error; err != nil {
 		return nil, err
 	}
 	return list, nil
@@ -84,10 +89,49 @@ func (r *AutoGroups) ListPolicies() ([]AutoGroupPolicy, error) {
 
 func (r *AutoGroups) ListEnabledPolicies() ([]AutoGroupPolicy, error) {
 	var list []AutoGroupPolicy
-	if err := r.db.Where("enabled = ?", true).Order("id ASC").Find(&list).Error; err != nil {
+	if err := r.db.Where("enabled = ?", true).Scopes(autoGroupPolicyOrder).Find(&list).Error; err != nil {
 		return nil, err
 	}
 	return list, nil
+}
+
+func (r *AutoGroups) ReorderPolicies(ids []uint) error {
+	if len(ids) == 0 {
+		return errors.New("排序列表不能为空")
+	}
+	seen := map[uint]bool{}
+	for _, id := range ids {
+		if id == 0 {
+			return errors.New("排序列表包含无效策略 ID")
+		}
+		if seen[id] {
+			return fmt.Errorf("排序列表包含重复策略 ID：%d", id)
+		}
+		seen[id] = true
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&AutoGroupPolicy{}).Where("id IN ?", ids).Count(&count).Error; err != nil {
+			return err
+		}
+		if count != int64(len(ids)) {
+			return fmt.Errorf("排序列表包含不存在的策略")
+		}
+		for i, id := range ids {
+			if err := tx.Model(&AutoGroupPolicy{}).Where("id = ?", id).Update("sort_order", i+1).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func autoGroupPolicyOrder(db *gorm.DB) *gorm.DB {
+	return db.
+		Order("CASE WHEN sort_order > 0 THEN 0 ELSE 1 END").
+		Order("sort_order ASC").
+		Order("updated_at DESC").
+		Order("id ASC")
 }
 
 func (r *AutoGroups) UpsertCandidate(c *AutoGroupCandidate) error {

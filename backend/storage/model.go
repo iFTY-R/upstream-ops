@@ -445,6 +445,7 @@ type AutoGroupPolicy struct {
 	ChannelID                     uint       `gorm:"not null;uniqueIndex:idx_auto_group_policy_channel_target;index" json:"channel_id"`
 	Name                          string     `gorm:"size:128;not null" json:"name"`
 	Enabled                       bool       `gorm:"not null;default:true;index" json:"enabled"`
+	SortOrder                     int        `gorm:"not null;default:0;index" json:"sort_order"`
 	NotifyEnabled                 bool       `gorm:"not null;default:true" json:"notify_enabled"`
 	TargetKeyID                   int64      `gorm:"not null;default:0" json:"target_key_id"`
 	TargetKeyName                 string     `gorm:"size:128;not null;default:'auto';uniqueIndex:idx_auto_group_policy_channel_target" json:"target_key_name"`

@@ -707,6 +707,7 @@ export interface AutoGroupPolicy {
   channel_id: number
   name: string
   enabled: boolean
+  sort_order: number
   notify_enabled: boolean
   target_key_id: number
   target_key_name: string

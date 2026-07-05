@@ -149,6 +149,50 @@ func TestAutoGroupPolicyAllowsMultipleTargetsPerChannel(t *testing.T) {
 	}
 }
 
+func TestAutoGroupPolicyReorderPersistsOrder(t *testing.T) {
+	db := openTestDB(t)
+	channels := NewChannels(db)
+	ch := &Channel{
+		Name:           "sortable",
+		Type:           ChannelTypeSub2API,
+		SiteURL:        "https://example.com",
+		Username:       "u",
+		PasswordCipher: "x",
+		MonitorEnabled: true,
+	}
+	if err := channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	repo := NewAutoGroups(db)
+	first := &AutoGroupPolicy{ChannelID: ch.ID, Name: "first", TargetKeyName: "first", ProbeKeyName: "probe-a", Enabled: true}
+	second := &AutoGroupPolicy{ChannelID: ch.ID, Name: "second", TargetKeyName: "second", ProbeKeyName: "probe-b", Enabled: true}
+	third := &AutoGroupPolicy{ChannelID: ch.ID, Name: "third", TargetKeyName: "third", ProbeKeyName: "probe-c", Enabled: true}
+	for _, policy := range []*AutoGroupPolicy{first, second, third} {
+		if err := repo.CreatePolicy(policy); err != nil {
+			t.Fatalf("create policy %s: %v", policy.Name, err)
+		}
+	}
+
+	if err := repo.ReorderPolicies([]uint{third.ID, first.ID, second.ID}); err != nil {
+		t.Fatalf("reorder policies: %v", err)
+	}
+	list, err := repo.ListPolicies()
+	if err != nil {
+		t.Fatalf("list policies: %v", err)
+	}
+	if len(list) < 3 || list[0].ID != third.ID || list[1].ID != first.ID || list[2].ID != second.ID {
+		t.Fatalf("unexpected list order: %#v", list)
+	}
+	enabled, err := repo.ListEnabledPolicies()
+	if err != nil {
+		t.Fatalf("list enabled policies: %v", err)
+	}
+	if len(enabled) < 3 || enabled[0].ID != third.ID || enabled[1].ID != first.ID || enabled[2].ID != second.ID {
+		t.Fatalf("unexpected enabled order: %#v", enabled)
+	}
+}
+
 func TestProxyEnabledPersistsForCaptchaAndNotification(t *testing.T) {
 	db := openTestDB(t)
 

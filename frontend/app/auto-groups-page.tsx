@@ -5,7 +5,9 @@ import { useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowRightLeft,
+  ArrowUp,
   CheckCircle2,
   CircleDashed,
   Loader2,
@@ -194,6 +196,7 @@ export default function AutoGroupsPage() {
   const [logsBump, setLogsBump] = useState(0)
   const [actionBusy, setActionBusy] = useState<string | null>(null)
   const [appliedChannelParam, setAppliedChannelParam] = useState<string | null>(null)
+  const [reorderingID, setReorderingID] = useState<number | null>(null)
 
   const list = policies.data ?? []
   const selectedPolicy = selectedID === "new" ? null : list.find((p) => p.id === selectedID) ?? null
@@ -314,6 +317,30 @@ export default function AutoGroupsPage() {
     refresh()
     policies.refetch()
     summary.refetch()
+  }
+
+  async function movePolicy(policyID: number, direction: "up" | "down") {
+    const index = list.findIndex((p) => p.id === policyID)
+    if (index < 0) return
+    const nextIndex = direction === "up" ? index - 1 : index + 1
+    if (nextIndex < 0 || nextIndex >= list.length) return
+    const next = list.slice()
+    const [item] = next.splice(index, 1)
+    next.splice(nextIndex, 0, item)
+    setReorderingID(policyID)
+    try {
+      await apiFetch<AutoGroupPolicyView[]>("/auto-groups/reorder", {
+        method: "POST",
+        body: JSON.stringify({ ids: next.map((p) => p.id) }),
+      })
+      toast.success("策略排序已保存")
+      refreshAutoGroupData()
+    } catch (e) {
+      const err = e as Error
+      toast.error(err.message || "保存排序失败")
+    } finally {
+      setReorderingID(null)
+    }
   }
 
   function canAdvanceStep() {
@@ -472,8 +499,18 @@ export default function AutoGroupsPage() {
             ) : (
               <ScrollArea className="max-h-[calc(100vh-220px)] pr-1">
                 <div className="space-y-2">
-                  {list.map((p) => (
-                    <PolicyCard key={p.id} policy={p} selected={selectedID === p.id} onClick={() => selectPolicy(p)} />
+                  {list.map((p, index) => (
+                    <PolicyCard
+                      key={p.id}
+                      policy={p}
+                      selected={selectedID === p.id}
+                      reordering={reorderingID === p.id}
+                      canMoveUp={index > 0}
+                      canMoveDown={index < list.length - 1}
+                      onClick={() => selectPolicy(p)}
+                      onMoveUp={() => movePolicy(p.id, "up")}
+                      onMoveDown={() => movePolicy(p.id, "down")}
+                    />
                   ))}
                 </div>
               </ScrollArea>
@@ -775,42 +812,87 @@ export default function AutoGroupsPage() {
   )
 }
 
-function PolicyCard({ policy, selected, onClick }: { policy: AutoGroupPolicyView; selected: boolean; onClick: () => void }) {
+function PolicyCard({
+  policy,
+  selected,
+  reordering,
+  canMoveUp,
+  canMoveDown,
+  onClick,
+  onMoveUp,
+  onMoveDown,
+}: {
+  policy: AutoGroupPolicyView
+  selected: boolean
+  reordering: boolean
+  canMoveUp: boolean
+  canMoveDown: boolean
+  onClick: () => void
+  onMoveUp: () => void
+  onMoveDown: () => void
+}) {
   const key = policy.enabled ? policy.last_status : "disabled"
   const meta = statusMeta[key as keyof typeof statusMeta] ?? statusMeta.idle
   const Icon = meta.icon
   const healthy = (policy.candidates ?? []).filter((item) => item.status === "healthy").length
   const circuit = (policy.candidates ?? []).filter((item) => item.status === "circuit_open").length
   return (
-    <button
-      type="button"
-      onClick={onClick}
+    <div
       className={cn(
-        "w-full rounded-lg border p-3 text-left transition-colors",
+        "overflow-hidden rounded-lg border transition-colors",
         selected ? "border-primary bg-primary/5" : "border-border hover:bg-muted/40",
       )}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-foreground">{policy.name}</p>
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {policy.channel?.name ?? `渠道 #${policy.channel_id}`} · key {policy.target_key_name || policy.target_key_id}
-          </p>
+      <button type="button" onClick={onClick} className="w-full p-3 text-left">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-foreground">{policy.name}</p>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              {policy.channel?.name ?? `渠道 #${policy.channel_id}`} · key {policy.target_key_name || policy.target_key_id}
+            </p>
+          </div>
+          <span className={cn("inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ring-1 ring-inset", meta.cls)}>
+            <Icon className="size-3" />
+            {meta.label}
+          </span>
         </div>
-        <span className={cn("inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ring-1 ring-inset", meta.cls)}>
-          <Icon className="size-3" />
-          {meta.label}
-        </span>
+        <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+          <MiniStat label="当前组" value={policy.current_group_name || "—"} />
+          <MiniStat label="可用/熔断" value={`${healthy}/${circuit}`} />
+          <MiniStat label="上次评估" value={relativeTime(policy.last_evaluate_at)} />
+        </div>
+        {policy.last_error ? (
+          <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-danger">{policy.last_error}</p>
+        ) : null}
+      </button>
+      <div className="flex items-center justify-between gap-2 border-t border-border/70 bg-muted/20 px-2 py-1.5">
+        <span className="text-[10px] text-muted-foreground">排序 {policy.sort_order > 0 ? policy.sort_order : "未保存"}</span>
+        <div className="flex items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-[11px]"
+            disabled={reordering || !canMoveUp}
+            onClick={onMoveUp}
+          >
+            {reordering ? <Loader2 className="mr-1 size-3 animate-spin" /> : <ArrowUp className="mr-1 size-3" />}
+            {"上移"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-[11px]"
+            disabled={reordering || !canMoveDown}
+            onClick={onMoveDown}
+          >
+            {reordering ? <Loader2 className="mr-1 size-3 animate-spin" /> : <ArrowDown className="mr-1 size-3" />}
+            {"下移"}
+          </Button>
+        </div>
       </div>
-      <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-        <MiniStat label="当前组" value={policy.current_group_name || "—"} />
-        <MiniStat label="可用/熔断" value={`${healthy}/${circuit}`} />
-        <MiniStat label="上次评估" value={relativeTime(policy.last_evaluate_at)} />
-      </div>
-      {policy.last_error ? (
-        <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-danger">{policy.last_error}</p>
-      ) : null}
-    </button>
+    </div>
   )
 }
 
@@ -1160,105 +1242,106 @@ function CandidatesPanel({
         {candidates.length === 0 ? (
           <p className="text-xs text-muted-foreground">{"保存并评估后会显示候选分组状态。"}</p>
         ) : (
-          <ScrollArea className="max-h-96">
-            <div className="overflow-x-auto">
-            <Table className="min-w-[820px] text-xs">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{"分组"}</TableHead>
-                  <TableHead className="text-right">{"倍率"}</TableHead>
-                  <TableHead>{"状态"}</TableHead>
-                  <TableHead>{"探测"}</TableHead>
-                  <TableHead>{"原因"}</TableHead>
-                  <TableHead className="text-right">{"操作"}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {candidates.map((c) => {
-                  const canForceSwitch = !c.manual_disabled && ["", "unknown", "healthy", "half_open"].includes(c.status)
-                  return (
-                  <TableRow key={c.id}>
-                    <TableCell className="max-w-56">
-                      <div className="truncate font-medium">{c.group_name}</div>
-                      {c.description ? <div className="line-clamp-2 text-muted-foreground">{c.description}</div> : null}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{formatRatio(c.ratio)}</TableCell>
-                    <TableCell>
-                      <CandidateBadge status={c.status} />
-                    </TableCell>
-                    <TableCell className="min-w-28 text-muted-foreground">
-                      <div className="text-[11px]">
-                        {c.last_probe_at ? (
-                          <>
-                            <span className={c.last_probe_success ? "text-success" : "text-danger"}>
-                              {c.last_probe_success ? "通过" : "失败"}
-                            </span>
-                            {c.last_probe_latency_ms ? ` · ${c.last_probe_latency_ms}ms` : ""}
-                          </>
-                        ) : (
-                          "未探测"
-                        )}
-                      </div>
-                      <div className="text-[10px]">
-                        {c.success_count > 0 ? `连续成功 ${c.success_count}` : c.failure_count > 0 ? `失败 ${c.failure_count}` : "—"}
-                      </div>
-                    </TableCell>
-                    <TableCell className="max-w-48 text-muted-foreground">
-                      <div className="line-clamp-2">
-                        {c.reason || c.last_error || (c.circuit_open_until ? `熔断到 ${relativeTime(c.circuit_open_until)}` : "—")}
-                        {c.last_error_code ? ` · ${c.last_error_code}` : ""}
-                      </div>
-                    </TableCell>
-                    <TableCell className="min-w-52 text-right">
-                      <div className="flex flex-wrap justify-end gap-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 px-2 text-[11px]"
-                          disabled={!!actionBusy || c.manual_disabled}
-                          onClick={() => onAction(c, "probe")}
-                        >
-                          {"探测"}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 px-2 text-[11px]"
-                          disabled={!!actionBusy}
-                          onClick={() => onAction(c, c.manual_disabled ? "enable" : "disable")}
-                        >
-                          {c.manual_disabled ? "恢复" : "停用"}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 px-2 text-[11px] text-warning hover:text-warning"
-                          disabled={!!actionBusy || c.status === "circuit_open"}
-                          onClick={() => onAction(c, "circuit")}
-                        >
-                          {"熔断"}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 px-2 text-[11px] text-brand hover:text-brand"
-                          disabled={!!actionBusy || !canForceSwitch}
-                          onClick={() => onAction(c, "force-switch")}
-                        >
-                          {"强切"}
-                        </Button>
-                      </div>
-                    </TableCell>
+          <div className="max-h-96 overflow-auto overscroll-x-contain rounded-md border border-border/60">
+            <div className="min-w-[880px]">
+              <Table className="text-xs">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{"分组"}</TableHead>
+                    <TableHead className="text-right">{"倍率"}</TableHead>
+                    <TableHead>{"状态"}</TableHead>
+                    <TableHead>{"探测"}</TableHead>
+                    <TableHead>{"原因"}</TableHead>
+                    <TableHead className="text-right">{"操作"}</TableHead>
                   </TableRow>
-                )})}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {candidates.map((c) => {
+                    const canForceSwitch = !c.manual_disabled && ["", "unknown", "healthy", "half_open"].includes(c.status)
+                    return (
+                      <TableRow key={c.id}>
+                        <TableCell className="max-w-56">
+                          <div className="truncate font-medium">{c.group_name}</div>
+                          {c.description ? <div className="line-clamp-2 text-muted-foreground">{c.description}</div> : null}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{formatRatio(c.ratio)}</TableCell>
+                        <TableCell>
+                          <CandidateBadge status={c.status} />
+                        </TableCell>
+                        <TableCell className="min-w-28 text-muted-foreground">
+                          <div className="text-[11px]">
+                            {c.last_probe_at ? (
+                              <>
+                                <span className={c.last_probe_success ? "text-success" : "text-danger"}>
+                                  {c.last_probe_success ? "通过" : "失败"}
+                                </span>
+                                {c.last_probe_latency_ms ? ` · ${c.last_probe_latency_ms}ms` : ""}
+                              </>
+                            ) : (
+                              "未探测"
+                            )}
+                          </div>
+                          <div className="text-[10px]">
+                            {c.success_count > 0 ? `连续成功 ${c.success_count}` : c.failure_count > 0 ? `失败 ${c.failure_count}` : "—"}
+                          </div>
+                        </TableCell>
+                        <TableCell className="max-w-48 text-muted-foreground">
+                          <div className="line-clamp-2">
+                            {c.reason || c.last_error || (c.circuit_open_until ? `熔断到 ${relativeTime(c.circuit_open_until)}` : "—")}
+                            {c.last_error_code ? ` · ${c.last_error_code}` : ""}
+                          </div>
+                        </TableCell>
+                        <TableCell className="min-w-52 text-right">
+                          <div className="flex flex-wrap justify-end gap-1">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-[11px]"
+                              disabled={!!actionBusy || c.manual_disabled}
+                              onClick={() => onAction(c, "probe")}
+                            >
+                              {"探测"}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-[11px]"
+                              disabled={!!actionBusy}
+                              onClick={() => onAction(c, c.manual_disabled ? "enable" : "disable")}
+                            >
+                              {c.manual_disabled ? "恢复" : "停用"}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-[11px] text-warning hover:text-warning"
+                              disabled={!!actionBusy || c.status === "circuit_open"}
+                              onClick={() => onAction(c, "circuit")}
+                            >
+                              {"熔断"}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-[11px] text-brand hover:text-brand"
+                              disabled={!!actionBusy || !canForceSwitch}
+                              onClick={() => onAction(c, "force-switch")}
+                            >
+                              {"强切"}
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
             </div>
-          </ScrollArea>
+          </div>
         )}
       </CardContent>
     </Card>

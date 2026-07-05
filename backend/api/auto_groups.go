@@ -17,6 +17,7 @@ func registerAutoGroups(g *gin.RouterGroup, d *Deps) {
 	gp.POST("", func(c *gin.Context) { createAutoGroupPolicy(c, d) })
 	gp.GET("/summary", func(c *gin.Context) { getAutoGroupSummary(c, d) })
 	gp.GET("/capabilities/:channel_id", func(c *gin.Context) { getAutoGroupCapabilities(c, d) })
+	gp.POST("/reorder", func(c *gin.Context) { reorderAutoGroupPolicies(c, d) })
 	gp.GET("/:id", func(c *gin.Context) { getAutoGroupPolicy(c, d) })
 	gp.PUT("/:id", func(c *gin.Context) { updateAutoGroupPolicy(c, d) })
 	gp.DELETE("/:id", func(c *gin.Context) { deleteAutoGroupPolicy(c, d) })
@@ -68,6 +69,26 @@ func createAutoGroupPolicy(c *gin.Context, d *Deps) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": view})
+}
+
+func reorderAutoGroupPolicies(c *gin.Context, d *Deps) {
+	svc, ok := requireAutoGroupService(c, d)
+	if !ok {
+		return
+	}
+	var in struct {
+		IDs []uint `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	list, err := svc.ReorderPolicies(in.IDs)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 
 func getAutoGroupSummary(c *gin.Context, d *Deps) {
