@@ -339,6 +339,7 @@ type ShopTarget struct {
 	LastGoodsCount      int           `gorm:"default:0" json:"last_goods_count"`
 	LastLowStockGoods   int           `gorm:"default:0" json:"last_low_stock_goods"`
 	LastChangedCount    int           `gorm:"default:0" json:"last_changed_count"`
+	WatchRuleCount      int           `gorm:"-" json:"watch_rule_count"`
 	CreatedAt           time.Time     `json:"created_at"`
 	UpdatedAt           time.Time     `json:"updated_at"`
 }

@@ -148,6 +148,28 @@ func (r *ShopWatchRules) ListEnabledByTarget(targetID uint) ([]ShopWatchRule, er
 	return list, nil
 }
 
+func (r *ShopWatchRules) CountByTargets(targetIDs []uint) (map[uint]int, error) {
+	out := make(map[uint]int, len(targetIDs))
+	if len(targetIDs) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		TargetID uint `gorm:"column:target_id"`
+		Count    int  `gorm:"column:count"`
+	}
+	if err := r.db.Model(&ShopWatchRule{}).
+		Select("target_id, COUNT(*) AS count").
+		Where("target_id IN ?", targetIDs).
+		Group("target_id").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		out[row.TargetID] = row.Count
+	}
+	return out, nil
+}
+
 func (r *ShopWatchRules) FindByID(targetID, ruleID uint) (*ShopWatchRule, error) {
 	var rule ShopWatchRule
 	if err := r.db.Where("target_id = ? AND id = ?", targetID, ruleID).First(&rule).Error; err != nil {

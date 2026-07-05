@@ -403,7 +403,7 @@ export default function ShopsPage() {
       method: "PUT",
       body: JSON.stringify(shopTargetUpdateBody(target, { notify_enabled: enabled })),
     })
-    targets.setData((targets.data ?? []).map((item) => (item.id === next.id ? next : item)))
+    targets.setData((targets.data ?? []).map((item) => (item.id === next.id ? { ...next, watch_rule_count: item.watch_rule_count } : item)))
     toast.success(enabled ? "店铺通知已开启" : "店铺通知已关闭")
     refresh()
   }
@@ -417,6 +417,11 @@ export default function ShopsPage() {
   function watchGoods(row: ShopGoodsSnapshot) {
     setWatchSeed({ ...row, nonce: Date.now() })
     setWatchRulesOpen(true)
+  }
+
+  function handleWatchRulesChanged() {
+    watchRules.refetch()
+    targets.refetch()
   }
 
   async function testTarget(target: ShopTarget) {
@@ -628,7 +633,7 @@ export default function ShopsPage() {
               onTest={() => testTarget(target)}
               onSync={() => syncTarget(target)}
               onWatchRules={() => openWatchRules(target)}
-              watchRuleCount={target.id === selectedID ? selectedWatchRules.length : undefined}
+              watchRuleCount={target.watch_rule_count}
               onDelete={() => deleteTarget(target)}
             />
           ))}
@@ -772,7 +777,7 @@ export default function ShopsPage() {
         rules={selectedWatchRules}
         loading={watchRules.loading}
         seed={watchSeed}
-        onRulesChanged={watchRules.refetch}
+        onRulesChanged={handleWatchRulesChanged}
         onToggleNotify={async (enabled) => {
           if (!selected) return
           await updateShopNotify(selected, enabled)
@@ -833,7 +838,7 @@ function ShopCard(props: {
           <Bell className="size-3.5" />
           {target.notify_enabled ? "通知开启" : "通知关闭"}
         </span>
-        <span>{props.watchRuleCount == null ? "关注规则 -" : `关注规则 ${props.watchRuleCount}`}</span>
+        <span>{`关注规则 ${props.watchRuleCount ?? 0}`}</span>
       </div>
       {target.last_error ? <p className="mt-2 line-clamp-2 text-xs text-danger">{target.last_error}</p> : null}
       <div className="mt-3 flex items-center justify-between gap-2">

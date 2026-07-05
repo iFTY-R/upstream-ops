@@ -85,6 +85,9 @@ func listShopTargets(c *gin.Context, d *Deps) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
+	if !attachShopWatchRuleCounts(c, d, list) {
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 
@@ -136,7 +139,29 @@ func reorderShopTargets(c *gin.Context, d *Deps) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
+	if !attachShopWatchRuleCounts(c, d, list) {
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"data": list})
+}
+
+func attachShopWatchRuleCounts(c *gin.Context, d *Deps, list []storage.ShopTarget) bool {
+	if d.ShopWatchRules == nil {
+		return true
+	}
+	ids := make([]uint, 0, len(list))
+	for _, target := range list {
+		ids = append(ids, target.ID)
+	}
+	counts, err := d.ShopWatchRules.CountByTargets(ids)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return false
+	}
+	for i := range list {
+		list[i].WatchRuleCount = counts[list[i].ID]
+	}
+	return true
 }
 
 func getShopTarget(c *gin.Context, d *Deps) {

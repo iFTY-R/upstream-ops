@@ -133,6 +133,7 @@ export interface ShopTarget {
   last_goods_count: number
   last_low_stock_goods: number
   last_changed_count: number
+  watch_rule_count: number
   created_at: string
   updated_at: string
 }
