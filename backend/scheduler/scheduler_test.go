@@ -58,6 +58,7 @@ func TestRunRetentionDeletesAnnouncements(t *testing.T) {
 		},
 		&monitor.Service{},
 		nil,
+		nil,
 		monLogs,
 		rates,
 		notifies,

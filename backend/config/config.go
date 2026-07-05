@@ -87,7 +87,15 @@ type SchedulerConfig struct {
 	RateCron    string          `mapstructure:"rateCron" yaml:"rateCron" json:"rateCron"`
 	ShopCron    string          `mapstructure:"shopCron" yaml:"shopCron" json:"shopCron"`
 	Concurrency int             `mapstructure:"concurrency" yaml:"concurrency" json:"concurrency"`
+	AutoGroup   AutoGroupConfig `mapstructure:"autoGroup" yaml:"autoGroup" json:"autoGroup"`
 	Retention   RetentionConfig `mapstructure:"retention" yaml:"retention" json:"retention"`
+}
+
+type AutoGroupConfig struct {
+	Enabled          bool   `mapstructure:"enabled" yaml:"enabled" json:"enabled"`
+	Cron             string `mapstructure:"cron" yaml:"cron" json:"cron"`
+	Concurrency      int    `mapstructure:"concurrency" yaml:"concurrency" json:"concurrency"`
+	ProbeConcurrency int    `mapstructure:"probeConcurrency" yaml:"probeConcurrency" json:"probeConcurrency"`
 }
 
 // RetentionConfig 历史数据保留策略。
@@ -310,6 +318,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("scheduler.rateCron", "13 */30 * * * *")
 	v.SetDefault("scheduler.shopCron", "41 */10 * * * *")
 	v.SetDefault("scheduler.concurrency", 4)
+	v.SetDefault("scheduler.autoGroup.enabled", false)
+	v.SetDefault("scheduler.autoGroup.cron", "29 */5 * * * *")
+	v.SetDefault("scheduler.autoGroup.concurrency", 2)
+	v.SetDefault("scheduler.autoGroup.probeConcurrency", 1)
 
 	// 历史清理：每天凌晨 3:17 跑一次（6 字段 cron 含秒），
 	// monitor 30 天 / balance 90 天 / notify 90 天。rate_change_logs 不清理（业务核心数据）。

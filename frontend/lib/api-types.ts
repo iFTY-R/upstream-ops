@@ -49,6 +49,15 @@ export type NotificationEvent =
   | "shop_stock_low"
   | "shop_goods_restocked"
   | "shop_monitor_failed"
+  | "auto_group_switched"
+  | "auto_group_unavailable"
+  | "auto_group_failed"
+  | "auto_group_circuit_opened"
+  | "auto_group_all_unavailable"
+  | "auto_group_recovered"
+  | "auto_group_target_update_failed"
+  | "auto_group_probe_failed"
+  | "auto_group_policy_error"
 
 export type ShopGoodsChangeEvent =
   | "goods_added"
@@ -447,11 +456,19 @@ export interface SystemSchedulerRetentionConfig {
   announcementsDays: number
 }
 
+export interface SystemSchedulerAutoGroupConfig {
+  enabled: boolean
+  cron: string
+  concurrency: number
+  probeConcurrency: number
+}
+
 export interface SystemSchedulerConfig {
   balanceCron: string
   rateCron: string
   shopCron: string
   concurrency: number
+  autoGroup: SystemSchedulerAutoGroupConfig
   retention: SystemSchedulerRetentionConfig
 }
 
@@ -684,3 +701,208 @@ export interface ChannelAPIKeyGroup {
 export interface ChannelAPIKeyReveal {
   key: string
 }
+
+export interface AutoGroupPolicy {
+  id: number
+  channel_id: number
+  name: string
+  enabled: boolean
+  notify_enabled: boolean
+  target_key_id: number
+  target_key_name: string
+  probe_key_id: number
+  probe_key_name: string
+  probe_model: string
+  probe_timeout_seconds: number
+  include_groups_json: string
+  exclude_groups_json: string
+  include_keywords_json: string
+  exclude_keywords_json: string
+  min_ratio: number
+  max_ratio: number
+  failure_threshold: number
+  circuit_duration_minutes: number
+  half_open_success_threshold: number
+  min_ratio_improvement_pct: number
+  switch_cooldown_minutes: number
+  force_switch_on_current_unhealthy: boolean
+  keep_current_when_no_available: boolean
+  current_group_name?: string
+  current_group_id?: number | null
+  current_ratio: number
+  last_status: AutoGroupStatus
+  last_error?: string
+  last_evaluate_at?: string | null
+  last_switch_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type AutoGroupStatus =
+  | "idle"
+  | "ok"
+  | "switched"
+  | "unavailable"
+  | "failed"
+  | "disabled"
+  | "kept"
+  | "cooldown"
+  | "probe_failed"
+
+export type AutoGroupCandidateStatus =
+  | "healthy"
+  | "excluded"
+  | "circuit_open"
+  | "half_open"
+  | "failed"
+  | "unknown"
+
+export interface AutoGroupCandidate {
+  id: number
+  policy_id: number
+  group_name: string
+  group_id?: number | null
+  description?: string
+  ratio: number
+  status: AutoGroupCandidateStatus | string
+  reason?: string
+  failure_count: number
+  success_count: number
+  circuit_open_until?: string | null
+  circuit_opened_at?: string | null
+  recovered_at?: string | null
+  last_probe_at?: string | null
+  last_probe_success?: boolean | null
+  last_probe_latency_ms: number
+  last_error_code?: string
+  last_checked_at?: string | null
+  last_error?: string
+  manual_disabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface AutoGroupCandidateDecision {
+  group_name: string
+  group_id?: number | null
+  description?: string
+  ratio: number
+  status: AutoGroupCandidateStatus | string
+  reason?: string
+  failure_count: number
+  success_count: number
+  circuit_open_until?: string | null
+  circuit_opened_at?: string | null
+  recovered_at?: string | null
+  last_probe_at?: string | null
+  last_probe_success?: boolean | null
+  last_probe_latency_ms: number
+  last_error_code?: string
+  last_error?: string
+  manual_disabled: boolean
+}
+
+export interface AutoGroupPolicyView extends AutoGroupPolicy {
+  channel?: Channel
+  candidates?: AutoGroupCandidate[]
+  latest_log?: AutoGroupEvaluationLog | null
+}
+
+export interface AutoGroupSummary {
+  total_policies: number
+  running_policies: number
+  abnormal_policies: number
+  circuit_groups: number
+  today_switches: number
+  no_available_policies: number
+  manual_disabled_groups: number
+}
+
+export interface AutoGroupCapabilityItem {
+  key: string
+  label: string
+  supported: boolean
+  message?: string
+}
+
+export interface AutoGroupCapabilityMatrix {
+  channel_id: number
+  channel_type: ChannelType | string
+  level: "full" | "suggest" | "observe" | "error" | string
+  message?: string
+  capabilities: AutoGroupCapabilityItem[]
+}
+
+export interface AutoGroupPolicyInput {
+  channel_id: number
+  name: string
+  enabled: boolean
+  notify_enabled: boolean
+  target_key_id: number
+  target_key_name: string
+  probe_key_id: number
+  probe_key_name: string
+  probe_model: string
+  probe_timeout_seconds: number
+  include_groups: string[]
+  exclude_groups: string[]
+  include_keywords: string[]
+  exclude_keywords: string[]
+  min_ratio: number
+  max_ratio: number
+  failure_threshold: number
+  circuit_duration_minutes: number
+  half_open_success_threshold: number
+  min_ratio_improvement_pct: number
+  switch_cooldown_minutes: number
+  force_switch_on_current_unhealthy: boolean
+  keep_current_when_no_available: boolean
+}
+
+export interface AutoGroupEvaluationLog {
+  id: number
+  policy_id: number
+  channel_id: number
+  success: boolean
+  status: string
+  target_key_id: number
+  target_key_name?: string
+  current_group?: string
+  selected_group?: string
+  selected_ratio: number
+  candidate_count: number
+  available_count: number
+  circuit_open_count: number
+  action?: string
+  message?: string
+  created_at: string
+}
+
+export interface AutoGroupSwitchLog {
+  id: number
+  policy_id: number
+  channel_id: number
+  target_key_id: number
+  target_key_name?: string
+  from_group?: string
+  to_group?: string
+  to_group_id?: number | null
+  to_ratio: number
+  success: boolean
+  reason?: string
+  error_message?: string
+  created_at: string
+}
+
+export interface AutoGroupEvaluationResult {
+  policy: AutoGroupPolicy
+  channel: Channel
+  target_key?: ChannelAPIKey
+  selected?: AutoGroupCandidateDecision
+  candidates: AutoGroupCandidateDecision[]
+  evaluation_log: AutoGroupEvaluationLog
+  switch_log?: AutoGroupSwitchLog
+}
+
+export type AutoGroupEvaluationLogPage = PageResult<AutoGroupEvaluationLog>
+export type AutoGroupSwitchLogPage = PageResult<AutoGroupSwitchLog>

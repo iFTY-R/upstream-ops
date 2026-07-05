@@ -107,6 +107,48 @@ func TestChannelProxyEnabledPersists(t *testing.T) {
 	}
 }
 
+func TestAutoGroupPolicyAllowsMultipleTargetsPerChannel(t *testing.T) {
+	db := openTestDB(t)
+	channels := NewChannels(db)
+	ch := &Channel{
+		Name:           "multi-target",
+		Type:           ChannelTypeSub2API,
+		SiteURL:        "https://example.com",
+		Username:       "u",
+		PasswordCipher: "x",
+		MonitorEnabled: true,
+	}
+	if err := channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	repo := NewAutoGroups(db)
+	if err := repo.CreatePolicy(&AutoGroupPolicy{ChannelID: ch.ID, Name: "auto", TargetKeyName: "auto", ProbeKeyName: "probe-a"}); err != nil {
+		t.Fatalf("create auto policy: %v", err)
+	}
+	if err := repo.CreatePolicy(&AutoGroupPolicy{ChannelID: ch.ID, Name: "team", TargetKeyName: "team-a", ProbeKeyName: "probe-b"}); err != nil {
+		t.Fatalf("create second target policy: %v", err)
+	}
+	if err := repo.CreatePolicy(&AutoGroupPolicy{ChannelID: ch.ID, Name: "dup", TargetKeyName: "auto", ProbeKeyName: "probe-c"}); err == nil {
+		t.Fatalf("duplicate target policy should fail")
+	}
+
+	list, err := repo.ListPoliciesByChannel(ch.ID)
+	if err != nil {
+		t.Fatalf("list policies by channel: %v", err)
+	}
+	if len(list) != 2 || list[0].TargetKeyName != "auto" || list[1].TargetKeyName != "team-a" {
+		t.Fatalf("unexpected policy list: %#v", list)
+	}
+	defaultPolicy, err := repo.FindPolicyByChannel(ch.ID)
+	if err != nil {
+		t.Fatalf("find default policy: %v", err)
+	}
+	if defaultPolicy.TargetKeyName != "auto" {
+		t.Fatalf("default policy = %q, want auto", defaultPolicy.TargetKeyName)
+	}
+}
+
 func TestProxyEnabledPersistsForCaptchaAndNotification(t *testing.T) {
 	db := openTestDB(t)
 

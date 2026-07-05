@@ -1209,6 +1209,9 @@ func buildSub2CreateAPIKey(req connector.APIKeyCreateRequest) map[string]any {
 	if req.Quota != nil {
 		body["quota"] = *req.Quota
 	}
+	if req.UnlimitedQuota != nil {
+		body["unlimited_quota"] = *req.UnlimitedQuota
+	}
 	if req.ExpiresInDays != nil {
 		body["expires_in_days"] = *req.ExpiresInDays
 	}
@@ -1244,6 +1247,9 @@ func buildSub2UpdateAPIKey(req connector.APIKeyUpdateRequest) (map[string]any, e
 	}
 	if req.Quota != nil {
 		body["quota"] = *req.Quota
+	}
+	if req.UnlimitedQuota != nil {
+		body["unlimited_quota"] = *req.UnlimitedQuota
 	}
 	if req.ExpiresAt != nil {
 		body["expires_at"] = strings.TrimSpace(*req.ExpiresAt)

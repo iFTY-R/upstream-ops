@@ -5,6 +5,9 @@ import { apiFetch } from "@/lib/api"
 import { useRefreshTick } from "@/lib/refresh-context"
 import type {
   AppVersion,
+  AutoGroupCapabilityMatrix,
+  AutoGroupPolicyView,
+  AutoGroupSummary,
   BalanceTrendPoint,
   CaptchaConfig,
   Channel,
@@ -162,6 +165,27 @@ export function useChannels() {
 
 export function useChannelsPage(page = 1, pageSize = 9) {
   return useApi<ChannelPage>(`/channels?page=${page}&page_size=${pageSize}`)
+}
+
+export function useAutoGroupPolicies() {
+  return useApi<AutoGroupPolicyView[]>("/auto-groups")
+}
+
+export function useAutoGroupSummary() {
+  return useApi<AutoGroupSummary>("/auto-groups/summary")
+}
+
+export function useAutoGroupCapabilities(channelID: number | null) {
+  return useApi<AutoGroupCapabilityMatrix>(
+    channelID == null ? null : `/channels/${channelID}/auto-group-capabilities`,
+    false,
+  )
+}
+
+export function useChannelAutoGroupPolicy(channelID: number | null) {
+  return useApi<AutoGroupPolicyView | null>(
+    channelID == null ? null : `/channels/${channelID}/auto-group-policy`,
+  )
 }
 
 export function useChannelRates(channelID: number | null) {

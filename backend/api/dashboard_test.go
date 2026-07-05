@@ -645,6 +645,55 @@ func TestSyncAllChannelsEmitsChannelMetadata(t *testing.T) {
 	}
 }
 
+func TestSyncAllChannelsRefreshesRates(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db := openTestDB(t)
+	channels := storage.NewChannels(db)
+	rates := storage.NewRates(db)
+	notifies := storage.NewNotifications(db)
+
+	if err := channels.Create(&storage.Channel{
+		Name:           "a",
+		Type:           storage.ChannelTypeNewAPI,
+		SiteURL:        "https://a.example.com",
+		Username:       "u1",
+		PasswordCipher: "x",
+		MonitorEnabled: true,
+	}); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	if err := channels.Create(&storage.Channel{
+		Name:           "b",
+		Type:           storage.ChannelTypeNewAPI,
+		SiteURL:        "https://b.example.com",
+		Username:       "u2",
+		PasswordCipher: "x",
+		MonitorEnabled: true,
+	}); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	monitor := &stubMonitor{}
+	r := gin.New()
+	registerChannels(r.Group("/api"), &Deps{
+		Channels: channels,
+		Rates:    rates,
+		Notifies: notifies,
+		Monitor:  monitor,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/channels/sync-all", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if monitor.rateCalls != 2 {
+		t.Fatalf("rate refresh calls = %d, want 2", monitor.rateCalls)
+	}
+}
+
 func TestSyncChannelChecksSubscriptionAlerts(t *testing.T) {
 	syncSubscriptionAlertTest(t, "/api/channels/1/sync")
 }
@@ -753,18 +802,25 @@ func syncSubscriptionAlertTest(t *testing.T, path string) {
 	}
 }
 
-type stubMonitor struct{}
+type stubMonitor struct {
+	balanceCalls      int
+	rateCalls         int
+	subscriptionCalls int
+}
 
 func (s *stubMonitor) RefreshBalance(ctx context.Context, c *storage.Channel) error {
+	s.balanceCalls++
 	progress.OK(ctx, progress.StageBalance, "ok")
 	return nil
 }
 
 func (s *stubMonitor) RefreshRates(ctx context.Context, c *storage.Channel) error {
+	s.rateCalls++
 	return nil
 }
 
 func (s *stubMonitor) CheckSubscriptionUsageAlerts(ctx context.Context, c *storage.Channel) error {
+	s.subscriptionCalls++
 	return nil
 }
 

@@ -13,6 +13,7 @@ import { Toaster } from '@/components/ui/sonner'
 import DashboardPage from '@/app/page'
 import CaptchaPage from '@/app/captcha-page'
 import NotificationsPage from '@/app/notifications-page'
+import AutoGroupsPage from '@/app/auto-groups-page'
 import ShopsPage from '@/app/shops-page'
 import SettingsPage from '@/app/settings-page'
 import '@/app/globals.css'
@@ -30,6 +31,7 @@ createRoot(document.getElementById('root')!).render(
                     <Route index element={<DashboardPage />} />
                     <Route path="captcha" element={<CaptchaPage />} />
                     <Route path="notifications" element={<NotificationsPage />} />
+                    <Route path="auto-groups" element={<AutoGroupsPage />} />
                     <Route path="shops" element={<ShopsPage />} />
                     <Route path="settings" element={<SettingsPage />} />
                   </Route>

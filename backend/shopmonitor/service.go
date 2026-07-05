@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ifty-r/upstream-ops/backend/config"
@@ -22,6 +23,7 @@ type Service struct {
 	goods      *storage.ShopGoods
 	dispatcher *notify.Dispatcher
 	log        *slog.Logger
+	mu         sync.RWMutex
 	proxy      config.ProxyConfig
 	upstream   config.UpstreamConfig
 }
@@ -47,10 +49,14 @@ func NewService(
 }
 
 func (s *Service) UpdateProxyConfig(cfg config.ProxyConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.proxy = cfg
 }
 
 func (s *Service) UpdateUpstreamConfig(cfg config.UpstreamConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.upstream = cfg.WithDefaults()
 }
 
@@ -261,14 +267,19 @@ func (s *Service) providerFor(target *storage.ShopTarget) (shopprovider.Provider
 	if err != nil {
 		return nil, shopprovider.Target{}, err
 	}
+	s.mu.RLock()
+	upstream := s.upstream
+	proxy := s.proxy
+	s.mu.RUnlock()
 	if setter, ok := provider.(shopprovider.HTTPConfigSetter); ok {
+		upstream = upstream.WithDefaults()
 		setter.SetHTTPConfig(shopprovider.HTTPConfig{
-			Timeout:   time.Duration(s.upstream.TimeoutSeconds) * time.Second,
-			UserAgent: s.upstream.UserAgent,
+			Timeout:   time.Duration(upstream.TimeoutSeconds) * time.Second,
+			UserAgent: upstream.UserAgent,
 		})
 	}
 	if target.ProxyEnabled {
-		proxyURL, err := s.proxy.ActiveURL()
+		proxyURL, err := proxy.ActiveURL()
 		if err != nil {
 			return nil, shopprovider.Target{}, err
 		}

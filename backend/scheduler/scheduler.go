@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ifty-r/upstream-ops/backend/autogroup"
 	"github.com/ifty-r/upstream-ops/backend/captcha"
 	"github.com/ifty-r/upstream-ops/backend/config"
 	"github.com/ifty-r/upstream-ops/backend/crypto"
@@ -21,6 +22,7 @@ type Scheduler struct {
 	cron          *cron.Cron
 	monitor       *monitor.Service
 	shopMonitor   *shopmonitor.Service
+	autoGroup     *autogroup.Service
 	monLogs       *storage.MonitorLogs
 	rates         *storage.Rates
 	notifies      *storage.Notifications
@@ -34,6 +36,7 @@ func New(
 	cfg config.SchedulerConfig,
 	m *monitor.Service,
 	shop *shopmonitor.Service,
+	autoGroup *autogroup.Service,
 	monLogs *storage.MonitorLogs,
 	rates *storage.Rates,
 	notifies *storage.Notifications,
@@ -49,6 +52,7 @@ func New(
 		cron:          cron.New(cron.WithSeconds()),
 		monitor:       m,
 		shopMonitor:   shop,
+		autoGroup:     autoGroup,
 		monLogs:       monLogs,
 		rates:         rates,
 		notifies:      notifies,
@@ -70,6 +74,11 @@ func (s *Scheduler) Start() error {
 			return err
 		}
 	}
+	if s.cfg.AutoGroup.Enabled && s.cfg.AutoGroup.Cron != "" && s.autoGroup != nil {
+		if _, err := s.cron.AddFunc(s.cfg.AutoGroup.Cron, s.runAutoGroups); err != nil {
+			return err
+		}
+	}
 	if s.cfg.ShopCron != "" && s.shopMonitor != nil {
 		if _, err := s.cron.AddFunc(s.cfg.ShopCron, s.runShops); err != nil {
 			return err
@@ -85,6 +94,9 @@ func (s *Scheduler) Start() error {
 		"balanceCron", s.cfg.BalanceCron,
 		"rateCron", s.cfg.RateCron,
 		"shopCron", s.cfg.ShopCron,
+		"autoGroupEnabled", s.cfg.AutoGroup.Enabled,
+		"autoGroupCron", s.cfg.AutoGroup.Cron,
+		"autoGroupConcurrency", s.cfg.AutoGroup.Concurrency,
 		"retentionCron", s.cfg.Retention.Cron,
 		"concurrency", s.cfg.Concurrency,
 	)
@@ -112,6 +124,22 @@ func (s *Scheduler) runRates() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	s.monitor.ScanAllRates(ctx)
+	if s.autoGroup != nil && !s.cfg.AutoGroup.Enabled {
+		s.autoGroup.EvaluateAllEnabled(ctx)
+	}
+}
+
+func (s *Scheduler) runAutoGroups() {
+	if s.autoGroup == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	concurrency := s.cfg.AutoGroup.Concurrency
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	s.autoGroup.EvaluateAllEnabledWithConcurrency(ctx, concurrency)
 }
 
 func (s *Scheduler) runShops() {

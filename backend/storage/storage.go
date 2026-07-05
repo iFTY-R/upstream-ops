@@ -118,6 +118,9 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := dropDeletedAtColumns(db); err != nil {
 		return err
 	}
+	if err := migrateAutoGroupPolicyIndexes(db); err != nil {
+		return err
+	}
 	return db.AutoMigrate(
 		&Channel{},
 		&AuthSession{},
@@ -136,7 +139,29 @@ func AutoMigrate(db *gorm.DB) error {
 		&ShopGoodsSnapshot{},
 		&ShopGoodsChangeLog{},
 		&ShopMonitorLog{},
+		&AutoGroupPolicy{},
+		&AutoGroupCandidate{},
+		&AutoGroupEvaluationLog{},
+		&AutoGroupSwitchLog{},
 	)
+}
+
+func migrateAutoGroupPolicyIndexes(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&AutoGroupPolicy{}) {
+		return nil
+	}
+	for _, name := range []string{
+		"idx_auto_group_policies_channel_id",
+		"uni_auto_group_policies_channel_id",
+		"channel_id",
+	} {
+		if db.Migrator().HasIndex(&AutoGroupPolicy{}, name) {
+			if err := db.Migrator().DropIndex(&AutoGroupPolicy{}, name); err != nil {
+				return fmt.Errorf("drop auto_group_policies %s: %w", name, err)
+			}
+		}
+	}
+	return nil
 }
 
 func dropDeletedAtColumns(db *gorm.DB) error {

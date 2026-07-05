@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ArrowUpRight,
   Bell,
+  CheckCircle2,
   Clock3,
   RefreshCw,
   KeyRound,
@@ -72,6 +73,15 @@ const eventMeta: Record<NotificationEvent, { icon: LucideIcon; cls: string }> = 
   shop_stock_low: { icon: AlertTriangle, cls: "text-warning" },
   shop_goods_restocked: { icon: RefreshCw, cls: "text-success" },
   shop_monitor_failed: { icon: ShieldX, cls: "text-danger" },
+  auto_group_switched: { icon: ArrowUpRight, cls: "text-brand" },
+  auto_group_unavailable: { icon: AlertTriangle, cls: "text-warning" },
+  auto_group_failed: { icon: ShieldX, cls: "text-danger" },
+  auto_group_circuit_opened: { icon: ShieldX, cls: "text-warning" },
+  auto_group_all_unavailable: { icon: AlertTriangle, cls: "text-danger" },
+  auto_group_recovered: { icon: CheckCircle2, cls: "text-success" },
+  auto_group_target_update_failed: { icon: ShieldX, cls: "text-danger" },
+  auto_group_probe_failed: { icon: TestTube2, cls: "text-warning" },
+  auto_group_policy_error: { icon: ShieldX, cls: "text-danger" },
 }
 
 const FEED_PREVIEW_SIZE = 10

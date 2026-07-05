@@ -435,6 +435,15 @@ func TestSearchAPIKeys(t *testing.T) {
 
 func TestCreateUpdateDeleteRevealAPIKey(t *testing.T) {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/user/self/groups", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"default":{"ratio":1,"desc":"默认"}}}`))
+	})
+	mux.HandleFunc("/api/token/search", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("keyword"); got != "main" {
+			t.Fatalf("search keyword = %q, want main", got)
+		}
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"items":[{"id":9,"status":1,"name":"main","group":"default"}],"total":1,"page":1,"page_size":100,"pages":1}}`))
+	})
 	mux.HandleFunc("/api/token/", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
@@ -476,12 +485,15 @@ func TestCreateUpdateDeleteRevealAPIKey(t *testing.T) {
 
 	c := New()
 	session := &connector.AuthSession{Cookie: "session=1", UserID: "7"}
-	_, err := c.CreateAPIKey(context.Background(), &connector.Channel{SiteURL: srv.URL}, session, connector.APIKeyCreateRequest{
+	created, err := c.CreateAPIKey(context.Background(), &connector.Channel{SiteURL: srv.URL}, session, connector.APIKeyCreateRequest{
 		Name:      "main",
 		CustomKey: "sk-custom",
 	})
 	if err != nil {
 		t.Fatalf("CreateAPIKey: %v", err)
+	}
+	if created.ID != 9 || created.GroupName != "default" {
+		t.Fatalf("created = %#v, want id 9 with group metadata", created)
 	}
 	updated, err := c.UpdateAPIKey(context.Background(), &connector.Channel{SiteURL: srv.URL}, session, 9, connector.APIKeyUpdateRequest{
 		Status: strPtr("disabled"),

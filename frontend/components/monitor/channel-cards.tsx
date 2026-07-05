@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import {
   ArrowUpDown,
@@ -24,6 +25,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   XCircle,
+  SlidersHorizontal,
 } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -51,7 +53,7 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useConfirm } from "@/components/ui/confirm-dialog"
-import { useChannels, useChannelsPage, useChannelRates } from "@/lib/queries"
+import { useAutoGroupPolicies, useChannels, useChannelsPage, useChannelRates } from "@/lib/queries"
 import { apiFetch } from "@/lib/api"
 import { useTriggerRefresh } from "@/lib/refresh-context"
 import { channelTypeLabel, decimal, formatRatio, money, relativeTime } from "@/lib/format"
@@ -117,6 +119,27 @@ function ratioTone(r: number): string {
   if (r > 2) return "bg-danger/10 text-danger ring-danger/20"
   if (r > 1.2) return "bg-warning/10 text-warning ring-warning/20"
   return "bg-muted text-foreground ring-border"
+}
+
+function autoGroupStatusLabel(status?: string): string {
+  switch (status) {
+    case "ok":
+      return "已是最优"
+    case "switched":
+      return "已切换"
+    case "unavailable":
+      return "无可用组"
+    case "failed":
+      return "失败"
+    case "kept":
+      return "保持当前"
+    case "cooldown":
+      return "冷却中"
+    case "probe_failed":
+      return "探测失败"
+    default:
+      return "未评估"
+  }
 }
 
 /** InlineRates 在渠道卡片内部展示当前所有分组倍率，默认 2 行折叠 + 展开按钮。 */
@@ -517,7 +540,9 @@ function SyncProgressStrip({ state }: { state: ChannelSyncState }) {
 }
 
 export function ChannelCards() {
+  const navigate = useNavigate()
   const { data: channels, loading: channelsLoading } = useChannels()
+  const autoGroups = useAutoGroupPolicies()
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState<ChannelPageSize>(9)
   const pageQuery = useChannelsPage(page, pageSize === "all" ? -1 : pageSize)
@@ -544,6 +569,22 @@ export function ChannelCards() {
   const rangeStart = totalChannels === 0 ? 0 : (currentPage - 1) * effectivePageSize + 1
   const rangeEnd = Math.min((currentPage - 1) * effectivePageSize + visibleChannels.length, totalChannels)
   const pagerNumbers = pageNumbers(currentPage, totalPages)
+  const autoGroupsByChannel = useMemo(() => {
+    const map = new Map<number, NonNullable<typeof autoGroups.data>>()
+    for (const policy of autoGroups.data ?? []) {
+      const list = map.get(policy.channel_id) ?? []
+      list.push(policy)
+      map.set(policy.channel_id, list)
+    }
+    for (const list of map.values()) {
+      list.sort((a, b) => {
+        if (a.target_key_name === "auto") return -1
+        if (b.target_key_name === "auto") return 1
+        return a.target_key_name.localeCompare(b.target_key_name, "zh-CN")
+      })
+    }
+    return map
+  }, [autoGroups.data])
 
   // 成功后自动消失需要的两段定时器：先 5s 显示，再 500ms 过渡（与 strip 的 transition-opacity duration-500 对齐）。
   const hideTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
@@ -800,6 +841,22 @@ export function ChannelCards() {
             {visibleChannels.map((c) => {
               const status = statusOf(c)
               const meta = statusMap[status]
+              const channelAutoGroups = autoGroupsByChannel.get(c.id) ?? []
+              const primaryAutoGroup = channelAutoGroups[0]
+              const autoHealthy = channelAutoGroups.reduce(
+                (sum, policy) => sum + (policy.candidates ?? []).filter((item) => item.status === "healthy").length,
+                0,
+              )
+              const autoCircuit = channelAutoGroups.reduce(
+                (sum, policy) => sum + (policy.candidates ?? []).filter((item) => item.status === "circuit_open").length,
+                0,
+              )
+              const autoRunning = channelAutoGroups.filter((policy) => policy.enabled).length
+              const autoAbnormal = channelAutoGroups.filter((policy) =>
+                ["unavailable", "failed", "probe_failed"].includes(policy.last_status),
+              ).length
+              const autoTargets = channelAutoGroups.map((policy) => policy.target_key_name || "auto")
+              const autoTargetPreview = autoTargets.slice(0, 3).join("、") + (autoTargets.length > 3 ? ` 等 ${autoTargets.length} 个` : "")
               return (
                 <Card key={c.id} className="flex flex-col gap-0 border border-border p-3 shadow-none sm:p-4">
                   <div className="flex items-start justify-between gap-3">
@@ -895,6 +952,36 @@ export function ChannelCards() {
 
                   <InlineRates channelID={c.id} />
 
+                  {channelAutoGroups.length > 0 ? (
+                    <div className="mt-3 rounded-md border border-border bg-muted/15 px-2.5 py-2 text-[11px]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-foreground">
+                          {`智能分组 · ${channelAutoGroups.length} 条`}
+                        </span>
+                        <span className={cn("rounded px-1.5 py-0.5 ring-1 ring-inset", autoRunning > 0 ? "bg-brand/10 text-brand ring-brand/20" : "bg-muted text-muted-foreground ring-border")}>
+                          {autoAbnormal > 0
+                            ? `${autoAbnormal} 条异常`
+                            : channelAutoGroups.length === 1
+                              ? primaryAutoGroup?.enabled
+                                ? autoGroupStatusLabel(primaryAutoGroup.last_status)
+                                : "已停用"
+                              : autoRunning > 0
+                                ? `${autoRunning} 条运行`
+                                : "已停用"}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
+                        <span>
+                          {channelAutoGroups.length === 1
+                            ? `当前：${primaryAutoGroup?.current_group_name || "—"}`
+                            : `目标：${autoTargetPreview || "—"}`}
+                        </span>
+                        <span>{`可用/熔断：${autoHealthy}/${autoCircuit}`}</span>
+                        <span>{`评估：${relativeTime(primaryAutoGroup?.last_evaluate_at)}`}</span>
+                      </div>
+                    </div>
+                  ) : null}
+
                   <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                     <Button
                       variant="outline"
@@ -944,6 +1031,15 @@ export function ChannelCards() {
                     >
                       <KeyRound className="size-3" />
                       {"密钥"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1 text-xs"
+                      onClick={() => navigate(`/auto-groups?channel_id=${c.id}`)}
+                    >
+                      <SlidersHorizontal className="size-3" />
+                      {"智能分组"}
                     </Button>
                     <Button
                       variant="outline"

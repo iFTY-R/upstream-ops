@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/ifty-r/upstream-ops/backend/api"
 	"github.com/ifty-r/upstream-ops/backend/auth"
+	"github.com/ifty-r/upstream-ops/backend/autogroup"
 	"github.com/ifty-r/upstream-ops/backend/channel"
 	"github.com/ifty-r/upstream-ops/backend/config"
 	"github.com/ifty-r/upstream-ops/backend/crypto"
@@ -101,6 +102,7 @@ func main() {
 	shopTargets := storage.NewShopTargets(db)
 	shopWatchRules := storage.NewShopWatchRules(db)
 	shopGoods := storage.NewShopGoods(db)
+	autoGroups := storage.NewAutoGroups(db)
 	announcements := storage.NewUpstreamAnnouncements(db)
 	rates := storage.NewRates(db)
 	monLogs := storage.NewMonitorLogs(db)
@@ -123,10 +125,11 @@ func main() {
 	dispatcher.UpdateProxyConfig(cfg.Proxy)
 	monitorSvc := monitor.NewService(channels, announcements, rates, monLogs, channelSvc, dispatcher, log)
 	shopMonitorSvc := shopmonitor.NewService(shopTargets, shopWatchRules, shopGoods, dispatcher, log, cfg.Proxy, cfg.Upstream)
+	autoGroupSvc := autogroup.NewService(autoGroups, channels, rates, channelSvc, dispatcher, log)
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
 		shopMonitorSvc.UpdateProxyConfig(pcfg)
-		return scheduler.New(scfg, monitorSvc, shopMonitorSvc, monLogs, rates, notifies, announcements, captchas, cipher, pcfg, log)
+		return scheduler.New(scfg, monitorSvc, shopMonitorSvc, autoGroupSvc, monLogs, rates, notifies, announcements, captchas, cipher, pcfg, log)
 	}
 	sch := schedulerFactory(cfg.Scheduler, cfg.Proxy)
 	if err := sch.Start(); err != nil {
@@ -177,6 +180,7 @@ func main() {
 		ShopTargets:    shopTargets,
 		ShopWatchRules: shopWatchRules,
 		ShopGoods:      shopGoods,
+		AutoGroups:     autoGroups,
 		Announcements:  announcements,
 		Rates:          rates,
 		MonLogs:        monLogs,
@@ -184,6 +188,7 @@ func main() {
 		Monitor:        monitorSvc,
 		Dispatcher:     dispatcher,
 		ShopMonitor:    shopMonitorSvc,
+		AutoGroup:      autoGroupSvc,
 		Log:            log,
 		Frontend:       frontendFS,
 	})

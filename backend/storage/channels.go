@@ -23,6 +23,15 @@ func (r *Channels) Delete(id uint) error {
 		if err := tx.Where("channel_id = ?", id).Delete(&AuthSession{}).Error; err != nil {
 			return err
 		}
+		var autoGroupPolicyIDs []uint
+		if err := tx.Model(&AutoGroupPolicy{}).Where("channel_id = ?", id).Pluck("id", &autoGroupPolicyIDs).Error; err != nil {
+			return err
+		}
+		if len(autoGroupPolicyIDs) > 0 {
+			if err := tx.Where("policy_id IN ?", autoGroupPolicyIDs).Delete(&AutoGroupCandidate{}).Error; err != nil {
+				return err
+			}
+		}
 		for _, model := range []any{
 			&RateSnapshot{},
 			&RateChangeLog{},
@@ -31,6 +40,9 @@ func (r *Channels) Delete(id uint) error {
 			&MonitorLog{},
 			&NotificationCooldown{},
 			&UpstreamAnnouncement{},
+			&AutoGroupPolicy{},
+			&AutoGroupEvaluationLog{},
+			&AutoGroupSwitchLog{},
 		} {
 			if err := tx.Where("channel_id = ?", id).Delete(model).Error; err != nil {
 				return err

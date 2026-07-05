@@ -115,6 +115,21 @@ const notificationEventOptions: Array<{ id: string; label: string; events: Notif
     label: "分组变动",
     events: ["rate_structure_changed", "rate_added", "rate_removed"],
   },
+  {
+    id: "auto_group",
+    label: "智能分组",
+    events: [
+      "auto_group_switched",
+      "auto_group_unavailable",
+      "auto_group_failed",
+      "auto_group_circuit_opened",
+      "auto_group_all_unavailable",
+      "auto_group_recovered",
+      "auto_group_target_update_failed",
+      "auto_group_probe_failed",
+      "auto_group_policy_error",
+    ],
+  },
   { id: "announcement", label: "上游公告", events: ["announcement"] },
   { id: "login_failed", label: "登录失败", events: ["login_failed"] },
   { id: "captcha_failed", label: "验证码失败", events: ["captcha_failed"] },
@@ -153,6 +168,15 @@ const rateEventSet = new Set<NotificationEvent>([
   "rate_structure_changed",
   "rate_added",
   "rate_removed",
+  "auto_group_switched",
+  "auto_group_unavailable",
+  "auto_group_failed",
+  "auto_group_circuit_opened",
+  "auto_group_all_unavailable",
+  "auto_group_recovered",
+  "auto_group_target_update_failed",
+  "auto_group_probe_failed",
+  "auto_group_policy_error",
 ])
 
 function hasRateEvents(row: SubRow) {

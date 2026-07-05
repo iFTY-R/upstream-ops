@@ -612,21 +612,17 @@ func (c *Client) CreateAPIKey(ctx context.Context, ch *connector.Channel, sessio
 	if resp.IsError() {
 		return nil, fmt.Errorf("newapi create api key: %w", connector.HTTPStatusError(resp.StatusCode(), resp.Body()))
 	}
-	if err := decodeNewAPIWrite(resp.Body(), "newapi create api key"); err != nil {
+	data, err := decodeNewAPIWriteData(resp.Body(), "newapi create api key")
+	if err != nil {
 		return nil, err
 	}
-	return &connector.APIKey{
-		Name:               req.Name,
-		Status:             "active",
-		Group:              req.Group,
-		Quota:              float64(valueOr(req.RemainQuota, 0)),
-		UnlimitedQuota:     valueOr(req.UnlimitedQuota, false),
-		ExpiredTime:        valueOr(req.ExpiredTime, int64(-1)),
-		ModelLimitsEnabled: valueOr(req.ModelLimitsEnabled, false),
-		ModelLimits:        req.ModelLimits,
-		AllowIPs:           req.AllowIPs,
-		CrossGroupRetry:    valueOr(req.CrossGroupRetry, false),
-	}, nil
+	if key := newAPIKeyFromCreateData(data, req); key != nil && key.ID > 0 {
+		return key, nil
+	}
+	if key, err := c.findAPIKeyByName(ctx, ch, session, req.Name); err == nil && key != nil {
+		return key, nil
+	}
+	return newAPIKeyFromCreateRequest(req), nil
 }
 
 func (c *Client) UpdateAPIKey(ctx context.Context, ch *connector.Channel, session *connector.AuthSession, id int64, req connector.APIKeyUpdateRequest) (*connector.APIKey, error) {
@@ -710,6 +706,62 @@ func (c *Client) RevealAPIKey(ctx context.Context, ch *connector.Channel, sessio
 		return "", errors.New("newapi 未返回完整密钥")
 	}
 	return raw.Key, nil
+}
+
+func newAPIKeyFromCreateData(data json.RawMessage, req connector.APIKeyCreateRequest) *connector.APIKey {
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	var token newAPIToken
+	if err := json.Unmarshal(data, &token); err == nil && token.ID > 0 {
+		out := token.toConnector()
+		return &out
+	}
+	var wrapped struct {
+		Token newAPIToken `json:"token"`
+	}
+	if err := json.Unmarshal(data, &wrapped); err == nil && wrapped.Token.ID > 0 {
+		out := wrapped.Token.toConnector()
+		return &out
+	}
+	return newAPIKeyFromCreateRequest(req)
+}
+
+func newAPIKeyFromCreateRequest(req connector.APIKeyCreateRequest) *connector.APIKey {
+	return &connector.APIKey{
+		Name:               strings.TrimSpace(req.Name),
+		Status:             "active",
+		Group:              strings.TrimSpace(req.Group),
+		Quota:              float64(valueOr(req.RemainQuota, 0)),
+		UnlimitedQuota:     valueOr(req.UnlimitedQuota, false),
+		ExpiredTime:        valueOr(req.ExpiredTime, int64(-1)),
+		ModelLimitsEnabled: valueOr(req.ModelLimitsEnabled, false),
+		ModelLimits:        req.ModelLimits,
+		AllowIPs:           req.AllowIPs,
+		CrossGroupRetry:    valueOr(req.CrossGroupRetry, false),
+	}
+}
+
+func (c *Client) findAPIKeyByName(ctx context.Context, ch *connector.Channel, session *connector.AuthSession, name string) (*connector.APIKey, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, nil
+	}
+	page, err := c.ListAPIKeys(ctx, ch, session, connector.APIKeyQuery{Page: 1, PageSize: 100, Search: name})
+	if err != nil {
+		return nil, err
+	}
+	var contains *connector.APIKey
+	for i := range page.Items {
+		item := &page.Items[i]
+		if strings.EqualFold(strings.TrimSpace(item.Name), name) {
+			return item, nil
+		}
+		if contains == nil && strings.Contains(strings.ToLower(item.Name), strings.ToLower(name)) {
+			contains = item
+		}
+	}
+	return contains, nil
 }
 
 type newAPIPayMethod struct {

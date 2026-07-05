@@ -229,26 +229,35 @@ func (NotificationChannel) TableName() string { return "notification_channels" }
 type NotificationEvent string
 
 const (
-	EventBalanceLow             NotificationEvent = "balance_low"
-	EventRateChanged            NotificationEvent = "rate_changed"
-	EventRateStructureChanged   NotificationEvent = "rate_structure_changed"
-	EventRateAdded              NotificationEvent = "rate_added"
-	EventRateRemoved            NotificationEvent = "rate_removed"
-	EventAnnouncement           NotificationEvent = "announcement"
-	EventLoginFailed            NotificationEvent = "login_failed"
-	EventCaptchaFailed          NotificationEvent = "captcha_failed"
-	EventMonitorFailed          NotificationEvent = "monitor_failed"
-	EventSubscriptionDailyLow   NotificationEvent = "subscription_daily_remaining_low"
-	EventSubscriptionWeeklyLow  NotificationEvent = "subscription_weekly_remaining_low"
-	EventSubscriptionMonthlyLow NotificationEvent = "subscription_monthly_remaining_low"
-	EventSubscriptionExpiring   NotificationEvent = "subscription_expiring"
-	EventShopGoodsAdded         NotificationEvent = "shop_goods_added"
-	EventShopGoodsRemoved       NotificationEvent = "shop_goods_removed"
-	EventShopPriceChanged       NotificationEvent = "shop_price_changed"
-	EventShopStockChanged       NotificationEvent = "shop_stock_changed"
-	EventShopStockLow           NotificationEvent = "shop_stock_low"
-	EventShopGoodsRestocked     NotificationEvent = "shop_goods_restocked"
-	EventShopMonitorFailed      NotificationEvent = "shop_monitor_failed"
+	EventBalanceLow                  NotificationEvent = "balance_low"
+	EventRateChanged                 NotificationEvent = "rate_changed"
+	EventRateStructureChanged        NotificationEvent = "rate_structure_changed"
+	EventRateAdded                   NotificationEvent = "rate_added"
+	EventRateRemoved                 NotificationEvent = "rate_removed"
+	EventAnnouncement                NotificationEvent = "announcement"
+	EventLoginFailed                 NotificationEvent = "login_failed"
+	EventCaptchaFailed               NotificationEvent = "captcha_failed"
+	EventMonitorFailed               NotificationEvent = "monitor_failed"
+	EventSubscriptionDailyLow        NotificationEvent = "subscription_daily_remaining_low"
+	EventSubscriptionWeeklyLow       NotificationEvent = "subscription_weekly_remaining_low"
+	EventSubscriptionMonthlyLow      NotificationEvent = "subscription_monthly_remaining_low"
+	EventSubscriptionExpiring        NotificationEvent = "subscription_expiring"
+	EventShopGoodsAdded              NotificationEvent = "shop_goods_added"
+	EventShopGoodsRemoved            NotificationEvent = "shop_goods_removed"
+	EventShopPriceChanged            NotificationEvent = "shop_price_changed"
+	EventShopStockChanged            NotificationEvent = "shop_stock_changed"
+	EventShopStockLow                NotificationEvent = "shop_stock_low"
+	EventShopGoodsRestocked          NotificationEvent = "shop_goods_restocked"
+	EventShopMonitorFailed           NotificationEvent = "shop_monitor_failed"
+	EventAutoGroupSwitched           NotificationEvent = "auto_group_switched"
+	EventAutoGroupUnavailable        NotificationEvent = "auto_group_unavailable"
+	EventAutoGroupFailed             NotificationEvent = "auto_group_failed"
+	EventAutoGroupCircuitOpened      NotificationEvent = "auto_group_circuit_opened"
+	EventAutoGroupAllUnavailable     NotificationEvent = "auto_group_all_unavailable"
+	EventAutoGroupRecovered          NotificationEvent = "auto_group_recovered"
+	EventAutoGroupTargetUpdateFailed NotificationEvent = "auto_group_target_update_failed"
+	EventAutoGroupProbeFailed        NotificationEvent = "auto_group_probe_failed"
+	EventAutoGroupPolicyError        NotificationEvent = "auto_group_policy_error"
 )
 
 // NotificationLog 通知发送记录。
@@ -430,3 +439,107 @@ type ShopMonitorLog struct {
 }
 
 func (ShopMonitorLog) TableName() string { return "shop_monitor_logs" }
+
+type AutoGroupPolicy struct {
+	ID                            uint       `gorm:"primaryKey" json:"id"`
+	ChannelID                     uint       `gorm:"not null;uniqueIndex:idx_auto_group_policy_channel_target;index" json:"channel_id"`
+	Name                          string     `gorm:"size:128;not null" json:"name"`
+	Enabled                       bool       `gorm:"not null;default:true;index" json:"enabled"`
+	NotifyEnabled                 bool       `gorm:"not null;default:true" json:"notify_enabled"`
+	TargetKeyID                   int64      `gorm:"not null;default:0" json:"target_key_id"`
+	TargetKeyName                 string     `gorm:"size:128;not null;default:'auto';uniqueIndex:idx_auto_group_policy_channel_target" json:"target_key_name"`
+	ProbeKeyID                    int64      `gorm:"not null;default:0" json:"probe_key_id"`
+	ProbeKeyName                  string     `gorm:"size:128;not null;default:'ops-probe-auto'" json:"probe_key_name"`
+	ProbeModel                    string     `gorm:"size:128;not null;default:'gpt-4o-mini'" json:"probe_model"`
+	ProbeTimeoutSeconds           int        `gorm:"not null;default:15" json:"probe_timeout_seconds"`
+	IncludeGroupsJSON             string     `gorm:"type:text" json:"include_groups_json"`
+	ExcludeGroupsJSON             string     `gorm:"type:text" json:"exclude_groups_json"`
+	IncludeKeywordsJSON           string     `gorm:"type:text" json:"include_keywords_json"`
+	ExcludeKeywordsJSON           string     `gorm:"type:text" json:"exclude_keywords_json"`
+	MinRatio                      float64    `gorm:"not null;default:0" json:"min_ratio"`
+	MaxRatio                      float64    `gorm:"not null;default:0" json:"max_ratio"`
+	FailureThreshold              int        `gorm:"not null;default:2" json:"failure_threshold"`
+	CircuitDurationMinutes        int        `gorm:"not null;default:30" json:"circuit_duration_minutes"`
+	HalfOpenSuccessThreshold      int        `gorm:"not null;default:1" json:"half_open_success_threshold"`
+	MinRatioImprovementPct        float64    `gorm:"not null;default:5" json:"min_ratio_improvement_pct"`
+	SwitchCooldownMinutes         int        `gorm:"not null;default:30" json:"switch_cooldown_minutes"`
+	ForceSwitchOnCurrentUnhealthy bool       `gorm:"not null;default:true" json:"force_switch_on_current_unhealthy"`
+	KeepCurrentWhenNoAvailable    bool       `gorm:"not null;default:true" json:"keep_current_when_no_available"`
+	CurrentGroupName              string     `gorm:"size:256" json:"current_group_name,omitempty"`
+	CurrentGroupID                *int64     `json:"current_group_id,omitempty"`
+	CurrentRatio                  float64    `gorm:"not null;default:0" json:"current_ratio"`
+	LastStatus                    string     `gorm:"size:32;not null;default:'idle'" json:"last_status"`
+	LastError                     string     `gorm:"type:text" json:"last_error,omitempty"`
+	LastEvaluateAt                *time.Time `json:"last_evaluate_at,omitempty"`
+	LastSwitchAt                  *time.Time `json:"last_switch_at,omitempty"`
+	CreatedAt                     time.Time  `json:"created_at"`
+	UpdatedAt                     time.Time  `json:"updated_at"`
+}
+
+func (AutoGroupPolicy) TableName() string { return "auto_group_policies" }
+
+type AutoGroupCandidate struct {
+	ID                 uint       `gorm:"primaryKey" json:"id"`
+	PolicyID           uint       `gorm:"not null;uniqueIndex:idx_auto_group_candidate;index" json:"policy_id"`
+	GroupName          string     `gorm:"size:256;not null;uniqueIndex:idx_auto_group_candidate" json:"group_name"`
+	GroupID            *int64     `json:"group_id,omitempty"`
+	Description        string     `gorm:"type:text" json:"description,omitempty"`
+	Ratio              float64    `gorm:"not null;default:0" json:"ratio"`
+	Status             string     `gorm:"size:32;not null;default:'unknown'" json:"status"`
+	Reason             string     `gorm:"type:text" json:"reason,omitempty"`
+	FailureCount       int        `gorm:"not null;default:0" json:"failure_count"`
+	SuccessCount       int        `gorm:"not null;default:0" json:"success_count"`
+	CircuitOpenUntil   *time.Time `json:"circuit_open_until,omitempty"`
+	CircuitOpenedAt    *time.Time `json:"circuit_opened_at,omitempty"`
+	RecoveredAt        *time.Time `json:"recovered_at,omitempty"`
+	LastCheckedAt      *time.Time `json:"last_checked_at,omitempty"`
+	LastProbeAt        *time.Time `json:"last_probe_at,omitempty"`
+	LastProbeSuccess   *bool      `json:"last_probe_success,omitempty"`
+	LastProbeLatencyMS int64      `gorm:"not null;default:0" json:"last_probe_latency_ms"`
+	LastErrorCode      string     `gorm:"size:64" json:"last_error_code,omitempty"`
+	LastError          string     `gorm:"type:text" json:"last_error,omitempty"`
+	ManualDisabled     bool       `gorm:"not null;default:false" json:"manual_disabled"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+}
+
+func (AutoGroupCandidate) TableName() string { return "auto_group_candidates" }
+
+type AutoGroupEvaluationLog struct {
+	ID               uint      `gorm:"primaryKey" json:"id"`
+	PolicyID         uint      `gorm:"not null;index" json:"policy_id"`
+	ChannelID        uint      `gorm:"not null;index" json:"channel_id"`
+	Success          bool      `gorm:"not null;index" json:"success"`
+	Status           string    `gorm:"size:32;not null;index" json:"status"`
+	TargetKeyID      int64     `gorm:"not null;default:0" json:"target_key_id"`
+	TargetKeyName    string    `gorm:"size:128" json:"target_key_name,omitempty"`
+	CurrentGroup     string    `gorm:"size:256" json:"current_group,omitempty"`
+	SelectedGroup    string    `gorm:"size:256" json:"selected_group,omitempty"`
+	SelectedRatio    float64   `gorm:"not null;default:0" json:"selected_ratio"`
+	CandidateCount   int       `gorm:"not null;default:0" json:"candidate_count"`
+	AvailableCount   int       `gorm:"not null;default:0" json:"available_count"`
+	CircuitOpenCount int       `gorm:"not null;default:0" json:"circuit_open_count"`
+	Action           string    `gorm:"size:64" json:"action,omitempty"`
+	Message          string    `gorm:"type:text" json:"message,omitempty"`
+	CreatedAt        time.Time `gorm:"not null;index" json:"created_at"`
+}
+
+func (AutoGroupEvaluationLog) TableName() string { return "auto_group_evaluation_logs" }
+
+type AutoGroupSwitchLog struct {
+	ID            uint      `gorm:"primaryKey" json:"id"`
+	PolicyID      uint      `gorm:"not null;index" json:"policy_id"`
+	ChannelID     uint      `gorm:"not null;index" json:"channel_id"`
+	TargetKeyID   int64     `gorm:"not null;default:0" json:"target_key_id"`
+	TargetKeyName string    `gorm:"size:128" json:"target_key_name,omitempty"`
+	FromGroup     string    `gorm:"size:256" json:"from_group,omitempty"`
+	ToGroup       string    `gorm:"size:256" json:"to_group,omitempty"`
+	ToGroupID     *int64    `json:"to_group_id,omitempty"`
+	ToRatio       float64   `gorm:"not null;default:0" json:"to_ratio"`
+	Success       bool      `gorm:"not null;index" json:"success"`
+	Reason        string    `gorm:"type:text" json:"reason,omitempty"`
+	ErrorMessage  string    `gorm:"type:text" json:"error_message,omitempty"`
+	CreatedAt     time.Time `gorm:"not null;index" json:"created_at"`
+}
+
+func (AutoGroupSwitchLog) TableName() string { return "auto_group_switch_logs" }

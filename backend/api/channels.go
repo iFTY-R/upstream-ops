@@ -872,6 +872,15 @@ func syncAllChannels(c *gin.Context, d *Deps) {
 			})
 			continue
 		}
+		if err := d.Monitor.RefreshRates(ctx, &ch); err != nil {
+			failedCount++
+			scoped.Emit(progress.Event{
+				Stage:   progress.StageError,
+				Message: fmt.Sprintf("倍率同步失败：%v", err),
+				Time:    time.Now(),
+			})
+			continue
+		}
 
 		successCount++
 		scoped.Emit(progress.Event{

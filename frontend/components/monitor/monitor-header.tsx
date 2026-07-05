@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useTheme } from "next-themes"
-import { Activity, Github, Home, LogOut, RefreshCw, Sun, Moon, Settings, Store } from "lucide-react"
+import { Activity, Github, Home, LogOut, RefreshCw, Sun, Moon, Settings, Store, SlidersHorizontal } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -201,6 +201,23 @@ export function MonitorHeader() {
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs">
               {"店铺监控"}
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip delayDuration={200}>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => navigate("/auto-groups")}
+                className="size-8 border-border bg-background text-foreground hover:bg-muted"
+                aria-label="智能分组"
+              >
+                <SlidersHorizontal className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              {"智能分组"}
             </TooltipContent>
           </Tooltip>
 

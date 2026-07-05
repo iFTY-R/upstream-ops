@@ -116,7 +116,16 @@ func isRateEvent(event storage.NotificationEvent) bool {
 	return event == storage.EventRateChanged ||
 		event == storage.EventRateStructureChanged ||
 		event == storage.EventRateAdded ||
-		event == storage.EventRateRemoved
+		event == storage.EventRateRemoved ||
+		event == storage.EventAutoGroupSwitched ||
+		event == storage.EventAutoGroupUnavailable ||
+		event == storage.EventAutoGroupFailed ||
+		event == storage.EventAutoGroupCircuitOpened ||
+		event == storage.EventAutoGroupAllUnavailable ||
+		event == storage.EventAutoGroupRecovered ||
+		event == storage.EventAutoGroupTargetUpdateFailed ||
+		event == storage.EventAutoGroupProbeFailed ||
+		event == storage.EventAutoGroupPolicyError
 }
 
 // AnyMatch 任意一条订阅命中即视为该通知渠道关心此消息。

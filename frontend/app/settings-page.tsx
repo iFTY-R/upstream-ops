@@ -56,6 +56,22 @@ function num(v: string) {
   return Number(v || 0);
 }
 
+function normalizeSystemConfig(config: SystemConfig): SystemConfig {
+  return {
+    ...config,
+    scheduler: {
+      ...config.scheduler,
+      shopCron: config.scheduler.shopCron ?? "",
+      autoGroup: {
+        enabled: config.scheduler.autoGroup?.enabled ?? false,
+        cron: config.scheduler.autoGroup?.cron ?? "29 */5 * * * *",
+        concurrency: config.scheduler.autoGroup?.concurrency ?? 2,
+        probeConcurrency: config.scheduler.autoGroup?.probeConcurrency ?? 1,
+      },
+    },
+  };
+}
+
 interface ProxyTestResult {
   ok: boolean;
   latency_ms: number;
@@ -95,7 +111,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (query.data?.config) {
-      setForm(query.data.config);
+      setForm(normalizeSystemConfig(query.data.config));
     }
   }, [query.data]);
 
@@ -593,6 +609,104 @@ export default function SettingsPage() {
                               scheduler: {
                                 ...prev.scheduler,
                                 concurrency: num(e.target.value),
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
+                <InlineSwitch
+                  id="autogroup-scheduler-enabled"
+                  label="智能分组独立调度"
+                  description="开启后智能分组按自己的 Cron 执行，不再跟随倍率采集结束后执行。"
+                  checked={form.scheduler.autoGroup.enabled}
+                  onCheckedChange={(checked) =>
+                    setForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            scheduler: {
+                              ...prev.scheduler,
+                              autoGroup: {
+                                ...prev.scheduler.autoGroup,
+                                enabled: checked,
+                              },
+                            },
+                          }
+                        : prev,
+                    )
+                  }
+                />
+                <Field
+                  label="智能分组 Cron"
+                  description="控制 AutoGroup 自动评估周期；关闭独立调度时此项不生效。"
+                >
+                  <Input
+                    value={form.scheduler.autoGroup.cron}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                autoGroup: {
+                                  ...prev.scheduler.autoGroup,
+                                  cron: e.target.value,
+                                },
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
+                <Field
+                  label="智能分组并发"
+                  description="每轮最多并发评估多少条策略；同一上游会自动串行，避免探测 Key 抢占。"
+                >
+                  <Input
+                    type="number"
+                    min={1}
+                    value={String(form.scheduler.autoGroup.concurrency)}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                autoGroup: {
+                                  ...prev.scheduler.autoGroup,
+                                  concurrency: Math.max(1, num(e.target.value)),
+                                },
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
+                <Field
+                  label="单策略探测并发"
+                  description="保留配置位；当前为安全起见单策略内仍串行移动探测 Key。"
+                >
+                  <Input
+                    type="number"
+                    min={1}
+                    value={String(form.scheduler.autoGroup.probeConcurrency)}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                autoGroup: {
+                                  ...prev.scheduler.autoGroup,
+                                  probeConcurrency: Math.max(1, num(e.target.value)),
+                                },
                               },
                             }
                           : prev,
