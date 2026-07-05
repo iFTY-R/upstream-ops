@@ -538,7 +538,6 @@ func (c *Client) ListAPIKeys(ctx context.Context, ch *connector.Channel, session
 	if search != "" {
 		path = "/api/token/search"
 		params.Set("keyword", search)
-		params.Set("token", search)
 	}
 	body, err := c.getJSON(ctx, site+path+"?"+params.Encode(), session)
 	if err != nil {
@@ -621,8 +620,10 @@ func (c *Client) CreateAPIKey(ctx context.Context, ch *connector.Channel, sessio
 	}
 	if key, err := c.findAPIKeyByName(ctx, ch, session, req.Name); err == nil && key != nil {
 		return key, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("newapi create api key lookup: %w", err)
 	}
-	return newAPIKeyFromCreateRequest(req), nil
+	return nil, fmt.Errorf("newapi create api key returned no id and lookup by name failed: %s", strings.TrimSpace(req.Name))
 }
 
 func (c *Client) UpdateAPIKey(ctx context.Context, ch *connector.Channel, session *connector.AuthSession, id int64, req connector.APIKeyUpdateRequest) (*connector.APIKey, error) {
@@ -724,22 +725,7 @@ func newAPIKeyFromCreateData(data json.RawMessage, req connector.APIKeyCreateReq
 		out := wrapped.Token.toConnector()
 		return &out
 	}
-	return newAPIKeyFromCreateRequest(req)
-}
-
-func newAPIKeyFromCreateRequest(req connector.APIKeyCreateRequest) *connector.APIKey {
-	return &connector.APIKey{
-		Name:               strings.TrimSpace(req.Name),
-		Status:             "active",
-		Group:              strings.TrimSpace(req.Group),
-		Quota:              float64(valueOr(req.RemainQuota, 0)),
-		UnlimitedQuota:     valueOr(req.UnlimitedQuota, false),
-		ExpiredTime:        valueOr(req.ExpiredTime, int64(-1)),
-		ModelLimitsEnabled: valueOr(req.ModelLimitsEnabled, false),
-		ModelLimits:        req.ModelLimits,
-		AllowIPs:           req.AllowIPs,
-		CrossGroupRetry:    valueOr(req.CrossGroupRetry, false),
-	}
+	return nil
 }
 
 func (c *Client) findAPIKeyByName(ctx context.Context, ch *connector.Channel, session *connector.AuthSession, name string) (*connector.APIKey, error) {
@@ -747,18 +733,42 @@ func (c *Client) findAPIKeyByName(ctx context.Context, ch *connector.Channel, se
 	if name == "" {
 		return nil, nil
 	}
-	page, err := c.ListAPIKeys(ctx, ch, session, connector.APIKeyQuery{Page: 1, PageSize: 100, Search: name})
-	if err != nil {
-		return nil, err
+	key, searchErr := c.findAPIKeyByNameQuery(ctx, ch, session, name, true)
+	if key != nil {
+		return key, nil
 	}
+	key, listErr := c.findAPIKeyByNameQuery(ctx, ch, session, name, false)
+	if key != nil {
+		return key, nil
+	}
+	if searchErr != nil {
+		return nil, searchErr
+	}
+	return nil, listErr
+}
+
+func (c *Client) findAPIKeyByNameQuery(ctx context.Context, ch *connector.Channel, session *connector.AuthSession, name string, useSearch bool) (*connector.APIKey, error) {
 	var contains *connector.APIKey
-	for i := range page.Items {
-		item := &page.Items[i]
-		if strings.EqualFold(strings.TrimSpace(item.Name), name) {
-			return item, nil
+	for pageNo := 1; pageNo <= 10; pageNo++ {
+		query := connector.APIKeyQuery{Page: pageNo, PageSize: 100}
+		if useSearch {
+			query.Search = name
 		}
-		if contains == nil && strings.Contains(strings.ToLower(item.Name), strings.ToLower(name)) {
-			contains = item
+		page, err := c.ListAPIKeys(ctx, ch, session, query)
+		if err != nil {
+			return nil, err
+		}
+		for i := range page.Items {
+			item := &page.Items[i]
+			if strings.EqualFold(strings.TrimSpace(item.Name), name) {
+				return item, nil
+			}
+			if contains == nil && strings.Contains(strings.ToLower(item.Name), strings.ToLower(name)) {
+				contains = item
+			}
+		}
+		if page.Pages <= pageNo || len(page.Items) == 0 {
+			break
 		}
 	}
 	return contains, nil

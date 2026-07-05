@@ -977,6 +977,15 @@ func (s *Service) ensureProbeKey(ctx context.Context, p *storage.AutoGroupPolicy
 		}
 		key = created
 	}
+	if key == nil || key.ID <= 0 {
+		found, err := s.findAPIKeyByName(ctx, p.ChannelID, name)
+		if err != nil {
+			return nil, fmt.Errorf("回查探测 API Key %s 失败：%w", name, err)
+		}
+		if found != nil {
+			key = found
+		}
+	}
 	if key == nil {
 		return nil, fmt.Errorf("探测 API Key %s 创建后返回为空", name)
 	}
@@ -996,6 +1005,26 @@ func (s *Service) ensureProbeKey(ctx context.Context, p *storage.AutoGroupPolicy
 		return nil, fmt.Errorf("探测 API Key %s 明文为空", name)
 	}
 	return &probeKey{ID: key.ID, Name: emptyAs(key.Name, name), Value: strings.TrimSpace(raw)}, nil
+}
+
+func (s *Service) findAPIKeyByName(ctx context.Context, channelID uint, name string) (*connector.APIKey, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, nil
+	}
+	for _, query := range []connector.APIKeyQuery{
+		{Page: 1, PageSize: 100, Search: name},
+		{Page: 1, PageSize: 100},
+	} {
+		page, err := s.ChannelSvc.ListAPIKeys(ctx, channelID, query)
+		if err != nil {
+			return nil, err
+		}
+		if key := selectTargetKey(page.Items, 0, name); key != nil {
+			return key, nil
+		}
+	}
+	return nil, nil
 }
 
 func (s *Service) probeCandidate(ctx context.Context, p *storage.AutoGroupPolicy, ch *storage.Channel, probe *probeKey, c CandidateDecision) CandidateDecision {

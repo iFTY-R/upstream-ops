@@ -16,12 +16,13 @@ import (
 )
 
 type fakeChannelService struct {
-	keys       []connector.APIKey
-	groups     []connector.APIKeyGroup
-	created    []connector.APIKeyCreateRequest
-	updates    []connector.APIKeyUpdateRequest
-	nextKeyID  int64
-	revealByID map[int64]string
+	keys                   []connector.APIKey
+	groups                 []connector.APIKeyGroup
+	created                []connector.APIKeyCreateRequest
+	updates                []connector.APIKeyUpdateRequest
+	nextKeyID              int64
+	revealByID             map[int64]string
+	returnCreatedWithoutID bool
 }
 
 func (f *fakeChannelService) ListAPIKeys(ctx context.Context, channelID uint, query connector.APIKeyQuery) (*connector.APIKeyPage, error) {
@@ -61,6 +62,11 @@ func (f *fakeChannelService) CreateAPIKey(ctx context.Context, channelID uint, r
 		f.revealByID = map[int64]string{}
 	}
 	f.revealByID[key.ID] = "sk-" + req.Name
+	if f.returnCreatedWithoutID {
+		withoutID := key
+		withoutID.ID = 0
+		return &withoutID, nil
+	}
 	return &key, nil
 }
 
@@ -221,6 +227,50 @@ func TestEvaluatePolicyBackfillsCurrentGroupNameFromGroupID(t *testing.T) {
 	}
 	if got.CurrentGroupName != "fast" || got.CurrentGroupID == nil || *got.CurrentGroupID != fastID || got.CurrentRatio != 0.04 {
 		t.Fatalf("current group not backfilled: %#v", got)
+	}
+}
+
+func TestEvaluatePolicyBackfillsProbeKeyIDAfterInvalidCreateResponse(t *testing.T) {
+	db := openAutoGroupTestDB(t)
+	server := newProbeServer(t)
+	defer server.Close()
+
+	channels := storage.NewChannels(db)
+	ch := &storage.Channel{Name: "newapi", Type: storage.ChannelTypeNewAPI, SiteURL: server.URL, Username: "u", PasswordCipher: "x", MonitorEnabled: true}
+	if err := channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	fastID := int64(11)
+	fake := &fakeChannelService{
+		nextKeyID: 20,
+		keys: []connector.APIKey{
+			{ID: 1, Name: "auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},
+		},
+		groups:                 []connector.APIKeyGroup{{ID: &fastID, Name: "fast", Ratio: 0.04}},
+		revealByID:             map[int64]string{21: "sk-probe"},
+		returnCreatedWithoutID: true,
+	}
+	repo := storage.NewAutoGroups(db)
+	rates := storage.NewRates(db)
+	if _, err := rates.Upsert(&storage.RateSnapshot{ChannelID: ch.ID, ModelName: "fast", Ratio: 0.04, LastSeenAt: time.Now()}); err != nil {
+		t.Fatalf("upsert rates: %v", err)
+	}
+	policy := &storage.AutoGroupPolicy{ChannelID: ch.ID, Name: "auto", Enabled: true, NotifyEnabled: false, TargetKeyName: "auto", ProbeKeyName: "ops-probe-auto", ProbeModel: "gpt-4o-mini", ProbeTimeoutSeconds: 3, FailureThreshold: 2, CircuitDurationMinutes: 30, HalfOpenSuccessThreshold: 1, KeepCurrentWhenNoAvailable: true, ForceSwitchOnCurrentUnhealthy: true}
+	if err := repo.CreatePolicy(policy); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+
+	svc := NewService(repo, channels, rates, fake, nil, nil)
+	if _, err := svc.EvaluatePolicy(context.Background(), policy.ID); err != nil {
+		t.Fatalf("evaluate policy: %v", err)
+	}
+	got, err := repo.FindPolicy(policy.ID)
+	if err != nil {
+		t.Fatalf("find policy: %v", err)
+	}
+	if got.ProbeKeyID != 21 || got.ProbeKeyName != "ops-probe-auto" {
+		t.Fatalf("probe key not backfilled: %#v", got)
 	}
 }
 

@@ -415,8 +415,8 @@ func TestSearchAPIKeys(t *testing.T) {
 		if got := r.URL.Query().Get("keyword"); got != "main" {
 			t.Fatalf("keyword = %q, want main", got)
 		}
-		if got := r.URL.Query().Get("token"); got != "main" {
-			t.Fatalf("token = %q, want main", got)
+		if got := r.URL.Query().Get("token"); got != "" {
+			t.Fatalf("token = %q, want empty for name search", got)
 		}
 		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"items":[],"total":0,"page":1,"page_size":20,"pages":1}}`))
 	})
@@ -441,6 +441,9 @@ func TestCreateUpdateDeleteRevealAPIKey(t *testing.T) {
 	mux.HandleFunc("/api/token/search", func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Query().Get("keyword"); got != "main" {
 			t.Fatalf("search keyword = %q, want main", got)
+		}
+		if got := r.URL.Query().Get("token"); got != "" {
+			t.Fatalf("search token = %q, want empty for name search", got)
 		}
 		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"items":[{"id":9,"status":1,"name":"main","group":"default"}],"total":1,"page":1,"page_size":100,"pages":1}}`))
 	})
@@ -513,6 +516,50 @@ func TestCreateUpdateDeleteRevealAPIKey(t *testing.T) {
 	}
 	if key != "sk-full" {
 		t.Fatalf("key = %q", key)
+	}
+}
+
+func TestCreateAPIKeyFallsBackToListWhenSearchMissesCreatedKey(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/token/search", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("keyword"); got != "ops-probe-auto" {
+			t.Fatalf("search keyword = %q, want ops-probe-auto", got)
+		}
+		if got := r.URL.Query().Get("token"); got != "" {
+			t.Fatalf("search token = %q, want empty for name search", got)
+		}
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"items":[],"total":0,"page":1,"page_size":100,"pages":1}}`))
+	})
+	mux.HandleFunc("/api/token/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode create: %v", err)
+			}
+			if body["name"] != "ops-probe-auto" {
+				t.Fatalf("create body = %#v", body)
+			}
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":null}`))
+		case http.MethodGet:
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"items":[{"id":12,"status":1,"name":"ops-probe-auto","group":"fast"}],"total":1,"page":1,"page_size":100,"pages":1}}`))
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New()
+	created, err := c.CreateAPIKey(context.Background(), &connector.Channel{SiteURL: srv.URL}, &connector.AuthSession{
+		Cookie: "session=1",
+		UserID: "7",
+	}, connector.APIKeyCreateRequest{Name: "ops-probe-auto"})
+	if err != nil {
+		t.Fatalf("CreateAPIKey: %v", err)
+	}
+	if created.ID != 12 || created.Name != "ops-probe-auto" {
+		t.Fatalf("created = %#v, want listed key with id 12", created)
 	}
 }
 
