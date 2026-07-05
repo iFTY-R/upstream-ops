@@ -49,7 +49,7 @@ func New(
 	return &Scheduler{
 		cfg:           cfg,
 		log:           log,
-		cron:          cron.New(cron.WithSeconds()),
+		cron:          cron.New(cron.WithSeconds(), cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger))),
 		monitor:       m,
 		shopMonitor:   shop,
 		autoGroup:     autoGroup,

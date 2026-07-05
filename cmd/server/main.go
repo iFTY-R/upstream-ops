@@ -156,7 +156,10 @@ func main() {
 	router := gin.New()
 	router.Use(gin.Recovery())
 	if len(cfg.Server.TrustedProxies) > 0 {
-		_ = router.SetTrustedProxies(cfg.Server.TrustedProxies)
+		if err := router.SetTrustedProxies(cfg.Server.TrustedProxies); err != nil {
+			log.Error("invalid trusted proxies config", "err", err)
+			os.Exit(1)
+		}
 	}
 
 	// 仅在嵌入了真实前端产物时挂载静态 handler。

@@ -676,8 +676,8 @@ export default function AutoGroupsPage() {
                         onChange={(values) => patchForm({ include_groups: values })}
                       />
                       <GroupPicker
-                        title="排除分组"
-                        hint="命中这些分组名称时永远不选"
+                        title="选择排除分组"
+                        hint="这里只是可选分组列表，勾选后才会排除"
                         groups={groups}
                         selected={form.exclude_groups}
                         otherSelected={form.include_groups}
@@ -1110,13 +1110,25 @@ function GroupPicker({
   function toggle(name: string, checked: boolean) {
     onChange(checked ? Array.from(new Set([...selected, name])) : selected.filter((item) => item !== name))
   }
+  const visibleGroups = useMemo(() => {
+    return groups.slice().sort((a, b) => {
+      const aSelected = selected.includes(a.name)
+      const bSelected = selected.includes(b.name)
+      if (aSelected !== bSelected) return aSelected ? -1 : 1
+      return a.name.localeCompare(b.name, "zh-CN")
+    })
+  }, [groups, selected])
   const toneCls = tone === "include" ? "border-success/30 bg-success/5" : "border-warning/30 bg-warning/5"
+  const selectedLabel = tone === "include" ? "已允许" : "已排除"
   return (
     <div className={cn("rounded-lg border p-3", selected.length > 0 ? toneCls : "border-border")}>
       <div className="mb-2 flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-medium">{title}</p>
           <p className="text-[11px] text-muted-foreground">{hint}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {`${selectedLabel} ${selected.length} 个 / 可选 ${groups.length} 个，只有勾选的分组会生效。`}
+          </p>
         </div>
         {selected.length > 0 ? (
           <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => onChange([])}>
@@ -1131,7 +1143,7 @@ function GroupPicker({
       ) : (
         <ScrollArea className="h-48 pr-2">
           <div className="space-y-1.5">
-            {groups.map((g) => {
+            {visibleGroups.map((g) => {
               const checked = selected.includes(g.name)
               const disabled = otherSelected.includes(g.name) && !checked
               return (
@@ -1146,7 +1158,10 @@ function GroupPicker({
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center justify-between gap-2">
                       <span className="truncate font-medium">{g.name}</span>
-                      <span className="shrink-0 tabular-nums text-muted-foreground">{formatRatio(g.ratio)}</span>
+                      <span className="flex shrink-0 items-center gap-1">
+                        {checked ? <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">{selectedLabel}</Badge> : null}
+                        <span className="tabular-nums text-muted-foreground">{formatRatio(g.ratio)}</span>
+                      </span>
                     </span>
                     {g.description ? <span className="mt-0.5 line-clamp-2 text-muted-foreground">{g.description}</span> : null}
                   </span>
@@ -1187,7 +1202,7 @@ function DecisionPanel({ policy, candidates }: { policy: AutoGroupPolicyView | n
             <div className="rounded-lg border border-success/30 bg-success/5 px-3 py-2">
               <p className="font-medium text-success">{"当前最优候选：" + best.group_name}</p>
               <p className="mt-1 text-muted-foreground">
-                {`探测可用，倍率 ${formatRatio(best.ratio)}，在当前健康候选中最低。${currentGroupName === best.group_name ? "目标 Key 已在该分组。" : "下次评估满足冷却和收益阈值后会切换。"}`}
+                {`探测可用，倍率 ${formatRatio(best.ratio)}，在当前健康候选中最低。${currentGroupName === best.group_name ? "目标 Key 已在该分组。" : "下次评估会优先尝试切换到该低倍率分组。"}`}
               </p>
             </div>
           ) : (

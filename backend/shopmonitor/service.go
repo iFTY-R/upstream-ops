@@ -24,6 +24,7 @@ type Service struct {
 	dispatcher *notify.Dispatcher
 	log        *slog.Logger
 	mu         sync.RWMutex
+	locks      sync.Map
 	proxy      config.ProxyConfig
 	upstream   config.UpstreamConfig
 }
@@ -77,6 +78,14 @@ type RefreshGoodsResult struct {
 	Changed  bool                       `json:"changed"`
 }
 
+type changeDraft struct {
+	item     shopprovider.Goods
+	event    storage.ShopGoodsChangeEvent
+	oldValue string
+	newValue string
+	summary  string
+}
+
 type SyncAllTargetResult struct {
 	TargetID uint        `json:"target_id"`
 	Name     string      `json:"name"`
@@ -128,6 +137,8 @@ func (s *Service) RefreshGoodsByKey(ctx context.Context, targetID uint, goodsKey
 	if err != nil {
 		return nil, err
 	}
+	unlock := s.lockTarget(target.ID)
+	defer unlock()
 	provider, starget, err := s.providerFor(target)
 	if err != nil {
 		return nil, err
@@ -214,6 +225,8 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 	if target == nil {
 		return result, fmt.Errorf("shop target is nil")
 	}
+	unlock := s.lockTarget(target.ID)
+	defer unlock()
 
 	provider, starget, err := s.providerFor(target)
 	if err != nil {
@@ -247,19 +260,32 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 	}
 
 	finished := time.Now()
-	_ = s.targets.SetSyncResult(target.ID, &finished, "", info.Name, result.GoodsCount, lowStockCount, result.ChangedCount)
-	_ = s.goods.AppendMonitorLog(&storage.ShopMonitorLog{
+	if err := s.targets.SetSyncResult(target.ID, &finished, "", info.Name, result.GoodsCount, lowStockCount, result.ChangedCount); err != nil {
+		return result, fmt.Errorf("保存店铺同步结果失败：%w", err)
+	}
+	if err := s.goods.AppendMonitorLog(&storage.ShopMonitorLog{
 		TargetID:     target.ID,
 		Success:      true,
 		GoodsCount:   result.GoodsCount,
 		ChangedCount: result.ChangedCount,
 		StartedAt:    started,
 		FinishedAt:   finished,
-	})
+	}); err != nil {
+		return result, fmt.Errorf("记录店铺监控日志失败：%w", err)
+	}
 	if len(changes) > 0 {
-		_ = s.dispatchChanges(ctx, target, info, changes)
+		if err := s.dispatchChanges(ctx, target, info, changes); err != nil && s.log != nil {
+			s.log.Warn("dispatch shop changes failed", "target_id", target.ID, "err", err)
+		}
 	}
 	return result, nil
+}
+
+func (s *Service) lockTarget(targetID uint) func() {
+	lock, _ := s.locks.LoadOrStore(targetID, &sync.Mutex{})
+	mu := lock.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 func (s *Service) providerFor(target *storage.ShopTarget) (shopprovider.Provider, shopprovider.Target, error) {
@@ -472,7 +498,9 @@ func (s *Service) diffAndSave(target *storage.ShopTarget, fetched map[string]sho
 				return nil, 0, err
 			}
 			if !firstSync && target.NewGoodsEnabled {
-				changes = append(changes, s.appendChange(target, item, storage.ShopChangeGoodsAdded, "", item.Name, fmt.Sprintf("新增商品 %s", item.Name), now))
+				if err := s.appendChange(&changes, target, item, storage.ShopChangeGoodsAdded, "", item.Name, fmt.Sprintf("新增商品 %s", item.Name), now); err != nil {
+					return nil, 0, err
+				}
 			}
 			continue
 		}
@@ -480,27 +508,28 @@ func (s *Service) diffAndSave(target *storage.ShopTarget, fetched map[string]sho
 		next.ID = prev.ID
 		next.FirstSeenAt = prev.FirstSeenAt
 		changed := false
+		drafts := make([]changeDraft, 0, 3)
 		if prev.RemovedAt != nil {
 			changed = true
 			if target.RestockEnabled {
-				changes = append(changes, s.appendChange(target, item, storage.ShopChangeGoodsRestocked, "removed", strconv.Itoa(item.StockCount), fmt.Sprintf("%s 重新出现，当前库存 %d", item.Name, item.StockCount), now))
+				drafts = append(drafts, changeDraft{item: item, event: storage.ShopChangeGoodsRestocked, oldValue: "removed", newValue: strconv.Itoa(item.StockCount), summary: fmt.Sprintf("%s 重新出现，当前库存 %d", item.Name, item.StockCount)})
 			}
 		}
 		if target.PriceChangeEnabled && prev.Price != item.Price {
 			changed = true
-			changes = append(changes, s.appendChange(target, item, storage.ShopChangePriceChanged, fmtFloat(prev.Price), fmtFloat(item.Price), fmt.Sprintf("%s 价格 %.4f -> %.4f", item.Name, prev.Price, item.Price), now))
+			drafts = append(drafts, changeDraft{item: item, event: storage.ShopChangePriceChanged, oldValue: fmtFloat(prev.Price), newValue: fmtFloat(item.Price), summary: fmt.Sprintf("%s 价格 %.4f -> %.4f", item.Name, prev.Price, item.Price)})
 		}
 		if target.StockChangeEnabled && prev.StockCount != item.StockCount {
 			changed = true
-			changes = append(changes, s.appendChange(target, item, storage.ShopChangeStockChanged, strconv.Itoa(prev.StockCount), strconv.Itoa(item.StockCount), fmt.Sprintf("%s 库存 %d -> %d", item.Name, prev.StockCount, item.StockCount), now))
+			drafts = append(drafts, changeDraft{item: item, event: storage.ShopChangeStockChanged, oldValue: strconv.Itoa(prev.StockCount), newValue: strconv.Itoa(item.StockCount), summary: fmt.Sprintf("%s 库存 %d -> %d", item.Name, prev.StockCount, item.StockCount)})
 		}
-		if target.RestockEnabled && prev.StockCount == 0 && item.StockCount > 0 {
+		if target.RestockEnabled && prev.RemovedAt == nil && prev.StockCount == 0 && item.StockCount > 0 {
 			changed = true
-			changes = append(changes, s.appendChange(target, item, storage.ShopChangeGoodsRestocked, "0", strconv.Itoa(item.StockCount), fmt.Sprintf("%s 补货，当前库存 %d", item.Name, item.StockCount), now))
+			drafts = append(drafts, changeDraft{item: item, event: storage.ShopChangeGoodsRestocked, oldValue: "0", newValue: strconv.Itoa(item.StockCount), summary: fmt.Sprintf("%s 补货，当前库存 %d", item.Name, item.StockCount)})
 		}
 		if target.LowStockEnabled && target.StockThreshold > 0 && prev.StockCount > target.StockThreshold && item.StockCount <= target.StockThreshold {
 			changed = true
-			changes = append(changes, s.appendChange(target, item, storage.ShopChangeStockLow, strconv.Itoa(prev.StockCount), strconv.Itoa(item.StockCount), fmt.Sprintf("%s 库存 %d，低于阈值 %d", item.Name, item.StockCount, target.StockThreshold), now))
+			drafts = append(drafts, changeDraft{item: item, event: storage.ShopChangeStockLow, oldValue: strconv.Itoa(prev.StockCount), newValue: strconv.Itoa(item.StockCount), summary: fmt.Sprintf("%s 库存 %d，低于阈值 %d", item.Name, item.StockCount, target.StockThreshold)})
 		}
 		if changed {
 			next.LastChangedAt = &now
@@ -509,6 +538,11 @@ func (s *Service) diffAndSave(target *storage.ShopTarget, fetched map[string]sho
 		}
 		if err := s.goods.SaveSnapshot(&next); err != nil {
 			return nil, 0, err
+		}
+		for _, draft := range drafts {
+			if err := s.appendChange(&changes, target, draft.item, draft.event, draft.oldValue, draft.newValue, draft.summary, now); err != nil {
+				return nil, 0, err
+			}
 		}
 	}
 
@@ -524,7 +558,9 @@ func (s *Service) diffAndSave(target *storage.ShopTarget, fetched map[string]sho
 		}
 		if target.RemovedGoodsEnabled {
 			item := shopprovider.Goods{GoodsKey: prev.GoodsKey, Name: prev.Name}
-			changes = append(changes, s.appendChange(target, item, storage.ShopChangeGoodsRemoved, prev.Name, "", fmt.Sprintf("商品消失或下架: %s", prev.Name), now))
+			if err := s.appendChange(&changes, target, item, storage.ShopChangeGoodsRemoved, prev.Name, "", fmt.Sprintf("商品消失或下架: %s", prev.Name), now); err != nil {
+				return nil, 0, err
+			}
 		}
 	}
 	return changes, lowStockCount, nil
@@ -544,7 +580,7 @@ func shopSnapshotChanged(prev, next storage.ShopGoodsSnapshot) bool {
 		prev.ContactFormat != next.ContactFormat
 }
 
-func (s *Service) appendChange(target *storage.ShopTarget, item shopprovider.Goods, event storage.ShopGoodsChangeEvent, oldValue, newValue, summary string, changedAt time.Time) storage.ShopGoodsChangeLog {
+func (s *Service) appendChange(changes *[]storage.ShopGoodsChangeLog, target *storage.ShopTarget, item shopprovider.Goods, event storage.ShopGoodsChangeEvent, oldValue, newValue, summary string, changedAt time.Time) error {
 	log := storage.ShopGoodsChangeLog{
 		TargetID:  target.ID,
 		GoodsKey:  item.GoodsKey,
@@ -555,8 +591,11 @@ func (s *Service) appendChange(target *storage.ShopTarget, item shopprovider.Goo
 		Summary:   summary,
 		ChangedAt: changedAt,
 	}
-	_ = s.goods.AppendChange(&log)
-	return log
+	if err := s.goods.AppendChange(&log); err != nil {
+		return fmt.Errorf("记录店铺商品变化失败：%w", err)
+	}
+	*changes = append(*changes, log)
+	return nil
 }
 
 func (s *Service) recordFailure(target *storage.ShopTarget, started time.Time, err error) {
@@ -565,20 +604,26 @@ func (s *Service) recordFailure(target *storage.ShopTarget, started time.Time, e
 	if err != nil {
 		msg = err.Error()
 	}
-	_ = s.targets.SetSyncResult(target.ID, nil, msg, target.LastShopName, target.LastGoodsCount, target.LastLowStockGoods, 0)
-	_ = s.goods.AppendMonitorLog(&storage.ShopMonitorLog{
+	if err := s.targets.SetSyncResult(target.ID, nil, msg, target.LastShopName, target.LastGoodsCount, target.LastLowStockGoods, 0); err != nil && s.log != nil {
+		s.log.Warn("save shop sync failure result failed", "target_id", target.ID, "err", err)
+	}
+	if err := s.goods.AppendMonitorLog(&storage.ShopMonitorLog{
 		TargetID:     target.ID,
 		Success:      false,
 		ErrorMessage: msg,
 		StartedAt:    started,
 		FinishedAt:   finished,
-	})
-	_ = s.goods.AppendChange(&storage.ShopGoodsChangeLog{
+	}); err != nil && s.log != nil {
+		s.log.Warn("append shop failure monitor log failed", "target_id", target.ID, "err", err)
+	}
+	if err := s.goods.AppendChange(&storage.ShopGoodsChangeLog{
 		TargetID:  target.ID,
 		Event:     storage.ShopChangeMonitorFailed,
 		Summary:   msg,
 		ChangedAt: finished,
-	})
+	}); err != nil && s.log != nil {
+		s.log.Warn("append shop failure change log failed", "target_id", target.ID, "err", err)
+	}
 }
 
 func (s *Service) notifyFailure(ctx context.Context, target *storage.ShopTarget, err error) {
@@ -588,11 +633,13 @@ func (s *Service) notifyFailure(ctx context.Context, target *storage.ShopTarget,
 	if !s.hasMatchingWatchRule(target.ID, storage.ShopChangeMonitorFailed, nil, "", "") {
 		return
 	}
-	_ = s.dispatcher.Dispatch(ctx, notify.Message{
+	if dispatchErr := s.dispatcher.Dispatch(ctx, notify.Message{
 		Event:   storage.EventShopMonitorFailed,
 		Subject: fmt.Sprintf("%s 店铺监控失败", target.Name),
 		Body:    err.Error(),
-	})
+	}); dispatchErr != nil && s.log != nil {
+		s.log.Warn("dispatch shop monitor failure failed", "target_id", target.ID, "err", dispatchErr)
+	}
 }
 
 func (s *Service) dispatchChanges(ctx context.Context, target *storage.ShopTarget, info *shopprovider.ShopInfo, changes []storage.ShopGoodsChangeLog) error {

@@ -328,7 +328,7 @@ func (r *AutoGroups) MarkCandidateProbeSuccess(policyID uint, groupName string, 
 	c.LastProbeSuccess = &probeOK
 	c.LastProbeLatencyMS = latencyMS
 	recovered := false
-	if c.SuccessCount >= threshold {
+	if !wasCircuit || c.SuccessCount >= threshold {
 		c.Status = "healthy"
 		c.Reason = "探测通过"
 		if wasCircuit {
