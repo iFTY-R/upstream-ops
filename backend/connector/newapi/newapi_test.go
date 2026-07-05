@@ -3,6 +3,7 @@ package newapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -435,6 +436,7 @@ func TestSearchAPIKeys(t *testing.T) {
 
 func TestCreateUpdateDeleteRevealAPIKey(t *testing.T) {
 	mux := http.NewServeMux()
+	tokenStatus := 1
 	mux.HandleFunc("/api/user/self/groups", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"default":{"ratio":1,"desc":"默认"}}}`))
 	})
@@ -463,7 +465,15 @@ func TestCreateUpdateDeleteRevealAPIKey(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode update: %v", err)
 			}
-			if body["id"] != float64(9) || body["status"] != float64(2) {
+			if r.URL.Query().Get("status_only") != "" {
+				if body["id"] != float64(9) || body["status"] != float64(2) {
+					t.Fatalf("status update body = %#v", body)
+				}
+				tokenStatus = 2
+				_, _ = w.Write([]byte(`{"success":true,"message":""}`))
+				return
+			}
+			if body["id"] != float64(9) || body["status"] != float64(2) || body["name"] != "main" || body["remain_quota"] != float64(1000) || body["expired_time"] != float64(-1) {
 				t.Fatalf("update body = %#v", body)
 			}
 			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"id":9,"status":2,"name":"main disabled"}}`))
@@ -472,10 +482,14 @@ func TestCreateUpdateDeleteRevealAPIKey(t *testing.T) {
 		}
 	})
 	mux.HandleFunc("/api/token/9", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete {
-			t.Fatalf("method = %s, want DELETE", r.Method)
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"success":true,"message":"","data":{"id":9,"status":%d,"name":"main","expired_time":-1,"remain_quota":1000,"unlimited_quota":false,"model_limits_enabled":true,"model_limits":"gpt-4o-mini","allow_ips":"1.1.1.1","group":"default","cross_group_retry":true}}`, tokenStatus)))
+		case http.MethodDelete:
+			_, _ = w.Write([]byte(`{"success":true,"message":""}`))
+		default:
+			t.Fatalf("method = %s, want GET or DELETE", r.Method)
 		}
-		_, _ = w.Write([]byte(`{"success":true,"message":""}`))
 	})
 	mux.HandleFunc("/api/token/9/key", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -516,6 +530,41 @@ func TestCreateUpdateDeleteRevealAPIKey(t *testing.T) {
 	}
 	if key != "sk-full" {
 		t.Fatalf("key = %q", key)
+	}
+}
+
+func TestCreateAPIKeyMapsQuotaToRemainQuotaForNewAPI(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/token/search", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"items":[{"id":15,"status":1,"name":"probe","remain_quota":500000}],"total":1,"page":1,"page_size":100,"pages":1}}`))
+	})
+	mux.HandleFunc("/api/token/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode create: %v", err)
+		}
+		if body["remain_quota"] != float64(500000) {
+			t.Fatalf("remain_quota = %#v, want 500000", body["remain_quota"])
+		}
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":null}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New()
+	quota := 500000.0
+	created, err := c.CreateAPIKey(context.Background(), &connector.Channel{SiteURL: srv.URL}, &connector.AuthSession{
+		Cookie: "session=1",
+		UserID: "7",
+	}, connector.APIKeyCreateRequest{Name: "probe", Quota: &quota})
+	if err != nil {
+		t.Fatalf("CreateAPIKey: %v", err)
+	}
+	if created.ID != 15 || created.Quota != 500000 {
+		t.Fatalf("created = %#v, want id 15 quota 500000", created)
 	}
 }
 

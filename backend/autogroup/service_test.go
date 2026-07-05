@@ -20,6 +20,7 @@ type fakeChannelService struct {
 	groups                 []connector.APIKeyGroup
 	created                []connector.APIKeyCreateRequest
 	updates                []connector.APIKeyUpdateRequest
+	updateKeyIDs           []int64
 	nextKeyID              int64
 	revealByID             map[int64]string
 	returnCreatedWithoutID bool
@@ -47,6 +48,14 @@ func (f *fakeChannelService) ListAPIKeyGroups(ctx context.Context, channelID uin
 func (f *fakeChannelService) CreateAPIKey(ctx context.Context, channelID uint, req connector.APIKeyCreateRequest) (*connector.APIKey, error) {
 	f.nextKeyID++
 	key := connector.APIKey{ID: f.nextKeyID, Name: req.Name, Status: "active", Group: req.Group, GroupName: req.Group, GroupID: req.GroupID}
+	if req.RemainQuota != nil {
+		key.Quota = float64(*req.RemainQuota)
+	} else if req.Quota != nil {
+		key.Quota = *req.Quota
+	}
+	if req.UnlimitedQuota != nil {
+		key.UnlimitedQuota = *req.UnlimitedQuota
+	}
 	if req.GroupID != nil {
 		for _, group := range f.groups {
 			if group.ID != nil && *group.ID == *req.GroupID {
@@ -72,9 +81,22 @@ func (f *fakeChannelService) CreateAPIKey(ctx context.Context, channelID uint, r
 
 func (f *fakeChannelService) UpdateAPIKey(ctx context.Context, channelID uint, keyID int64, req connector.APIKeyUpdateRequest) (*connector.APIKey, error) {
 	f.updates = append(f.updates, req)
+	f.updateKeyIDs = append(f.updateKeyIDs, keyID)
 	for i := range f.keys {
 		if f.keys[i].ID != keyID {
 			continue
+		}
+		if req.Status != nil {
+			f.keys[i].Status = *req.Status
+		}
+		if req.RemainQuota != nil {
+			f.keys[i].Quota = float64(*req.RemainQuota)
+		}
+		if req.Quota != nil {
+			f.keys[i].Quota = *req.Quota
+		}
+		if req.UnlimitedQuota != nil {
+			f.keys[i].UnlimitedQuota = *req.UnlimitedQuota
 		}
 		if req.Group != nil {
 			f.keys[i].Group = *req.Group
@@ -271,6 +293,51 @@ func TestEvaluatePolicyBackfillsProbeKeyIDAfterInvalidCreateResponse(t *testing.
 	}
 	if got.ProbeKeyID != 21 || got.ProbeKeyName != "ops-probe-auto" {
 		t.Fatalf("probe key not backfilled: %#v", got)
+	}
+}
+
+func TestEvaluatePolicyRecoversExhaustedNewAPIProbeKey(t *testing.T) {
+	db := openAutoGroupTestDB(t)
+	server := newProbeServer(t)
+	defer server.Close()
+
+	channels := storage.NewChannels(db)
+	ch := &storage.Channel{Name: "newapi", Type: storage.ChannelTypeNewAPI, SiteURL: server.URL, Username: "u", PasswordCipher: "x", MonitorEnabled: true}
+	if err := channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	fastID := int64(11)
+	fake := &fakeChannelService{
+		keys: []connector.APIKey{
+			{ID: 1, Name: "auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},
+			{ID: 2, Name: "ops-probe-auto", Status: "quota_exhausted", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04, Quota: 0},
+		},
+		groups:     []connector.APIKeyGroup{{ID: &fastID, Name: "fast", Ratio: 0.04}},
+		revealByID: map[int64]string{2: "sk-probe"},
+	}
+	repo := storage.NewAutoGroups(db)
+	rates := storage.NewRates(db)
+	if _, err := rates.Upsert(&storage.RateSnapshot{ChannelID: ch.ID, ModelName: "fast", Ratio: 0.04, LastSeenAt: time.Now()}); err != nil {
+		t.Fatalf("upsert rates: %v", err)
+	}
+	policy := &storage.AutoGroupPolicy{ChannelID: ch.ID, Name: "auto", Enabled: true, NotifyEnabled: false, TargetKeyName: "auto", ProbeKeyName: "ops-probe-auto", ProbeModel: "gpt-4o-mini", ProbeTimeoutSeconds: 3, FailureThreshold: 2, CircuitDurationMinutes: 30, HalfOpenSuccessThreshold: 1, KeepCurrentWhenNoAvailable: true, ForceSwitchOnCurrentUnhealthy: true}
+	if err := repo.CreatePolicy(policy); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+
+	svc := NewService(repo, channels, rates, fake, nil, nil)
+	if _, err := svc.EvaluatePolicy(context.Background(), policy.ID); err != nil {
+		t.Fatalf("evaluate policy: %v", err)
+	}
+	if len(fake.updates) < 2 {
+		t.Fatalf("updates = %d, want quota refill and status restore", len(fake.updates))
+	}
+	if fake.updateKeyIDs[0] != 2 || fake.updates[0].RemainQuota == nil || *fake.updates[0].RemainQuota != newAPIProbeRemainQuota {
+		t.Fatalf("first update = key %d %#v, want probe quota refill", fake.updateKeyIDs[0], fake.updates[0])
+	}
+	if fake.updateKeyIDs[1] != 2 || fake.updates[1].Status == nil || *fake.updates[1].Status != "active" {
+		t.Fatalf("second update = key %d %#v, want probe status active", fake.updateKeyIDs[1], fake.updates[1])
 	}
 }
 

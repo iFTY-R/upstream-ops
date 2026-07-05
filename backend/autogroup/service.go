@@ -37,6 +37,8 @@ type Service struct {
 	Log        *slog.Logger
 }
 
+const newAPIProbeRemainQuota = 500000
+
 func NewService(repo *storage.AutoGroups, channels *storage.Channels, rates *storage.Rates, channelSvc ChannelService, dispatcher *notify.Dispatcher, log *slog.Logger) *Service {
 	return &Service{
 		Repo:       repo,
@@ -471,7 +473,7 @@ func (s *Service) EvaluatePolicy(ctx context.Context, policyID uint) (*Evaluatio
 	}
 	result.TargetKey = target
 
-	probe, err := s.ensureProbeKey(ctx, p)
+	probe, err := s.ensureProbeKey(ctx, p, ch)
 	if err != nil {
 		return s.failEvaluation(ctx, result, p, ch, "probe_failed", err, storage.EventAutoGroupProbeFailed)
 	}
@@ -643,7 +645,7 @@ func (s *Service) ProbeCandidate(ctx context.Context, policyID, candidateID uint
 	if stored.ManualDisabled {
 		return nil, fmt.Errorf("候选分组已手动停用，请先恢复后再探测")
 	}
-	probe, err := s.ensureProbeKey(ctx, p)
+	probe, err := s.ensureProbeKey(ctx, p, ch)
 	if err != nil {
 		return nil, err
 	}
@@ -933,7 +935,7 @@ func (s *Service) createTargetKey(ctx context.Context, p *storage.AutoGroupPolic
 	return created, nil
 }
 
-func (s *Service) ensureProbeKey(ctx context.Context, p *storage.AutoGroupPolicy) (*probeKey, error) {
+func (s *Service) ensureProbeKey(ctx context.Context, p *storage.AutoGroupPolicy, ch *storage.Channel) (*probeKey, error) {
 	name := emptyAs(strings.TrimSpace(p.ProbeKeyName), "ops-probe-auto")
 	var key *connector.APIKey
 	if p.ProbeKeyID > 0 {
@@ -953,6 +955,7 @@ func (s *Service) ensureProbeKey(ctx context.Context, p *storage.AutoGroupPolicy
 	if key == nil {
 		unlimited := false
 		quota := 10.0
+		remainQuota := newAPIProbeRemainQuota
 		limitEnabled := true
 		req := connector.APIKeyCreateRequest{
 			Name:               name,
@@ -960,6 +963,10 @@ func (s *Service) ensureProbeKey(ctx context.Context, p *storage.AutoGroupPolicy
 			UnlimitedQuota:     &unlimited,
 			ModelLimitsEnabled: &limitEnabled,
 			ModelLimits:        emptyAs(strings.TrimSpace(p.ProbeModel), "gpt-4o-mini"),
+		}
+		if ch != nil && ch.Type == storage.ChannelTypeNewAPI {
+			req.RemainQuota = &remainQuota
+			req.Quota = nil
 		}
 		if groups, err := s.ChannelSvc.ListAPIKeyGroups(ctx, p.ChannelID); err == nil && len(groups) > 0 {
 			sort.SliceStable(groups, func(i, j int) bool {
@@ -992,6 +999,15 @@ func (s *Service) ensureProbeKey(ctx context.Context, p *storage.AutoGroupPolicy
 	if key.ID <= 0 {
 		return nil, fmt.Errorf("探测 API Key %s 缺少有效 ID", name)
 	}
+	if ch != nil && ch.Type == storage.ChannelTypeNewAPI {
+		refreshed, err := s.ensureNewAPIProbeKeyUsable(ctx, p, key)
+		if err != nil {
+			return nil, err
+		}
+		if refreshed != nil {
+			key = refreshed
+		}
+	}
 	if p.ProbeKeyID != key.ID || p.ProbeKeyName != key.Name {
 		p.ProbeKeyID = key.ID
 		p.ProbeKeyName = emptyAs(key.Name, name)
@@ -1005,6 +1021,34 @@ func (s *Service) ensureProbeKey(ctx context.Context, p *storage.AutoGroupPolicy
 		return nil, fmt.Errorf("探测 API Key %s 明文为空", name)
 	}
 	return &probeKey{ID: key.ID, Name: emptyAs(key.Name, name), Value: strings.TrimSpace(raw)}, nil
+}
+
+func (s *Service) ensureNewAPIProbeKeyUsable(ctx context.Context, p *storage.AutoGroupPolicy, key *connector.APIKey) (*connector.APIKey, error) {
+	if key == nil || key.ID <= 0 {
+		return key, nil
+	}
+	current := key
+	if !current.UnlimitedQuota && current.Quota < newAPIProbeRemainQuota {
+		quota := newAPIProbeRemainQuota
+		updated, err := s.ChannelSvc.UpdateAPIKey(ctx, p.ChannelID, current.ID, connector.APIKeyUpdateRequest{RemainQuota: &quota})
+		if err != nil {
+			return nil, fmt.Errorf("补充探测 API Key %s 额度失败：%w", emptyAs(current.Name, p.ProbeKeyName), err)
+		}
+		if updated != nil {
+			current = updated
+		}
+	}
+	if current.Status == "quota_exhausted" || current.Status == "disabled" || current.Status == "unknown" {
+		status := "active"
+		updated, err := s.ChannelSvc.UpdateAPIKey(ctx, p.ChannelID, current.ID, connector.APIKeyUpdateRequest{Status: &status})
+		if err != nil {
+			return nil, fmt.Errorf("启用探测 API Key %s 失败：%w", emptyAs(current.Name, p.ProbeKeyName), err)
+		}
+		if updated != nil {
+			current = updated
+		}
+	}
+	return current, nil
 }
 
 func (s *Service) findAPIKeyByName(ctx context.Context, channelID uint, name string) (*connector.APIKey, error) {

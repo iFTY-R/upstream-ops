@@ -630,7 +630,11 @@ func (c *Client) UpdateAPIKey(ctx context.Context, ch *connector.Channel, sessio
 	if id <= 0 {
 		return nil, errors.New("密钥 ID 无效")
 	}
-	body := buildNewAPIUpdateToken(id, req)
+	current, err := c.getAPIKeyByID(ctx, ch, session, id)
+	if err != nil {
+		return nil, fmt.Errorf("newapi get api key before update: %w", err)
+	}
+	body := buildNewAPIUpdateToken(id, current, req)
 	restyReq := c.http.R().
 		SetContext(ctx).
 		SetHeader("Content-Type", "application/json").
@@ -647,6 +651,29 @@ func (c *Client) UpdateAPIKey(ctx context.Context, ch *connector.Channel, sessio
 	if err != nil {
 		return nil, err
 	}
+	if req.Status != nil {
+		statusReq := c.http.R().
+			SetContext(ctx).
+			SetHeader("Content-Type", "application/json").
+			SetBody(map[string]any{
+				"id":     int(id),
+				"status": newAPITokenStatusFromString(*req.Status),
+			})
+		applyNewAPIAuth(statusReq, session)
+		statusResp, err := statusReq.Put(strings.TrimRight(ch.SiteURL, "/") + "/api/token/?status_only=1")
+		if err != nil {
+			return nil, fmt.Errorf("newapi update api key status http: %w", err)
+		}
+		if statusResp.IsError() {
+			return nil, fmt.Errorf("newapi update api key status: %w", connector.HTTPStatusError(statusResp.StatusCode(), statusResp.Body()))
+		}
+		if _, err := decodeNewAPIWriteData(statusResp.Body(), "newapi update api key status"); err != nil {
+			return nil, err
+		}
+	}
+	if refreshed, err := c.getAPIKeyByID(ctx, ch, session, id); err == nil && refreshed != nil {
+		return refreshed, nil
+	}
 	var token newAPIToken
 	if len(data) > 0 && string(data) != "null" {
 		_ = json.Unmarshal(data, &token)
@@ -661,6 +688,29 @@ func (c *Client) UpdateAPIKey(ctx context.Context, ch *connector.Channel, sessio
 		}
 	}
 	out := token.toConnector()
+	return &out, nil
+}
+
+func (c *Client) getAPIKeyByID(ctx context.Context, ch *connector.Channel, session *connector.AuthSession, id int64) (*connector.APIKey, error) {
+	body, err := c.getJSON(ctx, strings.TrimRight(ch.SiteURL, "/")+"/api/token/"+strconv.FormatInt(id, 10), session)
+	if err != nil {
+		return nil, err
+	}
+	var token newAPIToken
+	if err := json.Unmarshal(body, &token); err != nil {
+		return nil, fmt.Errorf("newapi api key decode: %w", err)
+	}
+	if token.ID <= 0 {
+		return nil, fmt.Errorf("newapi api key %d not found", id)
+	}
+	out := token.toConnector()
+	if groups, err := c.newAPIGroupMap(ctx, ch, session); err == nil {
+		if g, ok := groups[out.Group]; ok {
+			out.GroupName = g.Name
+			out.GroupDescription = g.Description
+			out.GroupRatio = g.Ratio
+		}
+	}
 	return &out, nil
 }
 
@@ -1160,10 +1210,14 @@ func (t newAPIToken) toConnector() connector.APIKey {
 }
 
 func buildNewAPICreateToken(req connector.APIKeyCreateRequest) map[string]any {
+	remainQuota := valueOr(req.RemainQuota, 0)
+	if req.RemainQuota == nil && req.Quota != nil {
+		remainQuota = int(*req.Quota)
+	}
 	body := map[string]any{
 		"name":                 strings.TrimSpace(req.Name),
 		"expired_time":         valueOr(req.ExpiredTime, int64(-1)),
-		"remain_quota":         valueOr(req.RemainQuota, 0),
+		"remain_quota":         remainQuota,
 		"unlimited_quota":      valueOr(req.UnlimitedQuota, false),
 		"model_limits_enabled": valueOr(req.ModelLimitsEnabled, false),
 		"model_limits":         req.ModelLimits,
@@ -1177,37 +1231,73 @@ func buildNewAPICreateToken(req connector.APIKeyCreateRequest) map[string]any {
 	return body
 }
 
-func buildNewAPIUpdateToken(id int64, req connector.APIKeyUpdateRequest) map[string]any {
-	body := map[string]any{"id": int(id)}
+func buildNewAPIUpdateToken(id int64, current *connector.APIKey, req connector.APIKeyUpdateRequest) map[string]any {
+	name := ""
+	status := "active"
+	group := ""
+	remainQuota := 0
+	unlimitedQuota := false
+	expiredTime := int64(-1)
+	modelLimitsEnabled := false
+	modelLimits := ""
+	allowIPs := ""
+	crossGroupRetry := false
+	if current != nil {
+		name = current.Name
+		status = current.Status
+		group = current.Group
+		remainQuota = int(current.Quota)
+		unlimitedQuota = current.UnlimitedQuota
+		expiredTime = current.ExpiredTime
+		modelLimitsEnabled = current.ModelLimitsEnabled
+		modelLimits = current.ModelLimits
+		allowIPs = current.AllowIPs
+		crossGroupRetry = current.CrossGroupRetry
+	}
 	if req.Name != nil {
-		body["name"] = strings.TrimSpace(*req.Name)
+		name = strings.TrimSpace(*req.Name)
 	}
 	if req.Status != nil {
-		body["status"] = newAPITokenStatusFromString(*req.Status)
+		status = *req.Status
 	}
 	if req.Group != nil {
-		body["group"] = strings.TrimSpace(*req.Group)
+		group = strings.TrimSpace(*req.Group)
 	}
 	if req.RemainQuota != nil {
-		body["remain_quota"] = *req.RemainQuota
+		remainQuota = *req.RemainQuota
+	} else if req.Quota != nil {
+		remainQuota = int(*req.Quota)
 	}
 	if req.UnlimitedQuota != nil {
-		body["unlimited_quota"] = *req.UnlimitedQuota
+		unlimitedQuota = *req.UnlimitedQuota
 	}
 	if req.ExpiredTime != nil {
-		body["expired_time"] = *req.ExpiredTime
+		expiredTime = *req.ExpiredTime
 	}
 	if req.ModelLimitsEnabled != nil {
-		body["model_limits_enabled"] = *req.ModelLimitsEnabled
+		modelLimitsEnabled = *req.ModelLimitsEnabled
 	}
 	if req.ModelLimits != nil {
-		body["model_limits"] = *req.ModelLimits
+		modelLimits = *req.ModelLimits
 	}
 	if req.AllowIPs != nil {
-		body["allow_ips"] = *req.AllowIPs
+		allowIPs = *req.AllowIPs
 	}
 	if req.CrossGroupRetry != nil {
-		body["cross_group_retry"] = *req.CrossGroupRetry
+		crossGroupRetry = *req.CrossGroupRetry
+	}
+	body := map[string]any{
+		"id":                   int(id),
+		"name":                 strings.TrimSpace(name),
+		"status":               newAPITokenStatusFromString(status),
+		"expired_time":         expiredTime,
+		"remain_quota":         remainQuota,
+		"unlimited_quota":      unlimitedQuota,
+		"model_limits_enabled": modelLimitsEnabled,
+		"model_limits":         modelLimits,
+		"allow_ips":            allowIPs,
+		"group":                group,
+		"cross_group_retry":    crossGroupRetry,
 	}
 	return body
 }
