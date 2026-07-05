@@ -714,6 +714,9 @@ export interface AutoGroupPolicy {
   probe_key_name: string
   probe_model: string
   probe_timeout_seconds: number
+  probe_success_cache_minutes: number
+  probe_failure_retry_minutes: number
+  probe_max_per_run: number
   include_groups_json: string
   exclude_groups_json: string
   include_keywords_json: string
@@ -844,6 +847,9 @@ export interface AutoGroupPolicyInput {
   probe_key_name: string
   probe_model: string
   probe_timeout_seconds: number
+  probe_success_cache_minutes: number
+  probe_failure_retry_minutes: number
+  probe_max_per_run: number
   include_groups: string[]
   exclude_groups: string[]
   include_keywords: string[]

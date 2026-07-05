@@ -177,6 +177,150 @@ func TestEvaluatePolicyCreatesMissingTargetAutoKey(t *testing.T) {
 	}
 }
 
+func TestEvaluatePolicyBackfillsCurrentGroupNameFromGroupID(t *testing.T) {
+	db := openAutoGroupTestDB(t)
+	server := newProbeServer(t)
+	defer server.Close()
+
+	channels := storage.NewChannels(db)
+	ch := &storage.Channel{Name: "sub", Type: storage.ChannelTypeSub2API, SiteURL: server.URL, Username: "u", PasswordCipher: "x", MonitorEnabled: true}
+	if err := channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	fastID := int64(11)
+	fake := &fakeChannelService{
+		keys: []connector.APIKey{
+			{ID: 1, Name: "auto", Status: "active", GroupID: &fastID, GroupRatio: 0.04},
+			{ID: 2, Name: "ops-probe-auto", Status: "active", GroupID: &fastID, GroupRatio: 0.04},
+		},
+		groups:     []connector.APIKeyGroup{{ID: &fastID, Name: "fast", Ratio: 0.04}},
+		revealByID: map[int64]string{2: "sk-probe"},
+	}
+	repo := storage.NewAutoGroups(db)
+	rates := storage.NewRates(db)
+	if _, err := rates.Upsert(&storage.RateSnapshot{ChannelID: ch.ID, ModelName: "fast", Ratio: 0.04, LastSeenAt: time.Now()}); err != nil {
+		t.Fatalf("upsert rates: %v", err)
+	}
+	policy := &storage.AutoGroupPolicy{ChannelID: ch.ID, Name: "auto", Enabled: true, NotifyEnabled: false, TargetKeyName: "auto", ProbeKeyName: "ops-probe-auto", ProbeModel: "gpt-4o-mini", ProbeTimeoutSeconds: 3, FailureThreshold: 2, CircuitDurationMinutes: 30, HalfOpenSuccessThreshold: 1, KeepCurrentWhenNoAvailable: true, ForceSwitchOnCurrentUnhealthy: true}
+	if err := repo.CreatePolicy(policy); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+
+	svc := NewService(repo, channels, rates, fake, nil, nil)
+	res, err := svc.EvaluatePolicy(context.Background(), policy.ID)
+	if err != nil {
+		t.Fatalf("evaluate policy: %v", err)
+	}
+	if res.EvaluationLog.CurrentGroup != "fast" {
+		t.Fatalf("log current group = %q, want fast", res.EvaluationLog.CurrentGroup)
+	}
+	got, err := repo.FindPolicy(policy.ID)
+	if err != nil {
+		t.Fatalf("find policy: %v", err)
+	}
+	if got.CurrentGroupName != "fast" || got.CurrentGroupID == nil || *got.CurrentGroupID != fastID || got.CurrentRatio != 0.04 {
+		t.Fatalf("current group not backfilled: %#v", got)
+	}
+}
+
+func TestEvaluatePolicyUsesProbeSuccessCache(t *testing.T) {
+	db := openAutoGroupTestDB(t)
+	server := newProbeServer(t)
+	defer server.Close()
+
+	channels := storage.NewChannels(db)
+	ch := &storage.Channel{Name: "sub", Type: storage.ChannelTypeSub2API, SiteURL: server.URL, Username: "u", PasswordCipher: "x", MonitorEnabled: true}
+	if err := channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	fastID := int64(1)
+	fake := &fakeChannelService{
+		keys: []connector.APIKey{
+			{ID: 1, Name: "auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},
+			{ID: 2, Name: "ops-probe-auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},
+		},
+		groups:     []connector.APIKeyGroup{{ID: &fastID, Name: "fast", Ratio: 0.04}},
+		revealByID: map[int64]string{2: "sk-probe"},
+	}
+	repo := storage.NewAutoGroups(db)
+	rates := storage.NewRates(db)
+	if _, err := rates.Upsert(&storage.RateSnapshot{ChannelID: ch.ID, ModelName: "fast", Ratio: 0.04, LastSeenAt: time.Now()}); err != nil {
+		t.Fatalf("upsert rates: %v", err)
+	}
+	policy := &storage.AutoGroupPolicy{ChannelID: ch.ID, Name: "auto", Enabled: true, NotifyEnabled: false, TargetKeyName: "auto", ProbeKeyName: "ops-probe-auto", ProbeModel: "gpt-4o-mini", ProbeTimeoutSeconds: 3, ProbeSuccessCacheMinutes: 60, ProbeFailureRetryMinutes: 10, ProbeMaxPerRun: 3, FailureThreshold: 2, CircuitDurationMinutes: 30, HalfOpenSuccessThreshold: 1, KeepCurrentWhenNoAvailable: true, ForceSwitchOnCurrentUnhealthy: true}
+	if err := repo.CreatePolicy(policy); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	probeOK := true
+	lastProbe := time.Now().Add(-5 * time.Minute)
+	if err := repo.UpsertCandidate(&storage.AutoGroupCandidate{PolicyID: policy.ID, GroupName: "fast", GroupID: &fastID, Ratio: 0.04, Status: "healthy", LastProbeAt: &lastProbe, LastProbeSuccess: &probeOK}); err != nil {
+		t.Fatalf("upsert cached candidate: %v", err)
+	}
+
+	svc := NewService(repo, channels, rates, fake, nil, nil)
+	if _, err := svc.EvaluatePolicy(context.Background(), policy.ID); err != nil {
+		t.Fatalf("evaluate policy: %v", err)
+	}
+	if len(fake.updates) != 0 {
+		t.Fatalf("updates = %d, want no probe key move when cache is valid", len(fake.updates))
+	}
+}
+
+func TestEvaluatePolicyHonorsProbeBudget(t *testing.T) {
+	db := openAutoGroupTestDB(t)
+	server := newProbeServer(t)
+	defer server.Close()
+
+	channels := storage.NewChannels(db)
+	ch := &storage.Channel{Name: "sub", Type: storage.ChannelTypeSub2API, SiteURL: server.URL, Username: "u", PasswordCipher: "x", MonitorEnabled: true}
+	if err := channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	fastID := int64(1)
+	slowID := int64(2)
+	fake := &fakeChannelService{
+		keys: []connector.APIKey{
+			{ID: 1, Name: "auto", Status: "active", GroupName: "slow", GroupID: &slowID, GroupRatio: 1},
+			{ID: 2, Name: "ops-probe-auto", Status: "active", GroupName: "slow", GroupID: &slowID, GroupRatio: 1},
+		},
+		groups:     []connector.APIKeyGroup{{ID: &fastID, Name: "fast", Ratio: 0.04}, {ID: &slowID, Name: "slow", Ratio: 1}},
+		revealByID: map[int64]string{2: "sk-probe"},
+	}
+	repo := storage.NewAutoGroups(db)
+	rates := storage.NewRates(db)
+	for _, snapshot := range []storage.RateSnapshot{
+		{ChannelID: ch.ID, ModelName: "fast", Ratio: 0.04, LastSeenAt: time.Now()},
+		{ChannelID: ch.ID, ModelName: "slow", Ratio: 1, LastSeenAt: time.Now()},
+	} {
+		snapshot := snapshot
+		if _, err := rates.Upsert(&snapshot); err != nil {
+			t.Fatalf("upsert rates: %v", err)
+		}
+	}
+	policy := &storage.AutoGroupPolicy{ChannelID: ch.ID, Name: "auto", Enabled: true, NotifyEnabled: false, TargetKeyName: "auto", ProbeKeyName: "ops-probe-auto", ProbeModel: "gpt-4o-mini", ProbeTimeoutSeconds: 3, ProbeSuccessCacheMinutes: 60, ProbeFailureRetryMinutes: 10, ProbeMaxPerRun: 1, FailureThreshold: 2, CircuitDurationMinutes: 30, HalfOpenSuccessThreshold: 1, KeepCurrentWhenNoAvailable: true, ForceSwitchOnCurrentUnhealthy: true}
+	if err := repo.CreatePolicy(policy); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+
+	svc := NewService(repo, channels, rates, fake, nil, nil)
+	if _, err := svc.EvaluatePolicy(context.Background(), policy.ID); err != nil {
+		t.Fatalf("evaluate policy: %v", err)
+	}
+	if len(fake.updates) != 1 {
+		t.Fatalf("updates = %d, want only one probe key move", len(fake.updates))
+	}
+	fast, err := repo.FindCandidate(policy.ID, "fast")
+	if err != nil {
+		t.Fatalf("find fast candidate: %v", err)
+	}
+	if fast == nil || fast.Status != "unknown" {
+		t.Fatalf("fast candidate = %#v, want skipped by budget", fast)
+	}
+}
+
 func TestManualDisabledCandidateIsExcludedFromSelection(t *testing.T) {
 	db := openAutoGroupTestDB(t)
 	server := newProbeServer(t)

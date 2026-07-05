@@ -67,6 +67,9 @@ interface FormState {
   probe_key_name: string
   probe_model: string
   probe_timeout_seconds: string
+  probe_success_cache_minutes: string
+  probe_failure_retry_minutes: string
+  probe_max_per_run: string
   include_groups: string[]
   exclude_groups: string[]
   include_keywords: string
@@ -118,6 +121,9 @@ function emptyForm(channelID = ""): FormState {
     probe_key_name: "ops-probe-auto",
     probe_model: "gpt-4o-mini",
     probe_timeout_seconds: "15",
+    probe_success_cache_minutes: "60",
+    probe_failure_retry_minutes: "10",
+    probe_max_per_run: "3",
     include_groups: [],
     exclude_groups: [],
     include_keywords: "",
@@ -147,6 +153,9 @@ function formFromPolicy(p: AutoGroupPolicyView): FormState {
     probe_key_name: p.probe_key_name || "ops-probe-auto",
     probe_model: p.probe_model || "gpt-4o-mini",
     probe_timeout_seconds: String(p.probe_timeout_seconds || 15),
+    probe_success_cache_minutes: String(p.probe_success_cache_minutes || 60),
+    probe_failure_retry_minutes: String(p.probe_failure_retry_minutes || 10),
+    probe_max_per_run: String(p.probe_max_per_run || 3),
     include_groups: parseJSONList(p.include_groups_json),
     exclude_groups: parseJSONList(p.exclude_groups_json),
     include_keywords: parseJSONList(p.include_keywords_json).join(", "),
@@ -601,6 +610,18 @@ export default function AutoGroupsPage() {
                     <Field label="半开成功次数">
                       <Input value={form.half_open_success_threshold} onChange={(e) => patchForm({ half_open_success_threshold: e.target.value })} />
                     </Field>
+                    <Field label="成功缓存(分钟)">
+                      <Input value={form.probe_success_cache_minutes} onChange={(e) => patchForm({ probe_success_cache_minutes: e.target.value })} />
+                    </Field>
+                    <Field label="失败重试(分钟)">
+                      <Input value={form.probe_failure_retry_minutes} onChange={(e) => patchForm({ probe_failure_retry_minutes: e.target.value })} />
+                    </Field>
+                    <Field label="单轮最多探测">
+                      <Input value={form.probe_max_per_run} onChange={(e) => patchForm({ probe_max_per_run: e.target.value })} />
+                    </Field>
+                    <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs leading-5 text-muted-foreground">
+                      {"成功缓存内不会重复发起真实请求；切换前会复用本轮刚成功的探测，否则会再次校验目标分组。"}
+                    </div>
                   </div>
                 ) : null}
 
@@ -1061,6 +1082,7 @@ function DecisionPanel({ policy, candidates }: { policy: AutoGroupPolicyView | n
   const healthy = candidates.filter((c) => c.status === "healthy")
   const best = healthy.slice().sort((a, b) => (a.ratio === b.ratio ? a.group_name.localeCompare(b.group_name, "zh-CN") : a.ratio - b.ratio))[0]
   const excluded = candidates.filter((c) => c.status !== "healthy").slice(0, 4)
+  const currentGroupName = resolveCurrentGroupName(policy, candidates)
   return (
     <Card className="border border-border shadow-none xl:col-span-2">
       <CardHeader className="pb-2">
@@ -1074,7 +1096,7 @@ function DecisionPanel({ policy, candidates }: { policy: AutoGroupPolicyView | n
           <p className="text-[11px] text-muted-foreground">{"目标 Key"}</p>
           <p className="mt-1 text-sm font-medium">{policy?.target_key_name || "auto"}</p>
           <p className="mt-2 text-[11px] text-muted-foreground">{"当前分组"}</p>
-          <p className="mt-1 text-sm font-medium">{policy?.current_group_name || "—"}</p>
+          <p className="mt-1 text-sm font-medium">{currentGroupName || "—"}</p>
           <p className="mt-2 text-[11px] text-muted-foreground">{"当前倍率"}</p>
           <p className="mt-1 text-sm font-medium">{formatRatio(policy?.current_ratio ?? 0)}</p>
         </div>
@@ -1083,7 +1105,7 @@ function DecisionPanel({ policy, candidates }: { policy: AutoGroupPolicyView | n
             <div className="rounded-lg border border-success/30 bg-success/5 px-3 py-2">
               <p className="font-medium text-success">{"当前最优候选：" + best.group_name}</p>
               <p className="mt-1 text-muted-foreground">
-                {`探测可用，倍率 ${formatRatio(best.ratio)}，在当前健康候选中最低。${policy?.current_group_name === best.group_name ? "目标 Key 已在该分组。" : "下次评估满足冷却和收益阈值后会切换。"}`}
+                {`探测可用，倍率 ${formatRatio(best.ratio)}，在当前健康候选中最低。${currentGroupName === best.group_name ? "目标 Key 已在该分组。" : "下次评估满足冷却和收益阈值后会切换。"}`}
               </p>
             </div>
           ) : (
@@ -1108,6 +1130,13 @@ function DecisionPanel({ policy, candidates }: { policy: AutoGroupPolicyView | n
       </CardContent>
     </Card>
   )
+}
+
+function resolveCurrentGroupName(policy: AutoGroupPolicyView | null, candidates: AutoGroupCandidate[]) {
+  const direct = policy?.current_group_name?.trim()
+  if (direct) return direct
+  if (!policy?.current_group_id) return ""
+  return candidates.find((c) => c.group_id === policy.current_group_id)?.group_name ?? ""
 }
 
 function CandidatesPanel({
@@ -1346,6 +1375,9 @@ function buildInput(form: FormState): AutoGroupPolicyInput {
     probe_key_name: form.probe_key_name.trim() || "ops-probe-auto",
     probe_model: form.probe_model.trim() || "gpt-4o-mini",
     probe_timeout_seconds: Math.max(1, numberOrZero(form.probe_timeout_seconds) || 15),
+    probe_success_cache_minutes: Math.max(1, numberOrZero(form.probe_success_cache_minutes) || 60),
+    probe_failure_retry_minutes: Math.max(1, numberOrZero(form.probe_failure_retry_minutes) || 10),
+    probe_max_per_run: Math.max(1, numberOrZero(form.probe_max_per_run) || 3),
     include_groups: form.include_groups,
     exclude_groups: form.exclude_groups,
     include_keywords: splitList(form.include_keywords),

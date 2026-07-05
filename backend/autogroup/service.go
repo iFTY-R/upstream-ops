@@ -59,6 +59,9 @@ type PolicyInput struct {
 	ProbeKeyName                  string   `json:"probe_key_name"`
 	ProbeModel                    string   `json:"probe_model"`
 	ProbeTimeoutSeconds           int      `json:"probe_timeout_seconds"`
+	ProbeSuccessCacheMinutes      int      `json:"probe_success_cache_minutes"`
+	ProbeFailureRetryMinutes      int      `json:"probe_failure_retry_minutes"`
+	ProbeMaxPerRun                int      `json:"probe_max_per_run"`
 	IncludeGroups                 []string `json:"include_groups"`
 	ExcludeGroups                 []string `json:"exclude_groups"`
 	IncludeKeywords               []string `json:"include_keywords"`
@@ -466,7 +469,7 @@ func (s *Service) EvaluatePolicy(ctx context.Context, policyID uint) (*Evaluatio
 		return s.failEvaluation(ctx, result, p, ch, "probe_failed", err, storage.EventAutoGroupProbeFailed)
 	}
 
-	candidates, err := s.evaluateCandidates(ctx, p, ch, probe)
+	candidates, err := s.evaluateCandidates(ctx, p, ch, probe, target)
 	if err != nil {
 		return s.failEvaluation(ctx, result, p, ch, "failed", err, storage.EventAutoGroupPolicyError)
 	}
@@ -474,13 +477,16 @@ func (s *Service) EvaluatePolicy(ctx context.Context, policyID uint) (*Evaluatio
 	healthy := healthyCandidates(candidates)
 	availableCount := len(healthy)
 	circuitCount := countCandidatesByStatus(candidates, "circuit_open")
+	currentGroup := currentKeyGroup(target)
+	current := findCandidateByGroup(candidates, target, currentGroup)
 	if len(healthy) == 0 {
 		msg := "没有匹配且可用的候选分组"
 		if p.KeepCurrentWhenNoAvailable {
 			msg += "，保持当前目标 key 分组不变"
 		}
-		log := s.buildEvalLog(p, target, nil, false, "unavailable", "all_unavailable", msg, len(candidates), availableCount, circuitCount, 0)
-		_ = s.updatePolicyStatus(p, "unavailable", msg, nil, 0, nil, &now)
+		targetForStatus := keyWithCandidateGroup(target, current)
+		log := s.buildEvalLog(p, targetForStatus, nil, false, "unavailable", "all_unavailable", msg, len(candidates), availableCount, circuitCount, 0)
+		_ = s.updatePolicyStatus(p, "unavailable", msg, targetForStatus, currentRatio(current, target), nil, &now)
 		_ = s.Repo.AppendEvaluationLog(log)
 		result.Policy = *p
 		result.EvaluationLog = *log
@@ -490,13 +496,12 @@ func (s *Service) EvaluatePolicy(ctx context.Context, policyID uint) (*Evaluatio
 
 	selected := healthy[0]
 	result.Selected = &selected
-	currentGroup := currentKeyGroup(target)
-	current := findCandidateByGroup(candidates, target, currentGroup)
 	currentHealthy := current != nil && current.Status == "healthy"
 	if sameGroup(target, selected) {
 		msg := "当前目标 key 已在最优分组"
-		log := s.buildEvalLog(p, target, &selected, true, "ok", "keep_current", msg, len(candidates), availableCount, circuitCount, selected.Ratio)
-		_ = s.updatePolicyStatus(p, "ok", "", target, selected.Ratio, nil, &now)
+		targetForStatus := keyWithCandidateGroup(target, &selected)
+		log := s.buildEvalLog(p, targetForStatus, &selected, true, "ok", "keep_current", msg, len(candidates), availableCount, circuitCount, selected.Ratio)
+		_ = s.updatePolicyStatus(p, "ok", "", targetForStatus, selected.Ratio, nil, &now)
 		_ = s.Repo.AppendEvaluationLog(log)
 		result.Policy = *p
 		result.EvaluationLog = *log
@@ -508,8 +513,9 @@ func (s *Service) EvaluatePolicy(ctx context.Context, policyID uint) (*Evaluatio
 		minImprovement := p.MinRatioImprovementPct
 		if minImprovement > 0 && improvement < minImprovement {
 			msg := fmt.Sprintf("当前分组可用，切换到 %s 的倍率收益 %.2f%% 低于阈值 %.2f%%，保持不变", selected.GroupName, improvement, minImprovement)
-			log := s.buildEvalLog(p, target, &selected, true, "kept", "min_improvement_not_met", msg, len(candidates), availableCount, circuitCount, selected.Ratio)
-			_ = s.updatePolicyStatus(p, "kept", "", target, current.Ratio, nil, &now)
+			targetForStatus := keyWithCandidateGroup(target, current)
+			log := s.buildEvalLog(p, targetForStatus, &selected, true, "kept", "min_improvement_not_met", msg, len(candidates), availableCount, circuitCount, selected.Ratio)
+			_ = s.updatePolicyStatus(p, "kept", "", targetForStatus, current.Ratio, nil, &now)
 			_ = s.Repo.AppendEvaluationLog(log)
 			result.Policy = *p
 			result.EvaluationLog = *log
@@ -520,8 +526,9 @@ func (s *Service) EvaluatePolicy(ctx context.Context, policyID uint) (*Evaluatio
 	if !shouldIgnoreSwitchCooldown(p, currentHealthy) {
 		if remaining := switchCooldownRemaining(p, now); remaining > 0 {
 			msg := fmt.Sprintf("切换冷却中，剩余约 %s，保持当前分组", formatDurationCN(remaining))
-			log := s.buildEvalLog(p, target, &selected, true, "cooldown", "switch_cooldown", msg, len(candidates), availableCount, circuitCount, selected.Ratio)
-			_ = s.updatePolicyStatus(p, "cooldown", "", target, currentRatio(current, target), nil, &now)
+			targetForStatus := keyWithCandidateGroup(target, current)
+			log := s.buildEvalLog(p, targetForStatus, &selected, true, "cooldown", "switch_cooldown", msg, len(candidates), availableCount, circuitCount, selected.Ratio)
+			_ = s.updatePolicyStatus(p, "cooldown", "", targetForStatus, currentRatio(current, target), nil, &now)
 			_ = s.Repo.AppendEvaluationLog(log)
 			result.Policy = *p
 			result.EvaluationLog = *log
@@ -529,13 +536,28 @@ func (s *Service) EvaluatePolicy(ctx context.Context, policyID uint) (*Evaluatio
 		}
 	}
 
+	selected = s.ensureSwitchProbe(ctx, p, ch, probe, selected, now)
+	result.Selected = &selected
+	if selected.Status != "healthy" {
+		msg := fmt.Sprintf("切换前探测 %s 未通过：%s", selected.GroupName, emptyAs(selected.LastError, selected.Reason))
+		targetForStatus := keyWithCandidateGroup(target, current)
+		log := s.buildEvalLog(p, targetForStatus, &selected, false, "probe_failed", "pre_switch_probe_failed", msg, len(candidates), availableCount, circuitCount, selected.Ratio)
+		_ = s.updatePolicyStatus(p, "probe_failed", msg, targetForStatus, currentRatio(current, target), nil, &now)
+		_ = s.Repo.AppendEvaluationLog(log)
+		result.Policy = *p
+		result.EvaluationLog = *log
+		s.dispatch(ctx, p, ch, storage.EventAutoGroupProbeFailed, selected.GroupName, "智能分组切换前探测失败", msg, map[string]any{"group": selected.GroupName})
+		return result, nil
+	}
+
 	updated, switchLog, err := s.switchTargetKey(ctx, p, ch, target, selected, currentGroup)
 	result.SwitchLog = switchLog
 	if err != nil {
 		_ = s.Repo.MarkCandidateFailure(p.ID, selected.GroupName, p.FailureThreshold, circuitDuration(p), err.Error())
 		msg := fmt.Sprintf("切换到 %s 失败：%v", selected.GroupName, err)
-		log := s.buildEvalLog(p, target, &selected, false, "failed", "target_update_failed", msg, len(candidates), availableCount, circuitCount, selected.Ratio)
-		_ = s.updatePolicyStatus(p, "failed", msg, target, selected.Ratio, nil, &now)
+		targetForStatus := keyWithCandidateGroup(target, current)
+		log := s.buildEvalLog(p, targetForStatus, &selected, false, "failed", "target_update_failed", msg, len(candidates), availableCount, circuitCount, selected.Ratio)
+		_ = s.updatePolicyStatus(p, "failed", msg, targetForStatus, currentRatio(current, target), nil, &now)
 		_ = s.Repo.AppendEvaluationLog(log)
 		result.Policy = *p
 		result.EvaluationLog = *log
@@ -547,6 +569,7 @@ func (s *Service) EvaluatePolicy(ctx context.Context, policyID uint) (*Evaluatio
 	}
 
 	_ = s.Repo.ResetCandidateFailure(p.ID, selected.GroupName)
+	updated = keyWithCandidateGroup(updated, &selected)
 	msg := fmt.Sprintf("已从 %s 切换到 %s", emptyAs(currentGroup, "未识别分组"), selected.GroupName)
 	log := s.buildEvalLog(p, updated, &selected, true, "switched", "switch", msg, len(candidates), availableCount, circuitCount, selected.Ratio)
 	_ = s.updatePolicyStatus(p, "switched", "", updated, selected.Ratio, &now, &now)
@@ -626,6 +649,13 @@ func (s *Service) ProbeCandidate(ctx context.Context, policyID, candidateID uint
 	return s.Repo.FindCandidate(policyID, decision.GroupName)
 }
 
+func (s *Service) ensureSwitchProbe(ctx context.Context, p *storage.AutoGroupPolicy, ch *storage.Channel, probe *probeKey, selected CandidateDecision, now time.Time) CandidateDecision {
+	if selected.LastProbeAt != nil && selected.LastProbeSuccess != nil && *selected.LastProbeSuccess && now.Sub(*selected.LastProbeAt) <= time.Minute {
+		return selected
+	}
+	return s.probeCandidate(ctx, p, ch, probe, selected)
+}
+
 func (s *Service) ForceSwitchCandidate(ctx context.Context, policyID, candidateID uint) (*EvaluationResult, error) {
 	p, err := s.Repo.FindPolicy(policyID)
 	if err != nil {
@@ -674,6 +704,7 @@ func (s *Service) ForceSwitchCandidate(ctx context.Context, policyID, candidateI
 		result.EvaluationLog = *log
 		return result, err
 	}
+	updated = keyWithCandidateGroup(updated, &selected)
 	msg := fmt.Sprintf("已人工强制切换到 %s", selected.GroupName)
 	log := s.buildEvalLog(p, updated, &selected, true, "switched", "force_switch", msg, 1, 1, 0, selected.Ratio)
 	_ = s.updatePolicyStatus(p, "switched", "", updated, selected.Ratio, &now, &now)
@@ -702,7 +733,7 @@ func (s *Service) failEvaluation(ctx context.Context, result *EvaluationResult, 
 	return result, err
 }
 
-func (s *Service) evaluateCandidates(ctx context.Context, p *storage.AutoGroupPolicy, ch *storage.Channel, probe *probeKey) ([]CandidateDecision, error) {
+func (s *Service) evaluateCandidates(ctx context.Context, p *storage.AutoGroupPolicy, ch *storage.Channel, probe *probeKey, target *connector.APIKey) ([]CandidateDecision, error) {
 	groups, err := s.ChannelSvc.ListAPIKeyGroups(ctx, p.ChannelID)
 	if err != nil {
 		return nil, fmt.Errorf("读取上游分组失败：%w", err)
@@ -742,6 +773,7 @@ func (s *Service) evaluateCandidates(ctx context.Context, p *storage.AutoGroupPo
 
 	out := make([]CandidateDecision, 0, len(byName))
 	now := time.Now()
+	currentGroup := currentKeyGroup(target)
 	for _, c := range byName {
 		prev, err := s.Repo.FindCandidate(p.ID, c.GroupName)
 		if err != nil {
@@ -761,9 +793,35 @@ func (s *Service) evaluateCandidates(ctx context.Context, p *storage.AutoGroupPo
 			c.ManualDisabled = prev.ManualDisabled
 		}
 		c.Status, c.Reason = classifyCandidate(p, c, now)
-		if c.Status == "healthy" || c.Status == "half_open" {
-			c = s.probeCandidate(ctx, p, ch, probe, c)
+		c = applyProbeCache(p, c, now)
+		out = append(out, c)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		pi := probePriority(out[i], target, currentGroup)
+		pj := probePriority(out[j], target, currentGroup)
+		if pi != pj {
+			return pi < pj
 		}
+		if out[i].Ratio != out[j].Ratio {
+			return out[i].Ratio < out[j].Ratio
+		}
+		return out[i].GroupName < out[j].GroupName
+	})
+	probesUsed := 0
+	probeBudget := probeMaxPerRun(p)
+	for i := range out {
+		if !needsProbe(out[i]) {
+			continue
+		}
+		if probesUsed >= probeBudget {
+			out[i].Status = "unknown"
+			out[i].Reason = "超过单轮探测上限，等待下次评估"
+			continue
+		}
+		out[i] = s.probeCandidate(ctx, p, ch, probe, out[i])
+		probesUsed++
+	}
+	for _, c := range out {
 		checkedAt := now
 		_ = s.Repo.UpsertCandidate(&storage.AutoGroupCandidate{
 			PolicyID:           p.ID,
@@ -786,7 +844,6 @@ func (s *Service) evaluateCandidates(ctx context.Context, p *storage.AutoGroupPo
 			LastError:          c.LastError,
 			ManualDisabled:     c.ManualDisabled,
 		})
-		out = append(out, c)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Status == "healthy" && out[j].Status != "healthy" {
@@ -1171,6 +1228,18 @@ func policyFromInput(current *storage.AutoGroupPolicy, in PolicyInput) (*storage
 	if p.ProbeTimeoutSeconds <= 0 {
 		p.ProbeTimeoutSeconds = 15
 	}
+	p.ProbeSuccessCacheMinutes = in.ProbeSuccessCacheMinutes
+	if p.ProbeSuccessCacheMinutes <= 0 {
+		p.ProbeSuccessCacheMinutes = 60
+	}
+	p.ProbeFailureRetryMinutes = in.ProbeFailureRetryMinutes
+	if p.ProbeFailureRetryMinutes <= 0 {
+		p.ProbeFailureRetryMinutes = 10
+	}
+	p.ProbeMaxPerRun = in.ProbeMaxPerRun
+	if p.ProbeMaxPerRun <= 0 {
+		p.ProbeMaxPerRun = 3
+	}
 	p.MinRatio = in.MinRatio
 	p.MaxRatio = in.MaxRatio
 	p.FailureThreshold = in.FailureThreshold
@@ -1282,6 +1351,88 @@ func countCandidatesByStatus(list []CandidateDecision, status string) int {
 		}
 	}
 	return count
+}
+
+func applyProbeCache(p *storage.AutoGroupPolicy, c CandidateDecision, now time.Time) CandidateDecision {
+	if c.Status == "half_open" {
+		return c
+	}
+	if c.Status != "healthy" {
+		return c
+	}
+	if c.LastProbeAt == nil {
+		c.Status = "probe_pending"
+		c.Reason = "等待首次探测"
+		return c
+	}
+	if c.LastProbeSuccess != nil && *c.LastProbeSuccess {
+		if now.Sub(*c.LastProbeAt) < probeSuccessCacheDuration(p) {
+			c.Reason = "使用最近探测成功缓存"
+			return c
+		}
+		c.Status = "probe_pending"
+		c.Reason = "探测成功缓存已过期"
+		return c
+	}
+	if now.Sub(*c.LastProbeAt) < probeFailureRetryDuration(p) {
+		c.Status = "failed"
+		c.Reason = "失败重试间隔内"
+		return c
+	}
+	c.Status = "probe_pending"
+	c.Reason = "失败重试间隔已到"
+	return c
+}
+
+func needsProbe(c CandidateDecision) bool {
+	return c.Status == "probe_pending" || c.Status == "half_open"
+}
+
+func probePriority(c CandidateDecision, target *connector.APIKey, currentGroup string) int {
+	if !needsProbe(c) {
+		return 100
+	}
+	if target != nil {
+		if target.GroupID != nil && c.GroupID != nil && *target.GroupID == *c.GroupID {
+			return 0
+		}
+		if currentGroup != "" && strings.EqualFold(currentGroup, c.GroupName) {
+			return 0
+		}
+	}
+	if c.Status == "half_open" {
+		return 1
+	}
+	if c.LastProbeAt == nil {
+		return 2
+	}
+	if c.LastProbeSuccess != nil && !*c.LastProbeSuccess {
+		return 3
+	}
+	return 4
+}
+
+func probeSuccessCacheDuration(p *storage.AutoGroupPolicy) time.Duration {
+	minutes := p.ProbeSuccessCacheMinutes
+	if minutes <= 0 {
+		minutes = 60
+	}
+	return time.Duration(minutes) * time.Minute
+}
+
+func probeFailureRetryDuration(p *storage.AutoGroupPolicy) time.Duration {
+	minutes := p.ProbeFailureRetryMinutes
+	if minutes <= 0 {
+		minutes = 10
+	}
+	return time.Duration(minutes) * time.Minute
+}
+
+func probeMaxPerRun(p *storage.AutoGroupPolicy) int {
+	if p.ProbeMaxPerRun <= 0 {
+		return 3
+	}
+	return p.ProbeMaxPerRun
 }
 
 func findCandidateByGroup(list []CandidateDecision, key *connector.APIKey, groupName string) *CandidateDecision {
@@ -1443,6 +1594,27 @@ func currentKeyGroup(key *connector.APIKey) string {
 		return strings.TrimSpace(key.GroupName)
 	}
 	return strings.TrimSpace(key.Group)
+}
+
+func keyWithCandidateGroup(key *connector.APIKey, candidate *CandidateDecision) *connector.APIKey {
+	if key == nil || candidate == nil || strings.TrimSpace(candidate.GroupName) == "" {
+		return key
+	}
+	if strings.TrimSpace(currentKeyGroup(key)) != "" {
+		return key
+	}
+	if key.GroupID != nil && candidate.GroupID != nil && *key.GroupID != *candidate.GroupID {
+		return key
+	}
+	key.GroupName = candidate.GroupName
+	key.Group = candidate.GroupName
+	if key.GroupID == nil && candidate.GroupID != nil {
+		key.GroupID = candidate.GroupID
+	}
+	if key.GroupRatio <= 0 && candidate.Ratio > 0 {
+		key.GroupRatio = candidate.Ratio
+	}
+	return key
 }
 
 func selectTargetKey(items []connector.APIKey, id int64, name string) *connector.APIKey {

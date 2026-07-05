@@ -452,6 +452,9 @@ type AutoGroupPolicy struct {
 	ProbeKeyName                  string     `gorm:"size:128;not null;default:'ops-probe-auto'" json:"probe_key_name"`
 	ProbeModel                    string     `gorm:"size:128;not null;default:'gpt-4o-mini'" json:"probe_model"`
 	ProbeTimeoutSeconds           int        `gorm:"not null;default:15" json:"probe_timeout_seconds"`
+	ProbeSuccessCacheMinutes      int        `gorm:"not null;default:60" json:"probe_success_cache_minutes"`
+	ProbeFailureRetryMinutes      int        `gorm:"not null;default:10" json:"probe_failure_retry_minutes"`
+	ProbeMaxPerRun                int        `gorm:"not null;default:3" json:"probe_max_per_run"`
 	IncludeGroupsJSON             string     `gorm:"type:text" json:"include_groups_json"`
 	ExcludeGroupsJSON             string     `gorm:"type:text" json:"exclude_groups_json"`
 	IncludeKeywordsJSON           string     `gorm:"type:text" json:"include_keywords_json"`
