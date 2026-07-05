@@ -29,6 +29,7 @@ func registerChannels(g *gin.RouterGroup, d *Deps) {
 	gp.POST("/:id/enable", func(c *gin.Context) { toggleChannel(c, d, true) })
 	gp.POST("/:id/disable", func(c *gin.Context) { toggleChannel(c, d, false) })
 	gp.POST("/:id/test-login", func(c *gin.Context) { testLogin(c, d) })
+	gp.GET("/:id/capabilities", func(c *gin.Context) { channelCapabilities(c, d) })
 	gp.POST("/:id/refresh-balance", func(c *gin.Context) { refreshBalance(c, d) })
 	gp.POST("/:id/refresh-rates", func(c *gin.Context) { refreshRates(c, d) })
 	gp.POST("/:id/redeem", func(c *gin.Context) { redeemChannel(c, d) })
@@ -112,6 +113,23 @@ type channelSubscriptionInput struct {
 
 type channelAPIKeyCreateInput = connector.APIKeyCreateRequest
 type channelAPIKeyUpdateInput = connector.APIKeyUpdateRequest
+
+func channelCapabilities(c *gin.Context, d *Deps) {
+	if d.UpstreamCap == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "upstream capability service not configured"})
+		return
+	}
+	id, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	matrix, err := d.UpstreamCap.Matrix(c.Request.Context(), id)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": matrix})
+}
 
 func listChannels(c *gin.Context, d *Deps) {
 	if c.Query("page") != "" || c.Query("page_size") != "" {
@@ -409,12 +427,16 @@ func redeemChannel(c *gin.Context, d *Deps) {
 }
 
 func channelRechargeInfo(c *gin.Context, d *Deps) {
+	ops, ok := requireUpstreamRecharge(c, d)
+	if !ok {
+		return
+	}
 	id, err := uintParam(c, "id")
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
-	info, err := d.ChannelSvc.GetRechargeInfo(c.Request.Context(), id)
+	info, err := ops.GetRechargeInfo(c.Request.Context(), id)
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
@@ -423,6 +445,10 @@ func channelRechargeInfo(c *gin.Context, d *Deps) {
 }
 
 func createChannelRecharge(c *gin.Context, d *Deps) {
+	ops, ok := requireUpstreamRecharge(c, d)
+	if !ok {
+		return
+	}
 	id, err := uintParam(c, "id")
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
@@ -441,7 +467,7 @@ func createChannelRecharge(c *gin.Context, d *Deps) {
 		fail(c, http.StatusBadRequest, fmt.Errorf("仅支持 alipay 或 wxpay"))
 		return
 	}
-	res, err := d.ChannelSvc.CreateRecharge(c.Request.Context(), id, connector.RechargeRequest{
+	res, err := ops.CreateRecharge(c.Request.Context(), id, connector.RechargeRequest{
 		Amount:        in.Amount,
 		PaymentMethod: in.PaymentMethod,
 		IsMobile:      in.IsMobile,
@@ -454,12 +480,16 @@ func createChannelRecharge(c *gin.Context, d *Deps) {
 }
 
 func channelSubscriptionInfo(c *gin.Context, d *Deps) {
+	ops, ok := requireUpstreamSubscription(c, d)
+	if !ok {
+		return
+	}
 	id, err := uintParam(c, "id")
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
-	info, err := d.ChannelSvc.GetSubscriptionInfo(c.Request.Context(), id)
+	info, err := ops.GetSubscriptionInfo(c.Request.Context(), id)
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
@@ -468,6 +498,10 @@ func channelSubscriptionInfo(c *gin.Context, d *Deps) {
 }
 
 func createChannelSubscription(c *gin.Context, d *Deps) {
+	ops, ok := requireUpstreamSubscription(c, d)
+	if !ok {
+		return
+	}
 	id, err := uintParam(c, "id")
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
@@ -486,7 +520,7 @@ func createChannelSubscription(c *gin.Context, d *Deps) {
 		fail(c, http.StatusBadRequest, fmt.Errorf("请选择支付方式"))
 		return
 	}
-	res, err := d.ChannelSvc.CreateSubscription(c.Request.Context(), id, connector.SubscriptionRequest{
+	res, err := ops.CreateSubscription(c.Request.Context(), id, connector.SubscriptionRequest{
 		PlanID:        in.PlanID,
 		PaymentMethod: in.PaymentMethod,
 		IsMobile:      in.IsMobile,
@@ -499,12 +533,16 @@ func createChannelSubscription(c *gin.Context, d *Deps) {
 }
 
 func channelSubscriptionUsage(c *gin.Context, d *Deps) {
+	ops, ok := requireUpstreamSubscription(c, d)
+	if !ok {
+		return
+	}
 	id, err := uintParam(c, "id")
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
-	info, err := d.ChannelSvc.GetSubscriptionUsage(c.Request.Context(), id)
+	info, err := ops.GetSubscriptionUsage(c.Request.Context(), id)
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
@@ -513,6 +551,10 @@ func channelSubscriptionUsage(c *gin.Context, d *Deps) {
 }
 
 func listChannelAPIKeys(c *gin.Context, d *Deps) {
+	ops, ok := requireUpstreamAPIKeys(c, d)
+	if !ok {
+		return
+	}
 	id, err := uintParam(c, "id")
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
@@ -523,7 +565,7 @@ func listChannelAPIKeys(c *gin.Context, d *Deps) {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
-	res, err := d.ChannelSvc.ListAPIKeys(c.Request.Context(), id, connector.APIKeyQuery{
+	res, err := ops.ListAPIKeys(c.Request.Context(), id, connector.APIKeyQuery{
 		Page:     page,
 		PageSize: pageSize,
 		Search:   c.Query("search"),
@@ -538,12 +580,16 @@ func listChannelAPIKeys(c *gin.Context, d *Deps) {
 }
 
 func listChannelAPIKeyGroups(c *gin.Context, d *Deps) {
+	ops, ok := requireUpstreamAPIKeys(c, d)
+	if !ok {
+		return
+	}
 	id, err := uintParam(c, "id")
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
-	res, err := d.ChannelSvc.ListAPIKeyGroups(c.Request.Context(), id)
+	res, err := ops.ListAPIKeyGroups(c.Request.Context(), id)
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
@@ -552,6 +598,10 @@ func listChannelAPIKeyGroups(c *gin.Context, d *Deps) {
 }
 
 func createChannelAPIKey(c *gin.Context, d *Deps) {
+	ops, ok := requireUpstreamAPIKeys(c, d)
+	if !ok {
+		return
+	}
 	id, err := uintParam(c, "id")
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
@@ -566,7 +616,7 @@ func createChannelAPIKey(c *gin.Context, d *Deps) {
 		fail(c, http.StatusBadRequest, fmt.Errorf("密钥名称不能为空"))
 		return
 	}
-	res, err := d.ChannelSvc.CreateAPIKey(c.Request.Context(), id, connector.APIKeyCreateRequest(in))
+	res, err := ops.CreateAPIKey(c.Request.Context(), id, connector.APIKeyCreateRequest(in))
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
@@ -575,6 +625,10 @@ func createChannelAPIKey(c *gin.Context, d *Deps) {
 }
 
 func updateChannelAPIKey(c *gin.Context, d *Deps) {
+	ops, ok := requireUpstreamAPIKeys(c, d)
+	if !ok {
+		return
+	}
 	id, err := uintParam(c, "id")
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
@@ -590,7 +644,7 @@ func updateChannelAPIKey(c *gin.Context, d *Deps) {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
-	res, err := d.ChannelSvc.UpdateAPIKey(c.Request.Context(), id, keyID, connector.APIKeyUpdateRequest(in))
+	res, err := ops.UpdateAPIKey(c.Request.Context(), id, keyID, connector.APIKeyUpdateRequest(in))
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
@@ -599,6 +653,10 @@ func updateChannelAPIKey(c *gin.Context, d *Deps) {
 }
 
 func deleteChannelAPIKey(c *gin.Context, d *Deps) {
+	ops, ok := requireUpstreamAPIKeys(c, d)
+	if !ok {
+		return
+	}
 	id, err := uintParam(c, "id")
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
@@ -609,7 +667,7 @@ func deleteChannelAPIKey(c *gin.Context, d *Deps) {
 		fail(c, http.StatusBadRequest, fmt.Errorf("密钥 ID 无效"))
 		return
 	}
-	if err := d.ChannelSvc.DeleteAPIKey(c.Request.Context(), id, keyID); err != nil {
+	if err := ops.DeleteAPIKey(c.Request.Context(), id, keyID); err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
@@ -617,6 +675,10 @@ func deleteChannelAPIKey(c *gin.Context, d *Deps) {
 }
 
 func revealChannelAPIKey(c *gin.Context, d *Deps) {
+	ops, ok := requireUpstreamAPIKeys(c, d)
+	if !ok {
+		return
+	}
 	id, err := uintParam(c, "id")
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
@@ -627,12 +689,43 @@ func revealChannelAPIKey(c *gin.Context, d *Deps) {
 		fail(c, http.StatusBadRequest, fmt.Errorf("密钥 ID 无效"))
 		return
 	}
-	key, err := d.ChannelSvc.RevealAPIKey(c.Request.Context(), id, keyID)
+	key, err := ops.RevealAPIKey(c.Request.Context(), id, keyID)
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"key": key}})
+}
+
+func requireUpstreamRecharge(c *gin.Context, d *Deps) (upstreamRechargeService, bool) {
+	ops, ok := d.UpstreamOps.(upstreamRechargeService)
+	if d.UpstreamOps == nil || !ok {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "upstream recharge capability not configured"})
+		return nil, false
+	}
+	return ops, true
+}
+
+func requireUpstreamSubscription(c *gin.Context, d *Deps) (upstreamSubscriptionService, bool) {
+	ops, ok := d.UpstreamOps.(upstreamSubscriptionService)
+	if d.UpstreamOps == nil || !ok {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "upstream subscription capability not configured"})
+		return nil, false
+	}
+	return ops, true
+}
+
+func requireUpstreamAPIKeys(c *gin.Context, d *Deps) (upstreamAPIKeyService, bool) {
+	ops, ok := d.UpstreamOps.(upstreamAPIKeyService)
+	if d.UpstreamOps == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "upstream api key capability not configured"})
+		return nil, false
+	}
+	if !ok {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "upstream api key capability not supported"})
+		return nil, false
+	}
+	return ops, true
 }
 
 func channelRates(c *gin.Context, d *Deps) {

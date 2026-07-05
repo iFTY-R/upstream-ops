@@ -26,6 +26,7 @@ import (
 	"github.com/ifty-r/upstream-ops/backend/scheduler"
 	"github.com/ifty-r/upstream-ops/backend/shopmonitor"
 	"github.com/ifty-r/upstream-ops/backend/storage"
+	"github.com/ifty-r/upstream-ops/backend/upstreamcap"
 	"github.com/ifty-r/upstream-ops/web"
 
 	// 注册 connector 实现。
@@ -110,6 +111,7 @@ func main() {
 	channelSvc := channel.NewService(channels, authSessions, captchas, rates, monLogs, cipher)
 	channelSvc.UpdateProxyConfig(cfg.Proxy)
 	channelSvc.UpdateUpstreamConfig(cfg.Upstream)
+	upstreamCapSvc := upstreamcap.NewService(channelSvc)
 	dispatcher := notify.NewDispatcher(notifies, cipher, log, notify.Policy{
 		NotificationPrefix:                       cfg.App.NotificationPrefix,
 		BatchRateChanges:                         cfg.Notifications.BatchRateChanges,
@@ -123,9 +125,9 @@ func main() {
 		SendMaxAttempts:                          cfg.Notifications.SendMaxAttempts,
 	})
 	dispatcher.UpdateProxyConfig(cfg.Proxy)
-	monitorSvc := monitor.NewService(channels, announcements, rates, monLogs, channelSvc, dispatcher, log)
+	monitorSvc := monitor.NewService(channels, announcements, rates, monLogs, upstreamCapSvc, dispatcher, log)
 	shopMonitorSvc := shopmonitor.NewService(shopTargets, shopWatchRules, shopGoods, dispatcher, log, cfg.Proxy, cfg.Upstream)
-	autoGroupSvc := autogroup.NewService(autoGroups, channels, rates, channelSvc, dispatcher, log)
+	autoGroupSvc := autogroup.NewService(autoGroups, channels, rates, upstreamCapSvc, dispatcher, log)
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
 		shopMonitorSvc.UpdateProxyConfig(pcfg)
@@ -188,6 +190,8 @@ func main() {
 		Rates:          rates,
 		MonLogs:        monLogs,
 		ChannelSvc:     channelSvc,
+		UpstreamCap:    upstreamCapSvc,
+		UpstreamOps:    upstreamCapSvc,
 		Monitor:        monitorSvc,
 		Dispatcher:     dispatcher,
 		ShopMonitor:    shopMonitorSvc,

@@ -21,6 +21,7 @@ import (
 	"github.com/ifty-r/upstream-ops/backend/notify"
 	"github.com/ifty-r/upstream-ops/backend/progress"
 	"github.com/ifty-r/upstream-ops/backend/storage"
+	"github.com/ifty-r/upstream-ops/backend/upstreamcap"
 	"gorm.io/gorm"
 )
 
@@ -770,7 +771,7 @@ func syncSubscriptionAlertTest(t *testing.T, path string) {
 		SubscriptionAlertCooldown:              time.Hour,
 		SendMaxAttempts:                        1,
 	})
-	monitorSvc := monitor.NewService(channels, announcements, rates, monitorLogs, channelSvc, dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	monitorSvc := monitor.NewService(channels, announcements, rates, monitorLogs, upstreamcap.NewService(channelSvc), dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	r := gin.New()
 	registerChannels(r.Group("/api"), &Deps{

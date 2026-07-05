@@ -19,6 +19,7 @@ import (
 	"github.com/ifty-r/upstream-ops/backend/runtimeconfig"
 	"github.com/ifty-r/upstream-ops/backend/shopmonitor"
 	"github.com/ifty-r/upstream-ops/backend/storage"
+	"github.com/ifty-r/upstream-ops/backend/upstreamcap"
 	"gorm.io/gorm"
 )
 
@@ -35,17 +36,23 @@ type channelService interface {
 	ClearLoginInfo(id uint) (*storage.Channel, error)
 	TestLogin(ctx context.Context, channelID uint) error
 	RedeemCode(ctx context.Context, channelID uint, code string) (*connector.RedeemResult, error)
-	GetRechargeInfo(ctx context.Context, channelID uint) (*connector.RechargeInfo, error)
-	CreateRecharge(ctx context.Context, channelID uint, req connector.RechargeRequest) (*connector.RechargeLaunch, error)
-	GetSubscriptionInfo(ctx context.Context, channelID uint) (*connector.SubscriptionInfo, error)
-	CreateSubscription(ctx context.Context, channelID uint, req connector.SubscriptionRequest) (*connector.SubscriptionLaunch, error)
-	GetSubscriptionUsage(ctx context.Context, channelID uint) (*connector.SubscriptionUsageInfo, error)
-	ListAPIKeys(ctx context.Context, channelID uint, query connector.APIKeyQuery) (*connector.APIKeyPage, error)
-	ListAPIKeyGroups(ctx context.Context, channelID uint) ([]connector.APIKeyGroup, error)
-	CreateAPIKey(ctx context.Context, channelID uint, req connector.APIKeyCreateRequest) (*connector.APIKey, error)
-	UpdateAPIKey(ctx context.Context, channelID uint, keyID int64, req connector.APIKeyUpdateRequest) (*connector.APIKey, error)
-	DeleteAPIKey(ctx context.Context, channelID uint, keyID int64) error
-	RevealAPIKey(ctx context.Context, channelID uint, keyID int64) (string, error)
+}
+
+type upstreamCapabilityService interface {
+	Matrix(ctx context.Context, channelID uint) (*upstreamcap.CapabilityMatrix, error)
+}
+
+type upstreamRechargeService interface {
+	upstreamcap.RechargeCapability
+}
+
+type upstreamSubscriptionService interface {
+	upstreamcap.SubscriptionCapability
+}
+
+type upstreamAPIKeyService interface {
+	upstreamcap.APIKeyCapability
+	upstreamcap.GroupCapability
 }
 
 // Deps 把所有 handler 需要的依赖打包传入。
@@ -65,6 +72,8 @@ type Deps struct {
 	Rates          *storage.Rates
 	MonLogs        *storage.MonitorLogs
 	ChannelSvc     channelService
+	UpstreamCap    upstreamCapabilityService
+	UpstreamOps    any
 	Monitor        monitorService
 	Dispatcher     *notify.Dispatcher
 	ShopMonitor    *shopmonitor.Service

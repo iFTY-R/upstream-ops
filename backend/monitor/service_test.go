@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,8 +20,21 @@ import (
 	"github.com/ifty-r/upstream-ops/backend/crypto"
 	"github.com/ifty-r/upstream-ops/backend/notify"
 	"github.com/ifty-r/upstream-ops/backend/storage"
+	"github.com/ifty-r/upstream-ops/backend/upstreamcap"
 	"gorm.io/gorm"
 )
+
+func TestMonitorErrorNotificationClassifiesCapabilityAuthErrors(t *testing.T) {
+	event, subject := monitorErrorNotification("余额采集失败", upstreamcap.NormalizeError(1, upstreamcap.CapBalance, errors.New("newapi login: unauthorized")))
+	if event != storage.EventLoginFailed || subject != "登录失败" {
+		t.Fatalf("event = %q subject = %q, want login_failed 登录失败", event, subject)
+	}
+
+	event, subject = monitorErrorNotification("余额采集失败", upstreamcap.NormalizeError(1, upstreamcap.CapBalance, errors.New("context deadline exceeded")))
+	if event != storage.EventMonitorFailed || subject != "余额采集失败" {
+		t.Fatalf("event = %q subject = %q, want monitor_failed 余额采集失败", event, subject)
+	}
+}
 
 func openTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
@@ -130,7 +144,7 @@ func TestRefreshRatesSyncAnnouncementsAndNotify(t *testing.T) {
 	dispatcher := notify.NewDispatcher(notifies, cipher, slog.New(slog.NewTextHandler(io.Discard, nil)), notify.Policy{
 		SendMaxAttempts: 1,
 	})
-	svc := NewService(channels, announcements, rates, monitorLogs, channelSvc, dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc := NewService(channels, announcements, rates, monitorLogs, upstreamcap.NewService(channelSvc), dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	if err := svc.RefreshRates(context.Background(), ch); err != nil {
 		t.Fatalf("first refresh: %v", err)
@@ -218,7 +232,7 @@ func TestRefreshRatesSkipsAnnouncementsWhenIgnored(t *testing.T) {
 
 	channelSvc := channel.NewService(channels, authSessions, captchas, rates, monitorLogs, cipher)
 	dispatcher := notify.NewDispatcher(notifies, cipher, slog.New(slog.NewTextHandler(io.Discard, nil)), notify.Policy{SendMaxAttempts: 1})
-	svc := NewService(channels, announcements, rates, monitorLogs, channelSvc, dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc := NewService(channels, announcements, rates, monitorLogs, upstreamcap.NewService(channelSvc), dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	if err := svc.RefreshRates(context.Background(), ch); err != nil {
 		t.Fatalf("refresh: %v", err)
@@ -320,7 +334,7 @@ func TestRefreshRatesEmitsRateAddedAndRemoved(t *testing.T) {
 		BatchRateChanges: true,
 		SendMaxAttempts:  1,
 	})
-	svc := NewService(channels, announcements, rates, monitorLogs, channelSvc, dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc := NewService(channels, announcements, rates, monitorLogs, upstreamcap.NewService(channelSvc), dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	if err := svc.RefreshRates(context.Background(), ch); err != nil {
 		t.Fatalf("first refresh: %v", err)
@@ -466,7 +480,7 @@ func TestRefreshRatesAfterChannelReuseDoesNotEmitOldStructureChange(t *testing.T
 		BatchRateChanges: true,
 		SendMaxAttempts:  1,
 	})
-	svc := NewService(channels, announcements, rates, monitorLogs, channelSvc, dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc := NewService(channels, announcements, rates, monitorLogs, upstreamcap.NewService(channelSvc), dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	if err := svc.RefreshRates(context.Background(), ch); err != nil {
 		t.Fatalf("refresh: %v", err)
@@ -571,7 +585,7 @@ func TestRateEventSubscriptionFiltersGroups(t *testing.T) {
 		BatchRateChanges: true,
 		SendMaxAttempts:  1,
 	})
-	svc := NewService(channels, announcements, rates, monitorLogs, channelSvc, dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc := NewService(channels, announcements, rates, monitorLogs, upstreamcap.NewService(channelSvc), dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	if err := svc.RefreshRates(context.Background(), ch); err != nil {
 		t.Fatalf("first refresh: %v", err)
@@ -686,7 +700,7 @@ func TestSubscriptionUsageAlertsAndCooldown(t *testing.T) {
 		SubscriptionAlertCooldown:                time.Hour,
 		SendMaxAttempts:                          1,
 	})
-	svc := NewService(channels, announcements, rates, monitorLogs, channelSvc, dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc := NewService(channels, announcements, rates, monitorLogs, upstreamcap.NewService(channelSvc), dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	svc.ScanAllBalances(context.Background())
 	if got := webhookHits.Load(); got != 3 {

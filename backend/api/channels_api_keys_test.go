@@ -9,39 +9,17 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/ifty-r/upstream-ops/backend/channel"
 	"github.com/ifty-r/upstream-ops/backend/connector"
 	"github.com/ifty-r/upstream-ops/backend/storage"
 )
 
 type apiKeyChannelServiceStub struct {
-	*channel.Service
 	page      *connector.APIKeyPage
 	groups    []connector.APIKeyGroup
 	created   *connector.APIKey
 	updated   *connector.APIKey
 	revealed  string
 	lastQuery connector.APIKeyQuery
-}
-
-func (s *apiKeyChannelServiceStub) GetRechargeInfo(ctx context.Context, channelID uint) (*connector.RechargeInfo, error) {
-	return nil, nil
-}
-
-func (s *apiKeyChannelServiceStub) CreateRecharge(ctx context.Context, channelID uint, req connector.RechargeRequest) (*connector.RechargeLaunch, error) {
-	return nil, nil
-}
-
-func (s *apiKeyChannelServiceStub) GetSubscriptionInfo(ctx context.Context, channelID uint) (*connector.SubscriptionInfo, error) {
-	return nil, nil
-}
-
-func (s *apiKeyChannelServiceStub) CreateSubscription(ctx context.Context, channelID uint, req connector.SubscriptionRequest) (*connector.SubscriptionLaunch, error) {
-	return nil, nil
-}
-
-func (s *apiKeyChannelServiceStub) GetSubscriptionUsage(ctx context.Context, channelID uint) (*connector.SubscriptionUsageInfo, error) {
-	return nil, nil
 }
 
 func (s *apiKeyChannelServiceStub) ListAPIKeys(ctx context.Context, channelID uint, query connector.APIKeyQuery) (*connector.APIKeyPage, error) {
@@ -100,7 +78,7 @@ func TestChannelAPIKeyEndpoints(t *testing.T) {
 	}
 	r := gin.New()
 	apiGroup := r.Group("/api")
-	registerChannels(apiGroup, &Deps{Channels: channels, ChannelSvc: stub})
+	registerChannels(apiGroup, &Deps{Channels: channels, UpstreamOps: stub})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/channels/1/api-keys?page=1&page_size=20&search=abc", nil)
 	rec := httptest.NewRecorder()
@@ -175,7 +153,7 @@ func TestChannelAPIKeyValidation(t *testing.T) {
 
 	r := gin.New()
 	apiGroup := r.Group("/api")
-	registerChannels(apiGroup, &Deps{ChannelSvc: &apiKeyChannelServiceStub{}})
+	registerChannels(apiGroup, &Deps{UpstreamOps: &apiKeyChannelServiceStub{}})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/channels/1/api-keys?page=0", nil)
 	rec := httptest.NewRecorder()

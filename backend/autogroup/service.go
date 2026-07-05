@@ -1,14 +1,11 @@
 package autogroup
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -17,22 +14,21 @@ import (
 	"github.com/ifty-r/upstream-ops/backend/connector"
 	"github.com/ifty-r/upstream-ops/backend/notify"
 	"github.com/ifty-r/upstream-ops/backend/storage"
+	"github.com/ifty-r/upstream-ops/backend/upstreamcap"
 	"gorm.io/gorm"
 )
 
-type ChannelService interface {
-	ListAPIKeys(ctx context.Context, channelID uint, query connector.APIKeyQuery) (*connector.APIKeyPage, error)
-	ListAPIKeyGroups(ctx context.Context, channelID uint) ([]connector.APIKeyGroup, error)
-	CreateAPIKey(ctx context.Context, channelID uint, req connector.APIKeyCreateRequest) (*connector.APIKey, error)
-	UpdateAPIKey(ctx context.Context, channelID uint, keyID int64, req connector.APIKeyUpdateRequest) (*connector.APIKey, error)
-	RevealAPIKey(ctx context.Context, channelID uint, keyID int64) (string, error)
+type UpstreamCapability interface {
+	upstreamcap.APIKeyControlCapability
+	upstreamcap.GroupCapability
+	upstreamcap.ProbeCapability
 }
 
 type Service struct {
 	Repo       *storage.AutoGroups
 	Channels   *storage.Channels
 	Rates      *storage.Rates
-	ChannelSvc ChannelService
+	Upstream   UpstreamCapability
 	Dispatcher *notify.Dispatcher
 	Log        *slog.Logger
 	locks      sync.Map
@@ -40,12 +36,12 @@ type Service struct {
 
 const newAPIProbeRemainQuota = 500000
 
-func NewService(repo *storage.AutoGroups, channels *storage.Channels, rates *storage.Rates, channelSvc ChannelService, dispatcher *notify.Dispatcher, log *slog.Logger) *Service {
+func NewService(repo *storage.AutoGroups, channels *storage.Channels, rates *storage.Rates, upstream UpstreamCapability, dispatcher *notify.Dispatcher, log *slog.Logger) *Service {
 	return &Service{
 		Repo:       repo,
 		Channels:   channels,
 		Rates:      rates,
-		ChannelSvc: channelSvc,
+		Upstream:   upstream,
 		Dispatcher: dispatcher,
 		Log:        log,
 	}
@@ -248,16 +244,16 @@ func (s *Service) DetectCapabilities(ctx context.Context, channelID uint) (*Capa
 	groupItemsOK := false
 	keyMsg := ""
 	groupMsg := ""
-	if s.ChannelSvc == nil {
+	if s.Upstream == nil {
 		keyMsg = "渠道服务未初始化"
 		groupMsg = "渠道服务未初始化"
 	} else {
-		if _, err := s.ChannelSvc.ListAPIKeys(ctx, channelID, connector.APIKeyQuery{Page: 1, PageSize: 1}); err != nil {
+		if _, err := s.Upstream.ListAPIKeys(ctx, channelID, connector.APIKeyQuery{Page: 1, PageSize: 1}); err != nil {
 			keyMsg = err.Error()
 		} else {
 			keyItemsOK = true
 		}
-		if groups, err := s.ChannelSvc.ListAPIKeyGroups(ctx, channelID); err != nil {
+		if groups, err := s.Upstream.ListAPIKeyGroups(ctx, channelID); err != nil {
 			groupMsg = err.Error()
 		} else {
 			groupItemsOK = true
@@ -852,7 +848,7 @@ func (s *Service) recordPolicyEvaluation(result *EvaluationResult, p *storage.Au
 }
 
 func (s *Service) evaluateCandidates(ctx context.Context, p *storage.AutoGroupPolicy, ch *storage.Channel, probe *probeKey, target *connector.APIKey) ([]CandidateDecision, error) {
-	groups, err := s.ChannelSvc.ListAPIKeyGroups(ctx, p.ChannelID)
+	groups, err := s.Upstream.ListAPIKeyGroups(ctx, p.ChannelID)
 	if err != nil {
 		return nil, fmt.Errorf("读取上游分组失败：%w", err)
 	}
@@ -974,7 +970,7 @@ func (s *Service) findTargetKey(ctx context.Context, p *storage.AutoGroupPolicy)
 	if p.TargetKeyID == 0 && search == "" {
 		search = "auto"
 	}
-	page, err := s.ChannelSvc.ListAPIKeys(ctx, p.ChannelID, connector.APIKeyQuery{
+	page, err := s.Upstream.ListAPIKeys(ctx, p.ChannelID, connector.APIKeyQuery{
 		Page:     1,
 		PageSize: 100,
 		Search:   search,
@@ -987,7 +983,7 @@ func (s *Service) findTargetKey(ctx context.Context, p *storage.AutoGroupPolicy)
 		return key, nil
 	}
 	if search != "" {
-		page, err = s.ChannelSvc.ListAPIKeys(ctx, p.ChannelID, connector.APIKeyQuery{Page: 1, PageSize: 100})
+		page, err = s.Upstream.ListAPIKeys(ctx, p.ChannelID, connector.APIKeyQuery{Page: 1, PageSize: 100})
 		if err != nil {
 			return nil, fmt.Errorf("读取 API Key 列表失败：%w", err)
 		}
@@ -1012,7 +1008,7 @@ func (s *Service) createTargetKey(ctx context.Context, p *storage.AutoGroupPolic
 		Name:           name,
 		UnlimitedQuota: &unlimited,
 	}
-	if groups, err := s.ChannelSvc.ListAPIKeyGroups(ctx, p.ChannelID); err == nil && len(groups) > 0 {
+	if groups, err := s.Upstream.ListAPIKeyGroups(ctx, p.ChannelID); err == nil && len(groups) > 0 {
 		sort.SliceStable(groups, func(i, j int) bool {
 			if groups[i].Ratio != groups[j].Ratio {
 				return groups[i].Ratio < groups[j].Ratio
@@ -1022,7 +1018,7 @@ func (s *Service) createTargetKey(ctx context.Context, p *storage.AutoGroupPolic
 		req.Group = groups[0].Name
 		req.GroupID = groups[0].ID
 	}
-	created, err := s.ChannelSvc.CreateAPIKey(ctx, p.ChannelID, req)
+	created, err := s.Upstream.CreateAPIKey(ctx, p.ChannelID, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1041,14 +1037,14 @@ func (s *Service) ensureProbeKey(ctx context.Context, p *storage.AutoGroupPolicy
 	name := emptyAs(strings.TrimSpace(p.ProbeKeyName), "ops-probe-auto")
 	var key *connector.APIKey
 	if p.ProbeKeyID > 0 {
-		page, err := s.ChannelSvc.ListAPIKeys(ctx, p.ChannelID, connector.APIKeyQuery{Page: 1, PageSize: 100})
+		page, err := s.Upstream.ListAPIKeys(ctx, p.ChannelID, connector.APIKeyQuery{Page: 1, PageSize: 100})
 		if err != nil {
 			return nil, fmt.Errorf("读取探测 API Key 失败：%w", err)
 		}
 		key = selectTargetKey(page.Items, p.ProbeKeyID, "")
 	}
 	if key == nil {
-		page, err := s.ChannelSvc.ListAPIKeys(ctx, p.ChannelID, connector.APIKeyQuery{Page: 1, PageSize: 100, Search: name})
+		page, err := s.Upstream.ListAPIKeys(ctx, p.ChannelID, connector.APIKeyQuery{Page: 1, PageSize: 100, Search: name})
 		if err != nil {
 			return nil, fmt.Errorf("读取探测 API Key 失败：%w", err)
 		}
@@ -1070,7 +1066,7 @@ func (s *Service) ensureProbeKey(ctx context.Context, p *storage.AutoGroupPolicy
 			req.RemainQuota = &remainQuota
 			req.Quota = nil
 		}
-		if groups, err := s.ChannelSvc.ListAPIKeyGroups(ctx, p.ChannelID); err == nil && len(groups) > 0 {
+		if groups, err := s.Upstream.ListAPIKeyGroups(ctx, p.ChannelID); err == nil && len(groups) > 0 {
 			sort.SliceStable(groups, func(i, j int) bool {
 				if groups[i].Ratio != groups[j].Ratio {
 					return groups[i].Ratio < groups[j].Ratio
@@ -1080,7 +1076,7 @@ func (s *Service) ensureProbeKey(ctx context.Context, p *storage.AutoGroupPolicy
 			req.Group = groups[0].Name
 			req.GroupID = groups[0].ID
 		}
-		created, err := s.ChannelSvc.CreateAPIKey(ctx, p.ChannelID, req)
+		created, err := s.Upstream.CreateAPIKey(ctx, p.ChannelID, req)
 		if err != nil {
 			return nil, fmt.Errorf("创建探测 API Key %s 失败：%w", name, err)
 		}
@@ -1117,7 +1113,7 @@ func (s *Service) ensureProbeKey(ctx context.Context, p *storage.AutoGroupPolicy
 			return nil, fmt.Errorf("保存探测 API Key 信息失败：%w", err)
 		}
 	}
-	raw, err := s.ChannelSvc.RevealAPIKey(ctx, p.ChannelID, key.ID)
+	raw, err := s.Upstream.RevealAPIKey(ctx, p.ChannelID, key.ID)
 	if err != nil {
 		return nil, fmt.Errorf("读取探测 API Key 明文失败：%w", err)
 	}
@@ -1134,7 +1130,7 @@ func (s *Service) ensureNewAPIProbeKeyUsable(ctx context.Context, p *storage.Aut
 	current := key
 	if !current.UnlimitedQuota && current.Quota < newAPIProbeRemainQuota {
 		quota := newAPIProbeRemainQuota
-		updated, err := s.ChannelSvc.UpdateAPIKey(ctx, p.ChannelID, current.ID, connector.APIKeyUpdateRequest{RemainQuota: &quota})
+		updated, err := s.Upstream.UpdateAPIKey(ctx, p.ChannelID, current.ID, connector.APIKeyUpdateRequest{RemainQuota: &quota})
 		if err != nil {
 			return nil, fmt.Errorf("补充探测 API Key %s 额度失败：%w", emptyAs(current.Name, p.ProbeKeyName), err)
 		}
@@ -1144,7 +1140,7 @@ func (s *Service) ensureNewAPIProbeKeyUsable(ctx context.Context, p *storage.Aut
 	}
 	if current.Status == "quota_exhausted" || current.Status == "disabled" || current.Status == "unknown" {
 		status := "active"
-		updated, err := s.ChannelSvc.UpdateAPIKey(ctx, p.ChannelID, current.ID, connector.APIKeyUpdateRequest{Status: &status})
+		updated, err := s.Upstream.UpdateAPIKey(ctx, p.ChannelID, current.ID, connector.APIKeyUpdateRequest{Status: &status})
 		if err != nil {
 			return nil, fmt.Errorf("启用探测 API Key %s 失败：%w", emptyAs(current.Name, p.ProbeKeyName), err)
 		}
@@ -1164,7 +1160,7 @@ func (s *Service) findAPIKeyByName(ctx context.Context, channelID uint, name str
 		{Page: 1, PageSize: 100, Search: name},
 		{Page: 1, PageSize: 100},
 	} {
-		page, err := s.ChannelSvc.ListAPIKeys(ctx, channelID, query)
+		page, err := s.Upstream.ListAPIKeys(ctx, channelID, query)
 		if err != nil {
 			return nil, err
 		}
@@ -1199,7 +1195,7 @@ func (s *Service) probeCandidate(ctx context.Context, p *storage.AutoGroupPolicy
 		}
 		return c, nil
 	}
-	res := s.probeOpenAI(ctx, ch, p, probe.Value)
+	res := s.probeOpenAI(ctx, p, probe.Value)
 	if !res.Success {
 		c.Status = "failed"
 		c.Reason = "探测失败"
@@ -1247,57 +1243,33 @@ func (s *Service) moveProbeKey(ctx context.Context, p *storage.AutoGroupPolicy, 
 		group := c.GroupName
 		req.Group = &group
 	}
-	_, err := s.ChannelSvc.UpdateAPIKey(ctx, p.ChannelID, probeID, req)
+	_, err := s.Upstream.UpdateAPIKey(ctx, p.ChannelID, probeID, req)
 	if err != nil {
 		return fmt.Errorf("切换探测 key 到 %s 失败：%w", c.GroupName, err)
 	}
 	return nil
 }
 
-func (s *Service) probeOpenAI(ctx context.Context, ch *storage.Channel, p *storage.AutoGroupPolicy, apiKey string) probeResult {
+func (s *Service) probeOpenAI(ctx context.Context, p *storage.AutoGroupPolicy, apiKey string) probeResult {
+	if s.Upstream == nil {
+		return probeResult{Code: "upstream_capability_missing", Message: "上游能力服务未初始化"}
+	}
 	timeout := time.Duration(p.ProbeTimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	model := emptyAs(strings.TrimSpace(p.ProbeModel), "gpt-4o-mini")
-	body, _ := json.Marshal(map[string]any{
-		"model": model,
-		"messages": []map[string]string{
-			{"role": "user", "content": "ping"},
-		},
-		"max_tokens": 1,
-		"stream":     false,
+	res, err := s.Upstream.ProbeOpenAICompatible(ctx, p.ChannelID, apiKey, upstreamcap.ProbeRequest{
+		Model:     emptyAs(strings.TrimSpace(p.ProbeModel), "gpt-4o-mini"),
+		Timeout:   timeout,
+		MaxTokens: 1,
 	})
-	url := strings.TrimRight(ch.SiteURL, "/") + "/v1/chat/completions"
-	started := time.Now()
-	req, err := http.NewRequestWithContext(probeCtx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return probeResult{Code: "request_build_failed", Message: err.Error()}
+		return probeResult{Code: "probe_failed", Message: err.Error()}
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
-	latency := time.Since(started).Milliseconds()
-	if err != nil {
-		return probeResult{Code: probeErrorCode(err), Message: err.Error(), LatencyMS: latency}
+	if res == nil {
+		return probeResult{Code: "empty_response", Message: "探测接口返回空结果"}
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return probeResult{Code: httpProbeCode(resp.StatusCode, raw), Message: probeHTTPMessage(resp.StatusCode, raw), LatencyMS: latency}
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return probeResult{Code: "invalid_json", Message: "探测接口返回非 JSON 响应", LatencyMS: latency}
-	}
-	if len(decoded) == 0 {
-		return probeResult{Code: "empty_response", Message: "探测接口返回空 JSON", LatencyMS: latency}
-	}
-	return probeResult{Success: true, Code: "ok", Message: "探测通过", LatencyMS: latency}
+	return probeResult{Success: res.Success, Code: res.Code, Message: res.Message, LatencyMS: res.LatencyMS}
 }
 
 func (s *Service) switchTargetKey(ctx context.Context, p *storage.AutoGroupPolicy, ch *storage.Channel, target *connector.APIKey, selected CandidateDecision, fromGroup string) (*connector.APIKey, *storage.AutoGroupSwitchLog, error) {
@@ -1308,7 +1280,7 @@ func (s *Service) switchTargetKey(ctx context.Context, p *storage.AutoGroupPolic
 		group := selected.GroupName
 		req.Group = &group
 	}
-	updated, err := s.ChannelSvc.UpdateAPIKey(ctx, p.ChannelID, target.ID, req)
+	updated, err := s.Upstream.UpdateAPIKey(ctx, p.ChannelID, target.ID, req)
 	log := &storage.AutoGroupSwitchLog{
 		PolicyID:      p.ID,
 		ChannelID:     p.ChannelID,
@@ -1711,47 +1683,6 @@ func candidateFromStored(stored storage.AutoGroupCandidate) CandidateDecision {
 		LastError:          stored.LastError,
 		ManualDisabled:     stored.ManualDisabled,
 	}
-}
-
-func probeErrorCode(err error) string {
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "deadline") || strings.Contains(msg, "timeout") {
-		return "timeout"
-	}
-	if strings.Contains(msg, "connection") {
-		return "connection_error"
-	}
-	return "http_error"
-}
-
-func httpProbeCode(status int, body []byte) string {
-	text := strings.ToLower(string(body))
-	switch status {
-	case http.StatusUnauthorized:
-		return "unauthorized"
-	case http.StatusForbidden:
-		return "forbidden"
-	case http.StatusTooManyRequests:
-		return "rate_limited"
-	}
-	if strings.Contains(text, "quota") || strings.Contains(text, "余额") || strings.Contains(text, "额度") {
-		return "quota_exhausted"
-	}
-	if strings.Contains(text, "model") || strings.Contains(text, "模型") {
-		return "model_unavailable"
-	}
-	return fmt.Sprintf("http_%d", status)
-}
-
-func probeHTTPMessage(status int, body []byte) string {
-	msg := strings.TrimSpace(string(body))
-	if len([]rune(msg)) > 240 {
-		msg = string([]rune(msg)[:240])
-	}
-	if msg == "" {
-		msg = http.StatusText(status)
-	}
-	return fmt.Sprintf("探测接口返回 HTTP %d：%s", status, msg)
 }
 
 func sameGroup(key *connector.APIKey, selected CandidateDecision) bool {

@@ -12,10 +12,11 @@ import (
 
 	"github.com/ifty-r/upstream-ops/backend/connector"
 	"github.com/ifty-r/upstream-ops/backend/storage"
+	"github.com/ifty-r/upstream-ops/backend/upstreamcap"
 	"gorm.io/gorm"
 )
 
-type fakeChannelService struct {
+type fakeUpstreamCapability struct {
 	keys                   []connector.APIKey
 	groups                 []connector.APIKeyGroup
 	created                []connector.APIKeyCreateRequest
@@ -26,7 +27,7 @@ type fakeChannelService struct {
 	returnCreatedWithoutID bool
 }
 
-func (f *fakeChannelService) ListAPIKeys(ctx context.Context, channelID uint, query connector.APIKeyQuery) (*connector.APIKeyPage, error) {
+func (f *fakeUpstreamCapability) ListAPIKeys(ctx context.Context, channelID uint, query connector.APIKeyQuery) (*connector.APIKeyPage, error) {
 	items := f.keys
 	if strings.TrimSpace(query.Search) != "" {
 		needle := strings.ToLower(strings.TrimSpace(query.Search))
@@ -41,11 +42,11 @@ func (f *fakeChannelService) ListAPIKeys(ctx context.Context, channelID uint, qu
 	return &connector.APIKeyPage{Items: items, Total: int64(len(items)), Page: 1, PageSize: len(items), Pages: 1}, nil
 }
 
-func (f *fakeChannelService) ListAPIKeyGroups(ctx context.Context, channelID uint) ([]connector.APIKeyGroup, error) {
+func (f *fakeUpstreamCapability) ListAPIKeyGroups(ctx context.Context, channelID uint) ([]connector.APIKeyGroup, error) {
 	return f.groups, nil
 }
 
-func (f *fakeChannelService) CreateAPIKey(ctx context.Context, channelID uint, req connector.APIKeyCreateRequest) (*connector.APIKey, error) {
+func (f *fakeUpstreamCapability) CreateAPIKey(ctx context.Context, channelID uint, req connector.APIKeyCreateRequest) (*connector.APIKey, error) {
 	f.nextKeyID++
 	key := connector.APIKey{ID: f.nextKeyID, Name: req.Name, Status: "active", Group: req.Group, GroupName: req.Group, GroupID: req.GroupID}
 	if req.RemainQuota != nil {
@@ -79,7 +80,7 @@ func (f *fakeChannelService) CreateAPIKey(ctx context.Context, channelID uint, r
 	return &key, nil
 }
 
-func (f *fakeChannelService) UpdateAPIKey(ctx context.Context, channelID uint, keyID int64, req connector.APIKeyUpdateRequest) (*connector.APIKey, error) {
+func (f *fakeUpstreamCapability) UpdateAPIKey(ctx context.Context, channelID uint, keyID int64, req connector.APIKeyUpdateRequest) (*connector.APIKey, error) {
 	f.updates = append(f.updates, req)
 	f.updateKeyIDs = append(f.updateKeyIDs, keyID)
 	for i := range f.keys {
@@ -117,7 +118,7 @@ func (f *fakeChannelService) UpdateAPIKey(ctx context.Context, channelID uint, k
 	return nil, nil
 }
 
-func (f *fakeChannelService) RevealAPIKey(ctx context.Context, channelID uint, keyID int64) (string, error) {
+func (f *fakeUpstreamCapability) RevealAPIKey(ctx context.Context, channelID uint, keyID int64) (string, error) {
 	if f.revealByID == nil {
 		return "sk-probe", nil
 	}
@@ -125,6 +126,10 @@ func (f *fakeChannelService) RevealAPIKey(ctx context.Context, channelID uint, k
 		return v, nil
 	}
 	return "sk-probe", nil
+}
+
+func (f *fakeUpstreamCapability) ProbeOpenAICompatible(ctx context.Context, channelID uint, apiKey string, req upstreamcap.ProbeRequest) (*upstreamcap.ProbeResult, error) {
+	return &upstreamcap.ProbeResult{Success: true, Code: "ok", Message: "探测通过", LatencyMS: 1}, nil
 }
 
 func openAutoGroupTestDB(t *testing.T) *gorm.DB {
@@ -171,7 +176,7 @@ func TestEvaluatePolicyCreatesMissingTargetAutoKey(t *testing.T) {
 	}
 
 	gid := int64(1)
-	fake := &fakeChannelService{
+	fake := &fakeUpstreamCapability{
 		nextKeyID: 10,
 		groups:    []connector.APIKeyGroup{{ID: &gid, Name: "fast", Ratio: 0.5}},
 	}
@@ -217,7 +222,7 @@ func TestEvaluatePolicyBackfillsCurrentGroupNameFromGroupID(t *testing.T) {
 	}
 
 	fastID := int64(11)
-	fake := &fakeChannelService{
+	fake := &fakeUpstreamCapability{
 		keys: []connector.APIKey{
 			{ID: 1, Name: "auto", Status: "active", GroupID: &fastID, GroupRatio: 0.04},
 			{ID: 2, Name: "ops-probe-auto", Status: "active", GroupID: &fastID, GroupRatio: 0.04},
@@ -264,7 +269,7 @@ func TestEvaluatePolicyBackfillsProbeKeyIDAfterInvalidCreateResponse(t *testing.
 	}
 
 	fastID := int64(11)
-	fake := &fakeChannelService{
+	fake := &fakeUpstreamCapability{
 		nextKeyID: 20,
 		keys: []connector.APIKey{
 			{ID: 1, Name: "auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},
@@ -308,7 +313,7 @@ func TestEvaluatePolicyRecoversExhaustedNewAPIProbeKey(t *testing.T) {
 	}
 
 	fastID := int64(11)
-	fake := &fakeChannelService{
+	fake := &fakeUpstreamCapability{
 		keys: []connector.APIKey{
 			{ID: 1, Name: "auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},
 			{ID: 2, Name: "ops-probe-auto", Status: "quota_exhausted", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04, Quota: 0},
@@ -353,7 +358,7 @@ func TestEvaluatePolicyUsesProbeSuccessCache(t *testing.T) {
 	}
 
 	fastID := int64(1)
-	fake := &fakeChannelService{
+	fake := &fakeUpstreamCapability{
 		keys: []connector.APIKey{
 			{ID: 1, Name: "auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},
 			{ID: 2, Name: "ops-probe-auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},
@@ -398,7 +403,7 @@ func TestEvaluatePolicyHonorsProbeBudget(t *testing.T) {
 
 	fastID := int64(1)
 	slowID := int64(2)
-	fake := &fakeChannelService{
+	fake := &fakeUpstreamCapability{
 		keys: []connector.APIKey{
 			{ID: 1, Name: "auto", Status: "active", GroupName: "slow", GroupID: &slowID, GroupRatio: 1},
 			{ID: 2, Name: "ops-probe-auto", Status: "active", GroupName: "slow", GroupID: &slowID, GroupRatio: 1},
@@ -465,7 +470,7 @@ func TestEvaluatePolicyTreatsFirstProbeSuccessAsHealthy(t *testing.T) {
 
 	fastID := int64(1)
 	slowID := int64(2)
-	fake := &fakeChannelService{
+	fake := &fakeUpstreamCapability{
 		keys: []connector.APIKey{
 			{ID: 1, Name: "auto", Status: "active", GroupName: "slow", GroupID: &slowID, GroupRatio: 0.06},
 			{ID: 2, Name: "ops-probe-auto", Status: "active", GroupName: "slow", GroupID: &slowID, GroupRatio: 0.06},
@@ -535,7 +540,7 @@ func TestEvaluatePolicySwitchesToBetterHealthyCandidateDuringCooldown(t *testing
 
 	fastID := int64(1)
 	slowID := int64(2)
-	fake := &fakeChannelService{
+	fake := &fakeUpstreamCapability{
 		keys: []connector.APIKey{
 			{ID: 1, Name: "auto", Status: "active", GroupName: "slow", GroupID: &slowID, GroupRatio: 0.06},
 			{ID: 2, Name: "ops-probe-auto", Status: "active", GroupName: "slow", GroupID: &slowID, GroupRatio: 0.06},
@@ -627,7 +632,7 @@ func TestManualDisabledCandidateIsExcludedFromSelection(t *testing.T) {
 
 	fastID := int64(1)
 	slowID := int64(2)
-	fake := &fakeChannelService{
+	fake := &fakeUpstreamCapability{
 		nextKeyID: 20,
 		keys: []connector.APIKey{
 			{ID: 1, Name: "auto", Status: "active", GroupName: "slow", GroupID: &slowID, GroupRatio: 1},
@@ -837,7 +842,7 @@ func TestEvaluatePolicyReturnsRateSnapshotError(t *testing.T) {
 	}
 
 	fastID := int64(1)
-	fake := &fakeChannelService{
+	fake := &fakeUpstreamCapability{
 		keys: []connector.APIKey{
 			{ID: 1, Name: "auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},
 			{ID: 2, Name: "ops-probe-auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},

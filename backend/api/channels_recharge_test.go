@@ -9,13 +9,11 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/ifty-r/upstream-ops/backend/channel"
 	"github.com/ifty-r/upstream-ops/backend/connector"
 	"github.com/ifty-r/upstream-ops/backend/storage"
 )
 
 type rechargeChannelServiceStub struct {
-	*channel.Service
 	info               *connector.RechargeInfo
 	launch             *connector.RechargeLaunch
 	subscriptionInfo   *connector.SubscriptionInfo
@@ -105,8 +103,8 @@ func TestChannelRechargeEndpoints(t *testing.T) {
 		},
 	}
 	registerChannels(apiGroup, &Deps{
-		Channels:   channels,
-		ChannelSvc: stub,
+		Channels:    channels,
+		UpstreamOps: stub,
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/channels/1/recharge-info", nil)
