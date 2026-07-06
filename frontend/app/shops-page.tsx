@@ -1099,6 +1099,11 @@ function ShopCard(props: {
       <div className="mt-3 flex items-center justify-between gap-2">
         <span className="text-[11px] text-muted-foreground">上次同步 {relativeTime(target.last_sync_at)}</span>
         <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+          <Button asChild variant="outline" size="icon" className="size-7">
+            <a href={target.site_url} target="_blank" rel="noreferrer" title="打开店铺">
+              <ExternalLink className="size-3.5" />
+            </a>
+          </Button>
           <Button variant="outline" size="icon" className="size-7" onClick={props.onTest} disabled={busy === `test:${target.id}`}>
             {busy === `test:${target.id}` ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
           </Button>

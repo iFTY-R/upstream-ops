@@ -1,14 +1,17 @@
 import { useMemo, useState } from "react"
-import { ExternalLink, Filter, PackageSearch, Search, ShoppingCart, X } from "lucide-react"
+import { toast } from "sonner"
+import { ExternalLink, Filter, Loader2, PackageSearch, RefreshCw, Search, ShoppingCart, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { DataPagination } from "@/components/ui/data-pagination"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { apiFetch } from "@/lib/api"
 import { useAllShopGoods, useShopTargets } from "@/lib/queries"
 import { money, relativeTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import type { ShopGoodsSort, ShopGoodsStatus, ShopGoodsWithTarget } from "@/lib/api-types"
+import type { ShopGoodsSort, ShopGoodsStatus, ShopGoodsWithTarget, ShopRefreshGoodsResult } from "@/lib/api-types"
 
 type GoodsStatusFilter = Exclude<ShopGoodsStatus, "in_stock">
 
@@ -36,12 +39,14 @@ function shopName(row: ShopGoodsWithTarget) {
 export default function ShopGoodsPage() {
   const targets = useShopTargets()
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
   const [targetID, setTargetID] = useState<number | null>(null)
   const [status, setStatus] = useState<GoodsStatusFilter>("all")
   const [inStockOnly, setInStockOnly] = useState(false)
   const [sort, setSort] = useState<ShopGoodsSort>("category")
   const [keyword, setKeyword] = useState("")
   const [categoryName, setCategoryName] = useState("")
+  const [refreshingGoodsKey, setRefreshingGoodsKey] = useState<string | null>(null)
 
   const filters = useMemo(
     () => ({
@@ -53,7 +58,7 @@ export default function ShopGoodsPage() {
     }),
     [categoryName, inStockOnly, keyword, sort, status, targetID],
   )
-  const goods = useAllShopGoods(page, 50, filters)
+  const goods = useAllShopGoods(page, pageSize, filters)
   const rows = goods.data?.items ?? []
   const total = goods.data?.total ?? 0
   const pages = goods.data?.pages ?? 1
@@ -62,6 +67,42 @@ export default function ShopGoodsPage() {
   function resetPage(next: () => void) {
     next()
     setPage(1)
+  }
+
+  function changePageSize(nextPageSize: number) {
+    setPageSize(nextPageSize)
+    setPage(1)
+  }
+
+  async function refreshGoodsStock(row: ShopGoodsWithTarget) {
+    const busyKey = `${row.target_id}:${row.goods_key}`
+    setRefreshingGoodsKey(busyKey)
+    try {
+      const result = await apiFetch<ShopRefreshGoodsResult>(
+        `/shop-targets/${row.target_id}/goods/${encodeURIComponent(row.goods_key)}/refresh`,
+        { method: "POST" },
+      )
+      if (goods.data) {
+        goods.setData({
+          ...goods.data,
+          items: goods.data.items.map((item) =>
+            item.target_id === row.target_id && item.goods_key === row.goods_key
+              ? { ...item, ...result.snapshot }
+              : item,
+          ),
+        })
+      }
+      goods.refetch()
+      if (result.found) {
+        toast.success(`库存已刷新：${result.snapshot.stock_count}`)
+      } else {
+        toast.warning("官方接口未找到该商品，已标记为消失")
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "刷新库存失败")
+    } finally {
+      setRefreshingGoodsKey(null)
+    }
   }
 
   const summary = useMemo(() => {
@@ -155,25 +196,31 @@ export default function ShopGoodsPage() {
         </div>
 
         <div className="overflow-x-auto">
-          <Table className="min-w-[1180px] table-fixed">
+          <Table className="min-w-[1260px] table-fixed">
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[18%]">店铺</TableHead>
-                <TableHead className="w-[28%]">商品</TableHead>
-                <TableHead className="w-[16%]">分组 / 分类</TableHead>
-                <TableHead className="w-[9%]">价格</TableHead>
-                <TableHead className="w-[9%]">库存</TableHead>
-                <TableHead className="w-[9%]">状态</TableHead>
-                <TableHead className="w-[11%]">最近出现</TableHead>
+                <TableHead className="w-[17%]">店铺</TableHead>
+                <TableHead className="w-[27%]">商品</TableHead>
+                <TableHead className="w-[15%]">分组 / 分类</TableHead>
+                <TableHead className="w-[8%]">价格</TableHead>
+                <TableHead className="w-[8%]">库存</TableHead>
+                <TableHead className="w-[8%]">状态</TableHead>
+                <TableHead className="w-[10%]">最近出现</TableHead>
+                <TableHead className="w-[7%]">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {rows.map((row) => (
-                <GoodsRow key={row.id} row={row} />
+                <GoodsRow
+                  key={row.id}
+                  row={row}
+                  refreshing={refreshingGoodsKey === `${row.target_id}:${row.goods_key}`}
+                  onRefreshStock={refreshGoodsStock}
+                />
               ))}
               {rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="h-24 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={8} className="h-24 text-center text-sm text-muted-foreground">
                     {activeFilters ? "当前筛选条件下没有商品。" : "暂无商品快照，先同步店铺。"}
                   </TableCell>
                 </TableRow>
@@ -181,13 +228,29 @@ export default function ShopGoodsPage() {
             </TableBody>
           </Table>
         </div>
-        <Pager page={goods.data?.page ?? page} pages={pages} total={total} onPage={setPage} />
+        <DataPagination
+          page={goods.data?.page ?? page}
+          pageSize={pageSize}
+          pages={pages}
+          total={total}
+          disabled={goods.loading}
+          onPageChange={setPage}
+          onPageSizeChange={changePageSize}
+        />
       </Card>
     </section>
   )
 }
 
-function GoodsRow({ row }: { row: ShopGoodsWithTarget }) {
+function GoodsRow({
+  row,
+  refreshing,
+  onRefreshStock,
+}: {
+  row: ShopGoodsWithTarget
+  refreshing: boolean
+  onRefreshStock: (row: ShopGoodsWithTarget) => void
+}) {
   const canBuy = !row.removed_at && row.stock_count > 0 && row.link
   const low = !row.removed_at && row.target_stock_threshold > 0 && row.stock_count <= row.target_stock_threshold
   return (
@@ -205,21 +268,43 @@ function GoodsRow({ row }: { row: ShopGoodsWithTarget }) {
           <div className="truncate font-medium" title={row.name}>{row.name}</div>
           <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
             <span className="shrink-0">{row.goods_key}</span>
-            {canBuy ? (
-              <a href={row.link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-foreground">
-                购买 <ShoppingCart className="size-3" />
-              </a>
-            ) : null}
           </div>
         </div>
       </TableCell>
       <TableCell className="truncate" title={row.category_name || undefined}>{row.category_name || "未分组"}</TableCell>
       <TableCell>{money(row.price)}</TableCell>
       <TableCell>
-        <span className={cn("font-semibold tabular-nums", low && "text-warning")}>{row.stock_count}</span>
+        <button
+          type="button"
+          onClick={() => onRefreshStock(row)}
+          disabled={refreshing}
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md px-2 py-1 font-semibold tabular-nums transition hover:bg-muted disabled:cursor-wait disabled:opacity-70",
+            low && "text-warning",
+          )}
+          title="点击刷新该商品库存"
+        >
+          {refreshing ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3 opacity-60" />}
+          {row.stock_count}
+        </button>
       </TableCell>
       <TableCell>{row.removed_at ? "已消失" : row.stock_count > 0 ? "有库存" : "零库存"}</TableCell>
       <TableCell>{relativeTime(row.last_seen_at)}</TableCell>
+      <TableCell>
+        {canBuy ? (
+          <Button asChild size="sm" variant="outline" className="h-7 gap-1 px-2">
+            <a href={row.link} target="_blank" rel="noreferrer">
+              <ShoppingCart className="size-3.5" />
+              购买
+            </a>
+          </Button>
+        ) : (
+          <Button size="sm" variant="outline" className="h-7 gap-1 px-2" disabled>
+            <ShoppingCart className="size-3.5" />
+            库存空
+          </Button>
+        )}
+      </TableCell>
     </TableRow>
   )
 }
@@ -258,16 +343,6 @@ function ClearableInput({
           <X className="size-4" />
         </button>
       ) : null}
-    </div>
-  )
-}
-
-function Pager({ page, pages, total, onPage }: { page: number; pages: number; total: number; onPage: (page: number) => void }) {
-  return (
-    <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border p-3 text-xs text-muted-foreground">
-      <span>共 {total} 个，第 {page} / {pages} 页</span>
-      <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>上一页</Button>
-      <Button variant="outline" size="sm" disabled={page >= pages} onClick={() => onPage(page + 1)}>下一页</Button>
     </div>
   )
 }
