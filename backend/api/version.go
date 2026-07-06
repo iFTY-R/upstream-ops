@@ -17,13 +17,13 @@ import (
 )
 
 const (
-	githubRepoURL              = "https://github.com/ifty-r/upstream-ops"
-	defaultGitHubLatestRelease = "https://api.github.com/repos/ifty-r/upstream-ops/releases/latest"
+	githubRepoURL        = "https://github.com/ifty-r/upstream-ops"
+	defaultGitHubTagsURL = "https://api.github.com/repos/ifty-r/upstream-ops/tags?per_page=100"
 )
 
 var (
-	githubLatestReleaseURL = defaultGitHubLatestRelease
-	githubReleaseClient    = &http.Client{Timeout: 2 * time.Second}
+	githubTagsURL       = defaultGitHubTagsURL
+	githubVersionClient = &http.Client{Timeout: 2 * time.Second}
 )
 
 type versionResponse struct {
@@ -37,9 +37,8 @@ type versionResponse struct {
 	UpdateError     string `json:"update_error"`
 }
 
-type githubReleaseResponse struct {
-	TagName string `json:"tag_name"`
-	HTMLURL string `json:"html_url"`
+type githubTagResponse struct {
+	Name string `json:"name"`
 }
 
 func registerVersion(api *gin.RouterGroup, d *Deps) {
@@ -66,42 +65,42 @@ func buildVersionResponse(ctx context.Context, d *Deps, force bool) versionRespo
 		RepoURL: githubRepoURL,
 	}
 
-	latest, releaseURL, err := fetchLatestGitHubRelease(ctx, versionCheckClient(proxyCfg, force))
+	latest, tagURL, err := fetchLatestGitHubTag(ctx, versionCheckClient(proxyCfg, force))
 	if err != nil {
 		resp.UpdateError = err.Error()
 		return resp
 	}
 	resp.LatestVersion = latest
-	resp.ReleaseURL = releaseURL
+	resp.ReleaseURL = tagURL
 	resp.UpdateAvailable = isVersionNewer(latest, global.VERSION)
 	return resp
 }
 
 func versionCheckClient(proxyCfg config.ProxyConfig, force bool) *http.Client {
 	if !proxyCfg.VersionCheckEnabled && !force {
-		return githubReleaseClient
+		return githubVersionClient
 	}
 	proxyURL, err := proxyCfg.ActiveURL()
 	if err != nil || proxyURL == "" {
-		return githubReleaseClient
+		return githubVersionClient
 	}
 	u, err := url.Parse(proxyURL)
 	if err != nil {
-		return githubReleaseClient
+		return githubVersionClient
 	}
 	return &http.Client{
-		Timeout: githubReleaseClient.Timeout,
+		Timeout: githubVersionClient.Timeout,
 		Transport: &http.Transport{
 			Proxy: http.ProxyURL(u),
 		},
 	}
 }
 
-func fetchLatestGitHubRelease(ctx context.Context, client *http.Client) (string, string, error) {
+func fetchLatestGitHubTag(ctx context.Context, client *http.Client) (string, string, error) {
 	if client == nil {
-		client = githubReleaseClient
+		client = githubVersionClient
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubLatestReleaseURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubTagsURL, nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -115,20 +114,35 @@ func fetchLatestGitHubRelease(ctx context.Context, client *http.Client) (string,
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", fmt.Errorf("github latest release status %d", resp.StatusCode)
+		return "", "", fmt.Errorf("github tags status %d", resp.StatusCode)
 	}
 
-	var release githubReleaseResponse
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+	var tags []githubTagResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
 		return "", "", err
 	}
-	if strings.TrimSpace(release.TagName) == "" {
-		return "", "", errors.New("github latest release missing tag_name")
+	latest := latestSemverTag(tags)
+	if latest == "" {
+		return "", "", errors.New("github tags missing semver tag")
 	}
-	if strings.TrimSpace(release.HTMLURL) == "" {
-		release.HTMLURL = githubRepoURL
+	return latest, githubRepoURL + "/tree/" + url.PathEscape(latest), nil
+}
+
+func latestSemverTag(tags []githubTagResponse) string {
+	latest := ""
+	var latestVersion [3]int
+	for _, tag := range tags {
+		name := strings.TrimSpace(tag.Name)
+		parsed, ok := parseVersion(name)
+		if !ok {
+			continue
+		}
+		if latest == "" || compareParsedVersion(parsed, latestVersion) > 0 {
+			latest = name
+			latestVersion = parsed
+		}
 	}
-	return release.TagName, release.HTMLURL, nil
+	return latest
 }
 
 func isVersionNewer(latest, current string) bool {
@@ -140,15 +154,19 @@ func isVersionNewer(latest, current string) bool {
 	if !ok {
 		return false
 	}
-	for i := range lv {
-		if lv[i] > cv[i] {
-			return true
+	return compareParsedVersion(lv, cv) > 0
+}
+
+func compareParsedVersion(left, right [3]int) int {
+	for i := range left {
+		if left[i] > right[i] {
+			return 1
 		}
-		if lv[i] < cv[i] {
-			return false
+		if left[i] < right[i] {
+			return -1
 		}
 	}
-	return false
+	return 0
 }
 
 func parseVersion(v string) ([3]int, bool) {

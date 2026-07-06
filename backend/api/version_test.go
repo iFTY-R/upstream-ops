@@ -32,7 +32,7 @@ func TestIsVersionNewer(t *testing.T) {
 func TestVersionEndpointReportsUpdate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	withGitHubReleaseServer(t, http.StatusOK, `{"tag_name":"v999.0.0","html_url":"https://github.com/ifty-r/upstream-ops/releases/tag/v999.0.0"}`)
+	withGitHubTagsServer(t, http.StatusOK, `[{"name":"v0.0.1"},{"name":"not-a-version"},{"name":"v999.0.0"},{"name":"v1.0.0"}]`)
 	resp := requestVersion(t)
 
 	if !resp.UpdateAvailable {
@@ -44,12 +44,15 @@ func TestVersionEndpointReportsUpdate(t *testing.T) {
 	if resp.ReleaseURL == "" {
 		t.Fatalf("release_url is empty")
 	}
+	if !strings.Contains(resp.ReleaseURL, "/tree/v999.0.0") {
+		t.Fatalf("release_url = %q, want tag tree url", resp.ReleaseURL)
+	}
 }
 
 func TestVersionEndpointReportsNoUpdate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	withGitHubReleaseServer(t, http.StatusOK, `{"tag_name":"`+global.VERSION+`","html_url":"https://github.com/ifty-r/upstream-ops/releases/tag/v`+global.VERSION+`"}`)
+	withGitHubTagsServer(t, http.StatusOK, `[{"name":"`+global.VERSION+`"}]`)
 	resp := requestVersion(t)
 
 	if resp.UpdateAvailable {
@@ -63,7 +66,7 @@ func TestVersionEndpointReportsNoUpdate(t *testing.T) {
 func TestVersionEndpointKeepsResponseOnGitHubError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	withGitHubReleaseServer(t, http.StatusInternalServerError, `{"message":"error"}`)
+	withGitHubTagsServer(t, http.StatusInternalServerError, `{"message":"error"}`)
 	resp := requestVersion(t)
 
 	if resp.UpdateAvailable {
@@ -77,7 +80,21 @@ func TestVersionEndpointKeepsResponseOnGitHubError(t *testing.T) {
 	}
 }
 
-func withGitHubReleaseServer(t *testing.T, status int, body string) {
+func TestVersionEndpointReportsTagErrorWhenNoSemverTag(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	withGitHubTagsServer(t, http.StatusOK, `[{"name":"latest"},{"name":"dev"}]`)
+	resp := requestVersion(t)
+
+	if resp.UpdateAvailable {
+		t.Fatalf("update_available = true, want false")
+	}
+	if !strings.Contains(resp.UpdateError, "missing semver tag") {
+		t.Fatalf("update_error = %q, want missing semver tag", resp.UpdateError)
+	}
+}
+
+func withGitHubTagsServer(t *testing.T, status int, body string) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -86,13 +103,13 @@ func withGitHubReleaseServer(t *testing.T, status int, body string) {
 	}))
 	t.Cleanup(srv.Close)
 
-	oldURL := githubLatestReleaseURL
-	oldClient := githubReleaseClient
-	githubLatestReleaseURL = srv.URL
-	githubReleaseClient = srv.Client()
+	oldURL := githubTagsURL
+	oldClient := githubVersionClient
+	githubTagsURL = srv.URL
+	githubVersionClient = srv.Client()
 	t.Cleanup(func() {
-		githubLatestReleaseURL = oldURL
-		githubReleaseClient = oldClient
+		githubTagsURL = oldURL
+		githubVersionClient = oldClient
 	})
 }
 
