@@ -1146,7 +1146,7 @@ function ProbeModelSelect({
           <Command>
             <CommandInput placeholder="搜索模型..." />
             <CommandList>
-              <CommandEmpty>{"没有匹配的模型，可在下方手动输入。"}</CommandEmpty>
+              <CommandEmpty>{"没有匹配的模型。"}</CommandEmpty>
               <CommandGroup>
                 {options.map((item) => (
                   <CommandItem
@@ -1173,7 +1173,6 @@ function ProbeModelSelect({
           </Command>
         </PopoverContent>
       </Popover>
-      <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder={defaultProbeModel} />
       {warning ? <p className="text-[11px] leading-4 text-warning">{warning}</p> : null}
     </div>
   )
