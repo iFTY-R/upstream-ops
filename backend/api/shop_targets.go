@@ -15,6 +15,7 @@ import (
 )
 
 func registerShopTargets(g *gin.RouterGroup, d *Deps) {
+	g.GET("/shop-goods", func(c *gin.Context) { listAllShopGoods(c, d) })
 	gp := g.Group("/shop-targets")
 	gp.GET("", func(c *gin.Context) { listShopTargets(c, d) })
 	gp.POST("", func(c *gin.Context) { createShopTarget(c, d) })
@@ -457,6 +458,31 @@ func shopTargetGoods(c *gin.Context, d *Deps) {
 		return
 	}
 	list, total, err := d.ShopGoods.ListPageFiltered(id, page, pageSize, filter)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": pageData(list, total, page, pageSize)})
+}
+
+func listAllShopGoods(c *gin.Context, d *Deps) {
+	if !shopReposReady(c, d) {
+		return
+	}
+	page, pageSize := parsePageDefaults(c)
+	filter, ok := parseShopGoodsFilter(c, 0)
+	if !ok {
+		return
+	}
+	if raw := strings.TrimSpace(c.Query("target_id")); raw != "" {
+		targetID, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			fail(c, http.StatusBadRequest, fmt.Errorf("invalid target_id"))
+			return
+		}
+		filter.TargetID = uint(targetID)
+	}
+	list, total, err := d.ShopGoods.ListAllPageFiltered(page, pageSize, filter)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return

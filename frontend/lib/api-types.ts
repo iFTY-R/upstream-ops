@@ -218,6 +218,15 @@ export interface ShopGoodsSnapshot {
   updated_at: string
 }
 
+export interface ShopGoodsWithTarget extends ShopGoodsSnapshot {
+  target_name: string
+  target_last_shop_name: string
+  target_site_url: string
+  target_monitor_enabled: boolean
+  target_notify_enabled: boolean
+  target_stock_threshold: number
+}
+
 export type ShopGoodsStatus = "all" | "active" | "in_stock" | "removed" | "low_stock" | "out_of_stock"
 export type ShopGoodsSort = "category" | "stock_asc" | "stock_desc" | "price_asc" | "price_desc" | "last_seen_desc"
 

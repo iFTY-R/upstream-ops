@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/ifty-r/upstream-ops/backend/storage"
@@ -243,5 +244,72 @@ func TestBulkConfigureShopNotificationsValidatesTargetsBeforeUpdate(t *testing.T
 	}
 	if got.NotifyEnabled {
 		t.Fatalf("notify_enabled changed before all targets were validated")
+	}
+}
+
+func TestListAllShopGoodsReturnsTargetMetadata(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db := openTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	target := &storage.ShopTarget{
+		Name:           "shop-a",
+		Platform:       storage.ShopPlatformLDXP,
+		SiteURL:        "https://pay.ldxp.cn/shop/A",
+		BaseURL:        "https://pay.ldxp.cn",
+		Token:          "A",
+		MonitorEnabled: true,
+		NotifyEnabled:  true,
+		ScopeMode:      storage.ShopScopeAll,
+		StockThreshold: 2,
+	}
+	if err := targets.Create(target); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	now := time.Now()
+	if err := goods.CreateSnapshot(&storage.ShopGoodsSnapshot{
+		TargetID:     target.ID,
+		GoodsKey:     "sku-low",
+		GoodsType:    "card",
+		Name:         "低库存商品",
+		CategoryID:   10,
+		CategoryName: "GPT",
+		Link:         "https://pay.ldxp.cn/buy/sku-low",
+		Price:        1.23,
+		StockCount:   1,
+		FirstSeenAt:  now,
+		LastSeenAt:   now,
+	}); err != nil {
+		t.Fatalf("create snapshot: %v", err)
+	}
+
+	router := gin.New()
+	registerShopTargets(router.Group("/api"), &Deps{
+		ShopTargets: targets,
+		ShopGoods:   goods,
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/shop-goods?target_id="+uintString(target.ID)+"&status=low_stock", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Items []storage.ShopGoodsWithTarget `json:"items"`
+			Total int64                         `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Data.Total != 1 || len(resp.Data.Items) != 1 {
+		t.Fatalf("unexpected goods page: %#v", resp.Data)
+	}
+	item := resp.Data.Items[0]
+	if item.TargetID != target.ID || item.TargetName != target.Name || item.TargetSiteURL != target.SiteURL || !item.TargetNotifyEnabled {
+		t.Fatalf("target metadata mismatch: %#v", item)
 	}
 }

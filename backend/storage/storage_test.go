@@ -625,6 +625,81 @@ func TestShopGoodsSnapshotCategoriesAndFilters(t *testing.T) {
 	}
 }
 
+func TestShopGoodsListAllPageFilteredIncludesTargetAndFilters(t *testing.T) {
+	db := openTestDB(t)
+	targets := NewShopTargets(db)
+	goods := NewShopGoods(db)
+	first := &ShopTarget{
+		Name:           "shop-a",
+		Platform:       ShopPlatformLDXP,
+		SiteURL:        "https://example.invalid/shop/A",
+		BaseURL:        "https://example.invalid",
+		Token:          "A",
+		MonitorEnabled: true,
+		ScopeMode:      ShopScopeAll,
+		StockThreshold: 2,
+	}
+	second := &ShopTarget{
+		Name:           "shop-b",
+		Platform:       ShopPlatformLDXP,
+		SiteURL:        "https://example.invalid/shop/B",
+		BaseURL:        "https://example.invalid",
+		Token:          "B",
+		MonitorEnabled: true,
+		ScopeMode:      ShopScopeAll,
+		StockThreshold: 5,
+	}
+	if err := targets.Create(first); err != nil {
+		t.Fatalf("create first target: %v", err)
+	}
+	if err := targets.Create(second); err != nil {
+		t.Fatalf("create second target: %v", err)
+	}
+	now := time.Now()
+	rows := []ShopGoodsSnapshot{
+		{TargetID: first.ID, GoodsKey: "a-low", GoodsType: "card", Name: "A Low", CategoryName: "GPT", Price: 1, StockCount: 2, FirstSeenAt: now, LastSeenAt: now},
+		{TargetID: first.ID, GoodsKey: "a-ok", GoodsType: "card", Name: "A OK", CategoryName: "GPT", Price: 2, StockCount: 9, FirstSeenAt: now, LastSeenAt: now},
+		{TargetID: second.ID, GoodsKey: "b-low", GoodsType: "card", Name: "B Low", CategoryName: "Claude", Price: 3, StockCount: 4, FirstSeenAt: now, LastSeenAt: now},
+	}
+	for i := range rows {
+		if err := goods.CreateSnapshot(&rows[i]); err != nil {
+			t.Fatalf("create snapshot: %v", err)
+		}
+	}
+
+	all, total, err := goods.ListAllPageFiltered(1, 20, ShopGoodsFilter{Sort: "price_desc"})
+	if err != nil {
+		t.Fatalf("list all goods: %v", err)
+	}
+	if total != 3 || len(all) != 3 {
+		t.Fatalf("all goods total=%d len=%d", total, len(all))
+	}
+	if all[0].TargetName == "" || all[0].TargetSiteURL == "" {
+		t.Fatalf("target metadata missing: %#v", all[0])
+	}
+
+	oneShop, total, err := goods.ListAllPageFiltered(1, 20, ShopGoodsFilter{TargetID: first.ID})
+	if err != nil {
+		t.Fatalf("list first target goods: %v", err)
+	}
+	if total != 2 || len(oneShop) != 2 {
+		t.Fatalf("first target total=%d len=%d", total, len(oneShop))
+	}
+	for _, row := range oneShop {
+		if row.TargetID != first.ID {
+			t.Fatalf("unexpected target in filtered rows: %#v", oneShop)
+		}
+	}
+
+	lowStock, total, err := goods.ListAllPageFiltered(1, 20, ShopGoodsFilter{Status: "low_stock"})
+	if err != nil {
+		t.Fatalf("list low stock goods: %v", err)
+	}
+	if total != 2 || len(lowStock) != 2 {
+		t.Fatalf("low stock total=%d len=%d rows=%#v", total, len(lowStock), lowStock)
+	}
+}
+
 func TestAggregateBalanceTrendFillsMissingDays(t *testing.T) {
 	db := openTestDB(t)
 	rates := NewRates(db)

@@ -25,6 +25,7 @@ import type {
   ShopGoodsChangeLog,
   ShopGoodsStatus,
   ShopGoodsSnapshot,
+  ShopGoodsWithTarget,
   ShopMonitorLog,
   ShopSnapshotCategory,
   ShopTarget,
@@ -281,6 +282,7 @@ export function useShopWatchRules(targetID: number | null) {
 }
 
 export interface ShopGoodsFilters {
+  target_id?: number
   category_id?: number
   category_name?: string
   status?: ShopGoodsStatus
@@ -292,6 +294,7 @@ function shopGoodsQuery(page: number, pageSize: number, filters?: ShopGoodsFilte
   const q = new URLSearchParams()
   q.set("page", String(page))
   q.set("page_size", String(pageSize))
+  if (filters?.target_id != null) q.set("target_id", String(filters.target_id))
   if (filters?.category_id != null) q.set("category_id", String(filters.category_id))
   if (filters?.category_name) q.set("category_name", filters.category_name)
   if (filters?.status && filters.status !== "all") q.set("status", filters.status)
@@ -304,6 +307,10 @@ export function useShopGoods(targetID: number | null, page = 1, pageSize = 20, f
   return useApi<PageResult<ShopGoodsSnapshot>>(
     targetID == null ? null : `/shop-targets/${targetID}/goods?${shopGoodsQuery(page, pageSize, filters)}`,
   )
+}
+
+export function useAllShopGoods(page = 1, pageSize = 50, filters?: ShopGoodsFilters) {
+  return useApi<PageResult<ShopGoodsWithTarget>>(`/shop-goods?${shopGoodsQuery(page, pageSize, filters)}`)
 }
 
 export function useShopSnapshotCategories(targetID: number | null) {

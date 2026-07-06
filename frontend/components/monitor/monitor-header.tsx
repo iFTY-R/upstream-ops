@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useTheme } from "next-themes"
-import { Activity, Github, Home, LogOut, RefreshCw, Sun, Moon, Settings, Store, SlidersHorizontal } from "lucide-react"
+import { Activity, Github, Home, LogOut, PackageSearch, RefreshCw, Sun, Moon, Settings, Store, SlidersHorizontal } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -184,6 +184,23 @@ export function MonitorHeader() {
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs">
               {"主页"}
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip delayDuration={200}>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => navigate("/shop-goods")}
+                className="size-8 border-border bg-background text-foreground hover:bg-muted"
+                aria-label="商品总览"
+              >
+                <PackageSearch className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              {"商品总览"}
             </TooltipContent>
           </Tooltip>
 

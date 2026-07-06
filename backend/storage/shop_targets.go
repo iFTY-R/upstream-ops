@@ -376,6 +376,17 @@ type ShopGoodsFilter struct {
 	Keyword        string
 	Sort           string
 	StockThreshold int
+	TargetID       uint
+}
+
+type ShopGoodsWithTarget struct {
+	ShopGoodsSnapshot
+	TargetName           string `gorm:"column:target_name" json:"target_name"`
+	TargetLastShopName   string `gorm:"column:target_last_shop_name" json:"target_last_shop_name"`
+	TargetSiteURL        string `gorm:"column:target_site_url" json:"target_site_url"`
+	TargetMonitorEnabled bool   `gorm:"column:target_monitor_enabled" json:"target_monitor_enabled"`
+	TargetNotifyEnabled  bool   `gorm:"column:target_notify_enabled" json:"target_notify_enabled"`
+	TargetStockThreshold int    `gorm:"column:target_stock_threshold" json:"target_stock_threshold"`
 }
 
 type ShopSnapshotCategory struct {
@@ -450,6 +461,37 @@ func (r *ShopGoods) ListPageFiltered(targetID uint, page, pageSize int, filter S
 	return list, total, nil
 }
 
+func (r *ShopGoods) ListAllPageFiltered(page, pageSize int, filter ShopGoodsFilter) ([]ShopGoodsWithTarget, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	q := r.db.Table("shop_goods_snapshots AS s").
+		Select(`s.*,
+			t.name AS target_name,
+			t.last_shop_name AS target_last_shop_name,
+			t.site_url AS target_site_url,
+			t.monitor_enabled AS target_monitor_enabled,
+			t.notify_enabled AS target_notify_enabled,
+			t.stock_threshold AS target_stock_threshold`).
+		Joins("JOIN shop_targets AS t ON t.id = s.target_id")
+	q = applyShopGoodsFilterQualified(q, filter, "s", true)
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var list []ShopGoodsWithTarget
+	if err := applyShopGoodsSortQualified(q, filter.Sort, "s", true).
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
+		Find(&list).Error; err != nil {
+		return nil, 0, err
+	}
+	return list, total, nil
+}
+
 func (r *ShopGoods) SnapshotCategories(targetID uint, stockThreshold int) ([]ShopSnapshotCategory, error) {
 	threshold := stockThreshold
 	if threshold <= 0 {
@@ -475,51 +517,81 @@ func (r *ShopGoods) SnapshotCategories(targetID uint, stockThreshold int) ([]Sho
 }
 
 func applyShopGoodsFilter(q *gorm.DB, filter ShopGoodsFilter) *gorm.DB {
+	return applyShopGoodsFilterQualified(q, filter, "", false)
+}
+
+func applyShopGoodsFilterQualified(q *gorm.DB, filter ShopGoodsFilter, alias string, useTargetThreshold bool) *gorm.DB {
+	col := func(name string) string {
+		if alias == "" {
+			return name
+		}
+		return alias + "." + name
+	}
+	if filter.TargetID != 0 {
+		q = q.Where(col("target_id")+" = ?", filter.TargetID)
+	}
 	if filter.CategoryID != nil {
-		q = q.Where("category_id = ?", *filter.CategoryID)
+		q = q.Where(col("category_id")+" = ?", *filter.CategoryID)
 	}
 	if filter.CategoryName != "" {
-		q = q.Where("category_name = ?", filter.CategoryName)
+		q = q.Where(col("category_name")+" = ?", filter.CategoryName)
 	}
 	if filter.Keyword != "" {
 		like := "%" + filter.Keyword + "%"
-		q = q.Where("(name LIKE ? OR goods_key LIKE ? OR category_name LIKE ?)", like, like, like)
+		q = q.Where("("+col("name")+" LIKE ? OR "+col("goods_key")+" LIKE ? OR "+col("category_name")+" LIKE ?)", like, like, like)
 	}
 	switch filter.Status {
 	case "active":
-		q = q.Where("removed_at IS NULL")
+		q = q.Where(col("removed_at") + " IS NULL")
 	case "in_stock":
-		q = q.Where("removed_at IS NULL AND stock_count > 0")
+		q = q.Where(col("removed_at") + " IS NULL AND " + col("stock_count") + " > 0")
 	case "removed":
-		q = q.Where("removed_at IS NOT NULL")
+		q = q.Where(col("removed_at") + " IS NOT NULL")
 	case "low_stock":
+		if useTargetThreshold {
+			q = q.Where("t.stock_threshold > 0 AND " + col("removed_at") + " IS NULL AND " + col("stock_count") + " <= t.stock_threshold")
+			break
+		}
 		threshold := filter.StockThreshold
 		if threshold <= 0 {
 			q = q.Where("1 = 0")
 			break
 		}
-		q = q.Where("removed_at IS NULL AND stock_count <= ?", threshold)
+		q = q.Where(col("removed_at")+" IS NULL AND "+col("stock_count")+" <= ?", threshold)
 	case "out_of_stock":
-		q = q.Where("removed_at IS NULL AND stock_count <= 0")
+		q = q.Where(col("removed_at") + " IS NULL AND " + col("stock_count") + " <= 0")
 	}
 	return q
 }
 
 func applyShopGoodsSort(q *gorm.DB, sort string) *gorm.DB {
-	q = q.Order("removed_at ASC")
+	return applyShopGoodsSortQualified(q, sort, "", false)
+}
+
+func applyShopGoodsSortQualified(q *gorm.DB, sort string, alias string, includeTarget bool) *gorm.DB {
+	col := func(name string) string {
+		if alias == "" {
+			return name
+		}
+		return alias + "." + name
+	}
+	q = q.Order(col("removed_at") + " ASC")
+	if includeTarget {
+		q = q.Order("t.sort_order ASC").Order("t.id ASC")
+	}
 	switch sort {
 	case "stock_asc":
-		return q.Order("stock_count ASC").Order("category_name ASC").Order("name ASC").Order("goods_key ASC")
+		return q.Order(col("stock_count") + " ASC").Order(col("category_name") + " ASC").Order(col("name") + " ASC").Order(col("goods_key") + " ASC")
 	case "stock_desc":
-		return q.Order("stock_count DESC").Order("category_name ASC").Order("name ASC").Order("goods_key ASC")
+		return q.Order(col("stock_count") + " DESC").Order(col("category_name") + " ASC").Order(col("name") + " ASC").Order(col("goods_key") + " ASC")
 	case "price_asc":
-		return q.Order("price ASC").Order("category_name ASC").Order("name ASC").Order("goods_key ASC")
+		return q.Order(col("price") + " ASC").Order(col("category_name") + " ASC").Order(col("name") + " ASC").Order(col("goods_key") + " ASC")
 	case "price_desc":
-		return q.Order("price DESC").Order("category_name ASC").Order("name ASC").Order("goods_key ASC")
+		return q.Order(col("price") + " DESC").Order(col("category_name") + " ASC").Order(col("name") + " ASC").Order(col("goods_key") + " ASC")
 	case "last_seen_desc":
-		return q.Order("last_seen_at DESC").Order("category_name ASC").Order("name ASC").Order("goods_key ASC")
+		return q.Order(col("last_seen_at") + " DESC").Order(col("category_name") + " ASC").Order(col("name") + " ASC").Order(col("goods_key") + " ASC")
 	default:
-		return q.Order("category_name ASC").Order("name ASC").Order("goods_key ASC")
+		return q.Order(col("category_name") + " ASC").Order(col("name") + " ASC").Order(col("goods_key") + " ASC")
 	}
 }
 

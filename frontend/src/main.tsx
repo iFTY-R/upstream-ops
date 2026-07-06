@@ -15,6 +15,7 @@ import CaptchaPage from '@/app/captcha-page'
 import NotificationsPage from '@/app/notifications-page'
 import AutoGroupsPage from '@/app/auto-groups-page'
 import ShopsPage from '@/app/shops-page'
+import ShopGoodsPage from '@/app/shop-goods-page'
 import SettingsPage from '@/app/settings-page'
 import '@/app/globals.css'
 
@@ -33,6 +34,7 @@ createRoot(document.getElementById('root')!).render(
                     <Route path="notifications" element={<NotificationsPage />} />
                     <Route path="auto-groups" element={<AutoGroupsPage />} />
                     <Route path="shops" element={<ShopsPage />} />
+                    <Route path="shop-goods" element={<ShopGoodsPage />} />
                     <Route path="settings" element={<SettingsPage />} />
                   </Route>
                 </Routes>
