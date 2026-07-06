@@ -27,6 +27,25 @@ type ProbeResult struct {
 	LatencyMS int64  `json:"latency_ms"`
 }
 
+const (
+	ProbeCodeOK                     = "0"
+	ProbeCodeTimeout                = "1001"
+	ProbeCodeConnectionError        = "1002"
+	ProbeCodeHTTPError              = "1003"
+	ProbeCodeProbeKeyUnauthorized   = "2001"
+	ProbeCodeProbeKeyIPForbidden    = "2002"
+	ProbeCodeProbeKeyGroupForbidden = "2003"
+	ProbeCodeProbeModelForbidden    = "2004"
+	ProbeCodeUpstreamUnauthorized   = "3001"
+	ProbeCodeUpstreamForbidden      = "3002"
+	ProbeCodeRateLimited            = "3003"
+	ProbeCodeQuotaExhausted         = "3004"
+	ProbeCodeModelUnavailable       = "3005"
+	ProbeCodeEmptyResponse          = "4001"
+	ProbeCodeInvalidJSON            = "4002"
+	ProbeCodeUpstreamError          = "4003"
+)
+
 func (s *Service) ProbeOpenAICompatible(ctx context.Context, channelID uint, apiKey string, req ProbeRequest) (*ProbeResult, error) {
 	if s == nil || s.channels == nil {
 		return nil, NormalizeError(channelID, CapOpenAIProbe, errNilChannelService)
@@ -101,16 +120,16 @@ func probeOpenAICompatible(ctx context.Context, siteURL, proxyURL, apiKey string
 		return &ProbeResult{Success: false, Code: probeHTTPCode(resp.StatusCode, raw), Message: probeHTTPMessage(resp.StatusCode, raw), LatencyMS: latency}, nil
 	}
 	if len(raw) == 0 {
-		return &ProbeResult{Success: false, Code: "empty_response", Message: "探测接口返回空响应", LatencyMS: latency}, nil
+		return &ProbeResult{Success: false, Code: ProbeCodeEmptyResponse, Message: "探测接口返回空响应", LatencyMS: latency}, nil
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return &ProbeResult{Success: false, Code: "invalid_json", Message: "探测接口返回非 JSON 响应", LatencyMS: latency}, nil
+		return &ProbeResult{Success: false, Code: ProbeCodeInvalidJSON, Message: "探测接口返回非 JSON 响应", LatencyMS: latency}, nil
 	}
 	if decoded["error"] != nil {
-		return &ProbeResult{Success: false, Code: "upstream_error", Message: probeErrorMessage(decoded["error"]), LatencyMS: latency}, nil
+		return &ProbeResult{Success: false, Code: ProbeCodeUpstreamError, Message: probeErrorMessage(decoded["error"]), LatencyMS: latency}, nil
 	}
-	return &ProbeResult{Success: true, Code: "ok", Message: "探测通过", LatencyMS: latency}, nil
+	return &ProbeResult{Success: true, Code: ProbeCodeOK, Message: "探测通过", LatencyMS: latency}, nil
 }
 
 func probeHTTPClient(timeout time.Duration, proxyURL string) (*http.Client, error) {
@@ -128,31 +147,65 @@ func probeHTTPClient(timeout time.Duration, proxyURL string) (*http.Client, erro
 func probeTransportCode(err error) string {
 	msg := strings.ToLower(err.Error())
 	if strings.Contains(msg, "deadline") || strings.Contains(msg, "timeout") {
-		return "timeout"
+		return ProbeCodeTimeout
 	}
 	if strings.Contains(msg, "connection") || strings.Contains(msg, "connectex") {
-		return "connection_error"
+		return ProbeCodeConnectionError
 	}
-	return "http_error"
+	return ProbeCodeHTTPError
 }
 
 func probeHTTPCode(status int, body []byte) string {
 	text := strings.ToLower(string(body))
 	switch status {
 	case http.StatusUnauthorized:
-		return "unauthorized"
+		if isProbeKeyUnauthorizedBody(text) {
+			return ProbeCodeProbeKeyUnauthorized
+		}
+		return ProbeCodeUpstreamUnauthorized
 	case http.StatusForbidden:
-		return "forbidden"
+		return probeForbiddenCode(text)
 	case http.StatusTooManyRequests:
-		return "rate_limited"
+		return ProbeCodeRateLimited
 	}
 	if strings.Contains(text, "quota") || strings.Contains(text, "余额") || strings.Contains(text, "额度") {
-		return "quota_exhausted"
+		return ProbeCodeQuotaExhausted
 	}
 	if strings.Contains(text, "model") || strings.Contains(text, "模型") {
-		return "model_unavailable"
+		return ProbeCodeModelUnavailable
 	}
 	return fmt.Sprintf("http_%d", status)
+}
+
+func probeForbiddenCode(text string) string {
+	switch {
+	case strings.Contains(text, "ip 不在") ||
+		strings.Contains(text, "ip不在") ||
+		strings.Contains(text, "client ip") ||
+		strings.Contains(text, "allow"):
+		return ProbeCodeProbeKeyIPForbidden
+	case strings.Contains(text, "无权访问") ||
+		strings.Contains(text, "group access denied") ||
+		strings.Contains(text, "分组") && strings.Contains(text, "弃用"):
+		return ProbeCodeProbeKeyGroupForbidden
+	case strings.Contains(text, "no access to model") ||
+		strings.Contains(text, "token model") ||
+		strings.Contains(text, "model forbidden") ||
+		strings.Contains(text, "模型"):
+		return ProbeCodeProbeModelForbidden
+	default:
+		return ProbeCodeUpstreamForbidden
+	}
+}
+
+func isProbeKeyUnauthorizedBody(text string) bool {
+	return strings.Contains(text, "token invalid") ||
+		strings.Contains(text, "invalid token") ||
+		strings.Contains(text, "invalid_api_key") ||
+		strings.Contains(text, "令牌无效") ||
+		strings.Contains(text, "令牌已过期") ||
+		strings.Contains(text, "令牌额度已用尽") ||
+		strings.Contains(text, "tokenstatus")
 }
 
 func probeHTTPMessage(status int, body []byte) string {

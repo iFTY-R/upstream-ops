@@ -1181,7 +1181,7 @@ func (s *Service) probeCandidate(ctx context.Context, p *storage.AutoGroupPolicy
 		c.Status = "failed"
 		c.Reason = "探测 key 切组失败"
 		c.LastError = err.Error()
-		c.LastErrorCode = "probe_key_update_failed"
+		c.LastErrorCode = "2101"
 		failed, markErr := s.Repo.MarkCandidateProbeFailure(p.ID, c.GroupName, p.FailureThreshold, circuitDuration(p), c.LastErrorCode, err.Error(), 0)
 		if markErr != nil {
 			return c, fmt.Errorf("记录候选分组 %s 探测失败状态失败：%w", c.GroupName, markErr)
@@ -1202,6 +1202,9 @@ func (s *Service) probeCandidate(ctx context.Context, p *storage.AutoGroupPolicy
 		c.LastError = res.Message
 		c.LastErrorCode = res.Code
 		c.LastProbeLatencyMS = res.LatencyMS
+		if isProbeAuthFailure(res.Code) {
+			return c, fmt.Errorf("探测 API Key 鉴权失败，未熔断候选分组 %s：%s", c.GroupName, res.Message)
+		}
 		failed, markErr := s.Repo.MarkCandidateProbeFailure(p.ID, c.GroupName, p.FailureThreshold, circuitDuration(p), res.Code, res.Message, res.LatencyMS)
 		if markErr != nil {
 			return c, fmt.Errorf("记录候选分组 %s 探测失败状态失败：%w", c.GroupName, markErr)
@@ -1233,6 +1236,10 @@ func (s *Service) probeCandidate(ctx context.Context, p *storage.AutoGroupPolicy
 		c.Reason = "探测通过"
 	}
 	return c, nil
+}
+
+func isProbeAuthFailure(code string) bool {
+	return strings.TrimSpace(code) == upstreamcap.ProbeCodeProbeKeyUnauthorized
 }
 
 func (s *Service) moveProbeKey(ctx context.Context, p *storage.AutoGroupPolicy, probeID int64, c CandidateDecision) error {
@@ -1267,7 +1274,7 @@ func (s *Service) probeOpenAI(ctx context.Context, p *storage.AutoGroupPolicy, a
 		return probeResult{Code: "probe_failed", Message: err.Error()}
 	}
 	if res == nil {
-		return probeResult{Code: "empty_response", Message: "探测接口返回空结果"}
+		return probeResult{Code: upstreamcap.ProbeCodeEmptyResponse, Message: "探测接口返回空结果"}
 	}
 	return probeResult{Success: res.Success, Code: res.Code, Message: res.Message, LatencyMS: res.LatencyMS}
 }

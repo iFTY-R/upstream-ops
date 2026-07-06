@@ -1300,11 +1300,21 @@ function CandidatesPanel({
                             {c.success_count > 0 ? `连续成功 ${c.success_count}` : c.failure_count > 0 ? `失败 ${c.failure_count}` : "—"}
                           </div>
                         </TableCell>
-                        <TableCell className="max-w-48 text-muted-foreground">
+                        <TableCell className="max-w-64 text-muted-foreground">
+                          {c.last_error_code ? (
+                            <div className="mb-1 flex flex-wrap items-center gap-1">
+                              <span className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] text-foreground">
+                                {c.last_error_code}
+                              </span>
+                              <span className="text-[11px] text-foreground">{probeErrorLabel(c.last_error_code)}</span>
+                            </div>
+                          ) : null}
                           <div className="line-clamp-2">
                             {c.reason || c.last_error || (c.circuit_open_until ? `熔断到 ${relativeTime(c.circuit_open_until)}` : "—")}
-                            {c.last_error_code ? ` · ${c.last_error_code}` : ""}
                           </div>
+                          {c.last_error && c.reason && c.last_error !== c.reason ? (
+                            <div className="mt-1 line-clamp-2 text-[10px] text-muted-foreground/80">{c.last_error}</div>
+                          ) : null}
                         </TableCell>
                         <TableCell className="min-w-52 text-right">
                           <div className="flex flex-wrap justify-end gap-1">
@@ -1456,6 +1466,45 @@ function candidateActionLabel(action: "disable" | "enable" | "probe" | "circuit"
       return "候选分组已临时熔断"
     case "force-switch":
       return "已强制切换"
+  }
+}
+
+function probeErrorLabel(code?: string) {
+  switch (code) {
+    case "1001":
+      return "请求超时"
+    case "1002":
+      return "连接失败"
+    case "1003":
+      return "HTTP 请求失败"
+    case "2001":
+      return "探测 Key 无效或未通过 NewAPI"
+    case "2002":
+      return "探测 Key IP 限制"
+    case "2003":
+      return "探测 Key 无权使用该分组"
+    case "2004":
+      return "探测模型无权限"
+    case "2101":
+      return "探测 Key 切组失败"
+    case "3001":
+      return "上游通道返回 401"
+    case "3002":
+      return "上游通道返回 403"
+    case "3003":
+      return "触发限流"
+    case "3004":
+      return "额度不足"
+    case "3005":
+      return "模型不可用"
+    case "4001":
+      return "响应为空"
+    case "4002":
+      return "响应不是有效 JSON"
+    case "4003":
+      return "上游返回错误对象"
+    default:
+      return code ? "未归类探测错误" : "—"
   }
 }
 

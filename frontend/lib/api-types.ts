@@ -761,6 +761,26 @@ export type AutoGroupCandidateStatus =
   | "failed"
   | "unknown"
 
+export type AutoGroupProbeErrorCode =
+  | "0"
+  | "1001"
+  | "1002"
+  | "1003"
+  | "2001"
+  | "2002"
+  | "2003"
+  | "2004"
+  | "2101"
+  | "3001"
+  | "3002"
+  | "3003"
+  | "3004"
+  | "3005"
+  | "4001"
+  | "4002"
+  | "4003"
+  | `${number}`
+
 export interface AutoGroupCandidate {
   id: number
   policy_id: number
@@ -778,7 +798,7 @@ export interface AutoGroupCandidate {
   last_probe_at?: string | null
   last_probe_success?: boolean | null
   last_probe_latency_ms: number
-  last_error_code?: string
+  last_error_code?: AutoGroupProbeErrorCode
   last_checked_at?: string | null
   last_error?: string
   manual_disabled: boolean
@@ -801,7 +821,7 @@ export interface AutoGroupCandidateDecision {
   last_probe_at?: string | null
   last_probe_success?: boolean | null
   last_probe_latency_ms: number
-  last_error_code?: string
+  last_error_code?: AutoGroupProbeErrorCode
   last_error?: string
   manual_disabled: boolean
 }

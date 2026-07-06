@@ -24,6 +24,7 @@ type fakeUpstreamCapability struct {
 	updateKeyIDs           []int64
 	nextKeyID              int64
 	revealByID             map[int64]string
+	probeResult            *upstreamcap.ProbeResult
 	returnCreatedWithoutID bool
 }
 
@@ -129,6 +130,9 @@ func (f *fakeUpstreamCapability) RevealAPIKey(ctx context.Context, channelID uin
 }
 
 func (f *fakeUpstreamCapability) ProbeOpenAICompatible(ctx context.Context, channelID uint, apiKey string, req upstreamcap.ProbeRequest) (*upstreamcap.ProbeResult, error) {
+	if f.probeResult != nil {
+		return f.probeResult, nil
+	}
 	return &upstreamcap.ProbeResult{Success: true, Code: "ok", Message: "探测通过", LatencyMS: 1}, nil
 }
 
@@ -343,6 +347,50 @@ func TestEvaluatePolicyRecoversExhaustedNewAPIProbeKey(t *testing.T) {
 	}
 	if fake.updateKeyIDs[1] != 2 || fake.updates[1].Status == nil || *fake.updates[1].Status != "active" {
 		t.Fatalf("second update = key %d %#v, want probe status active", fake.updateKeyIDs[1], fake.updates[1])
+	}
+}
+
+func TestEvaluatePolicyDoesNotCircuitCandidateOnProbeUnauthorized(t *testing.T) {
+	db := openAutoGroupTestDB(t)
+	server := newProbeServer(t)
+	defer server.Close()
+
+	channels := storage.NewChannels(db)
+	ch := &storage.Channel{Name: "newapi", Type: storage.ChannelTypeNewAPI, SiteURL: server.URL, Username: "u", PasswordCipher: "x", MonitorEnabled: true}
+	if err := channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	fastID := int64(11)
+	fake := &fakeUpstreamCapability{
+		keys: []connector.APIKey{
+			{ID: 1, Name: "auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},
+			{ID: 2, Name: "ops-probe-auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04, Quota: newAPIProbeRemainQuota},
+		},
+		groups:      []connector.APIKeyGroup{{ID: &fastID, Name: "fast", Ratio: 0.04}},
+		revealByID:  map[int64]string{2: "sk-probe"},
+		probeResult: &upstreamcap.ProbeResult{Success: false, Code: upstreamcap.ProbeCodeProbeKeyUnauthorized, Message: "探测接口返回 HTTP 401：令牌无效", LatencyMS: 1},
+	}
+	repo := storage.NewAutoGroups(db)
+	rates := storage.NewRates(db)
+	if _, err := rates.Upsert(&storage.RateSnapshot{ChannelID: ch.ID, ModelName: "fast", Ratio: 0.04, LastSeenAt: time.Now()}); err != nil {
+		t.Fatalf("upsert rates: %v", err)
+	}
+	policy := &storage.AutoGroupPolicy{ChannelID: ch.ID, Name: "auto", Enabled: true, NotifyEnabled: false, TargetKeyName: "auto", ProbeKeyName: "ops-probe-auto", ProbeModel: "gpt-5.4", ProbeTimeoutSeconds: 3, FailureThreshold: 1, CircuitDurationMinutes: 30, HalfOpenSuccessThreshold: 1, KeepCurrentWhenNoAvailable: true, ForceSwitchOnCurrentUnhealthy: true}
+	if err := repo.CreatePolicy(policy); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+
+	svc := NewService(repo, channels, rates, fake, nil, nil)
+	if _, err := svc.EvaluatePolicy(context.Background(), policy.ID); err == nil || !strings.Contains(err.Error(), "探测 API Key 鉴权失败") {
+		t.Fatalf("evaluate err = %v, want probe auth failure", err)
+	}
+	candidate, err := repo.FindCandidate(policy.ID, "fast")
+	if err != nil {
+		t.Fatalf("find candidate: %v", err)
+	}
+	if candidate != nil && candidate.Status == "circuit_open" {
+		t.Fatalf("candidate should not circuit on unauthorized: %#v", candidate)
 	}
 }
 
