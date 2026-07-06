@@ -875,6 +875,72 @@ func TestEvaluatePolicySwitchesNewAPIByGroupName(t *testing.T) {
 	}
 }
 
+func TestEvaluatePolicyRemovesCandidatesMissingFromUpstreamGroups(t *testing.T) {
+	db := openAutoGroupTestDB(t)
+	server := newProbeServer(t)
+	defer server.Close()
+
+	channels := storage.NewChannels(db)
+	ch := &storage.Channel{Name: "sub", Type: storage.ChannelTypeSub2API, SiteURL: server.URL, Username: "u", PasswordCipher: "x", MonitorEnabled: true}
+	if err := channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	fastID := int64(1)
+	oldID := int64(2)
+	fake := &fakeUpstreamCapability{
+		keys: []connector.APIKey{
+			{ID: 1, Name: "auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},
+			{ID: 2, Name: "ops-probe-auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},
+		},
+		groups:     []connector.APIKeyGroup{{ID: &fastID, Name: "fast", Ratio: 0.04}},
+		revealByID: map[int64]string{2: "sk-probe"},
+	}
+	repo := storage.NewAutoGroups(db)
+	rates := storage.NewRates(db)
+	for _, snapshot := range []storage.RateSnapshot{
+		{ChannelID: ch.ID, ModelName: "fast", Ratio: 0.04, LastSeenAt: time.Now()},
+		{ChannelID: ch.ID, ModelName: "old", Ratio: 0.01, LastSeenAt: time.Now()},
+	} {
+		snapshot := snapshot
+		if _, err := rates.Upsert(&snapshot); err != nil {
+			t.Fatalf("upsert rates: %v", err)
+		}
+	}
+	policy := &storage.AutoGroupPolicy{ChannelID: ch.ID, Name: "auto", Enabled: true, NotifyEnabled: false, TargetKeyName: "auto", ProbeKeyName: "ops-probe-auto", ProbeModel: "gpt-4o-mini", ProbeTimeoutSeconds: 3, ProbeSuccessCacheMinutes: 60, FailureThreshold: 2, CircuitDurationMinutes: 30, HalfOpenSuccessThreshold: 1, KeepCurrentWhenNoAvailable: true, ForceSwitchOnCurrentUnhealthy: true}
+	if err := repo.CreatePolicy(policy); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	probeOK := true
+	lastProbe := time.Now().Add(-10 * time.Minute)
+	if err := repo.UpsertCandidate(&storage.AutoGroupCandidate{PolicyID: policy.ID, GroupName: "old", GroupID: &oldID, Ratio: 0.01, Status: "healthy", LastProbeAt: &lastProbe, LastProbeSuccess: &probeOK}); err != nil {
+		t.Fatalf("upsert stale candidate: %v", err)
+	}
+
+	svc := NewService(repo, channels, rates, fake, nil, nil)
+	res, err := svc.EvaluatePolicy(context.Background(), policy.ID)
+	if err != nil {
+		t.Fatalf("evaluate policy: %v", err)
+	}
+	if len(res.Candidates) != 1 || res.Candidates[0].GroupName != "fast" {
+		t.Fatalf("candidates = %#v, want only current upstream group fast", res.Candidates)
+	}
+	stale, err := repo.FindCandidate(policy.ID, "old")
+	if err != nil {
+		t.Fatalf("find stale candidate: %v", err)
+	}
+	if stale != nil {
+		t.Fatalf("stale candidate still exists: %#v", stale)
+	}
+	list, err := repo.ListCandidates(policy.ID)
+	if err != nil {
+		t.Fatalf("list candidates: %v", err)
+	}
+	if len(list) != 1 || list[0].GroupName != "fast" {
+		t.Fatalf("stored candidates = %#v, want only fast", list)
+	}
+}
+
 func TestManualDisabledCandidateIsExcludedFromSelection(t *testing.T) {
 	db := openAutoGroupTestDB(t)
 	server := newProbeServer(t)

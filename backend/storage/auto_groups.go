@@ -194,6 +194,14 @@ func (r *AutoGroups) ListCandidates(policyID uint) ([]AutoGroupCandidate, error)
 	return list, nil
 }
 
+func (r *AutoGroups) DeleteCandidatesNotIn(policyID uint, groupNames []string) error {
+	query := r.db.Where("policy_id = ?", policyID)
+	if len(groupNames) == 0 {
+		return query.Delete(&AutoGroupCandidate{}).Error
+	}
+	return query.Where("group_name NOT IN ?", groupNames).Delete(&AutoGroupCandidate{}).Error
+}
+
 func (r *AutoGroups) SetPolicyEnabled(id uint, enabled bool) error {
 	return r.db.Model(&AutoGroupPolicy{}).
 		Where("id = ?", id).

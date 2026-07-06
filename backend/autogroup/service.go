@@ -859,41 +859,49 @@ func (s *Service) evaluateCandidates(ctx context.Context, p *storage.AutoGroupPo
 			return nil, fmt.Errorf("读取倍率快照失败：%w", err)
 		}
 	}
-	byName := make(map[string]CandidateDecision)
+	ratesByName := make(map[string]storage.RateSnapshot, len(rates))
 	for _, r := range rates {
 		name := strings.TrimSpace(r.ModelName)
 		if name == "" {
 			continue
 		}
-		byName[strings.ToLower(name)] = CandidateDecision{
-			GroupName:   name,
-			Description: r.Description,
-			Ratio:       r.Ratio,
-			Status:      "unknown",
-		}
+		ratesByName[strings.ToLower(name)] = r
 	}
+	byName := make(map[string]CandidateDecision, len(groups))
 	for _, g := range groups {
 		name := strings.TrimSpace(g.Name)
 		if name == "" {
 			continue
 		}
 		key := strings.ToLower(name)
-		c := byName[key]
-		c.GroupName = name
-		c.GroupID = g.ID
+		c := CandidateDecision{
+			GroupName: name,
+			GroupID:   g.ID,
+			Status:    "unknown",
+		}
 		if strings.TrimSpace(g.Description) != "" {
 			c.Description = g.Description
 		}
 		if g.Ratio > 0 {
 			c.Ratio = g.Ratio
 		}
+		if r, ok := ratesByName[key]; ok {
+			if c.Description == "" {
+				c.Description = r.Description
+			}
+			if c.Ratio <= 0 && r.Ratio > 0 {
+				c.Ratio = r.Ratio
+			}
+		}
 		c.Status = "unknown"
 		byName[key] = c
 	}
 
 	out := make([]CandidateDecision, 0, len(byName))
+	currentGroupNames := make([]string, 0, len(byName))
 	now := time.Now()
 	for _, c := range byName {
+		currentGroupNames = append(currentGroupNames, c.GroupName)
 		prev, err := s.Repo.FindCandidate(p.ID, c.GroupName)
 		if err != nil {
 			return nil, err
@@ -949,6 +957,9 @@ func (s *Service) evaluateCandidates(ctx context.Context, p *storage.AutoGroupPo
 		if err := s.upsertCandidateDecision(p.ID, c, checkedAt); err != nil {
 			return nil, err
 		}
+	}
+	if err := s.Repo.DeleteCandidatesNotIn(p.ID, currentGroupNames); err != nil {
+		return nil, fmt.Errorf("同步清理已不存在的候选分组失败：%w", err)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Status == "healthy" && out[j].Status != "healthy" {
