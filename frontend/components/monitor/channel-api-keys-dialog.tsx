@@ -59,7 +59,7 @@ interface KeyForm {
   status: "active" | "disabled"
   group: string
   group_id: string
-  remain_quota: string
+  remain_amount: string
   quota: string
   unlimited_quota: boolean
   expired_time: string
@@ -86,7 +86,7 @@ const emptyForm: KeyForm = {
   status: "active",
   group: "",
   group_id: "",
-  remain_quota: "",
+  remain_amount: "",
   quota: "",
   unlimited_quota: false,
   expired_time: "-1",
@@ -111,7 +111,7 @@ function formFromKey(key: ChannelAPIKey, channel: Channel): KeyForm {
   base.status = key.status === "disabled" ? "disabled" : "active"
   if (channel.type === "newapi") {
     base.group = key.group ?? ""
-    base.remain_quota = key.quota ? String(key.quota) : "0"
+    base.remain_amount = key.remain_amount != null ? String(key.remain_amount) : key.quota ? String(key.quota) : "0"
     base.unlimited_quota = !!key.unlimited_quota
     base.expired_time = key.expired_time != null ? String(key.expired_time) : "-1"
     base.model_limits_enabled = !!key.model_limits_enabled
@@ -367,7 +367,7 @@ export function ChannelAPIKeysDialog({
       const payload: Record<string, unknown> = {
         name: form.name.trim(),
         group: form.group.trim(),
-        remain_quota: optionalInt(form.remain_quota) ?? 0,
+        remain_amount: optionalFloat(form.remain_amount) ?? 0,
         unlimited_quota: form.unlimited_quota,
         expired_time: optionalInt(form.expired_time) ?? -1,
         model_limits_enabled: form.model_limits_enabled,
@@ -557,7 +557,7 @@ export function ChannelAPIKeysDialog({
                       <TableHead className="min-w-40">密钥</TableHead>
                       <TableHead>状态</TableHead>
                           <TableHead className="min-w-52">分组</TableHead>
-                      <TableHead className="min-w-24">额度</TableHead>
+                      <TableHead className="min-w-24">{isNewAPI ? "额度 USD" : "额度"}</TableHead>
                       <TableHead className="min-w-32">过期</TableHead>
                       <TableHead className="min-w-28 text-right">操作</TableHead>
                     </TableRow>
@@ -613,7 +613,7 @@ export function ChannelAPIKeysDialog({
                             {isNewAPI
                               ? item.unlimited_quota
                                 ? "无限"
-                                : decimal(item.quota, 0)
+                                : `$${decimal(item.remain_amount ?? item.quota, 6)}`
                               : `${decimal(item.quota_used)}/${item.quota > 0 ? decimal(item.quota) : "无限"}`}
                           </TableCell>
                           <TableCell>
@@ -848,8 +848,8 @@ function NewAPIFields({
           </Select>
           <GroupHint group={selectedGroup} />
         </Field>
-        <Field label="剩余额度">
-          <Input value={form.remain_quota} onChange={(e) => setForm((f) => ({ ...f, remain_quota: e.target.value }))} disabled={disabled} inputMode="numeric" />
+        <Field label="额度 USD">
+          <Input value={form.remain_amount} onChange={(e) => setForm((f) => ({ ...f, remain_amount: e.target.value }))} disabled={disabled || form.unlimited_quota} inputMode="decimal" />
         </Field>
         <Field label="过期时间戳">
           <Input value={form.expired_time} onChange={(e) => setForm((f) => ({ ...f, expired_time: e.target.value }))} disabled={disabled} inputMode="numeric" />

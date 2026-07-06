@@ -34,7 +34,7 @@ type Service struct {
 	locks      sync.Map
 }
 
-const newAPIProbeRemainQuota = 500000
+const newAPIProbeRemainAmountUSD = 1.0
 
 func NewService(repo *storage.AutoGroups, channels *storage.Channels, rates *storage.Rates, upstream UpstreamCapability, dispatcher *notify.Dispatcher, log *slog.Logger) *Service {
 	return &Service{
@@ -1053,7 +1053,7 @@ func (s *Service) ensureProbeKey(ctx context.Context, p *storage.AutoGroupPolicy
 	if key == nil {
 		unlimited := false
 		quota := 10.0
-		remainQuota := newAPIProbeRemainQuota
+		remainAmount := newAPIProbeRemainAmountUSD
 		limitEnabled := true
 		req := connector.APIKeyCreateRequest{
 			Name:               name,
@@ -1063,8 +1063,7 @@ func (s *Service) ensureProbeKey(ctx context.Context, p *storage.AutoGroupPolicy
 			ModelLimits:        emptyAs(strings.TrimSpace(p.ProbeModel), "gpt-4o-mini"),
 		}
 		if ch != nil && ch.Type == storage.ChannelTypeNewAPI {
-			req.RemainQuota = &remainQuota
-			req.Quota = nil
+			req.RemainAmount = &remainAmount
 		}
 		if groups, err := s.Upstream.ListAPIKeyGroups(ctx, p.ChannelID); err == nil && len(groups) > 0 {
 			sort.SliceStable(groups, func(i, j int) bool {
@@ -1128,9 +1127,9 @@ func (s *Service) ensureNewAPIProbeKeyUsable(ctx context.Context, p *storage.Aut
 		return key, nil
 	}
 	current := key
-	if !current.UnlimitedQuota && current.Quota < newAPIProbeRemainQuota {
-		quota := newAPIProbeRemainQuota
-		updated, err := s.Upstream.UpdateAPIKey(ctx, p.ChannelID, current.ID, connector.APIKeyUpdateRequest{RemainQuota: &quota})
+	if !current.UnlimitedQuota && current.Quota < newAPIProbeRemainAmountUSD {
+		amount := newAPIProbeRemainAmountUSD
+		updated, err := s.Upstream.UpdateAPIKey(ctx, p.ChannelID, current.ID, connector.APIKeyUpdateRequest{RemainAmount: &amount})
 		if err != nil {
 			return nil, fmt.Errorf("补充探测 API Key %s 额度失败：%w", emptyAs(current.Name, p.ProbeKeyName), err)
 		}
@@ -1202,8 +1201,8 @@ func (s *Service) probeCandidate(ctx context.Context, p *storage.AutoGroupPolicy
 		c.LastError = res.Message
 		c.LastErrorCode = res.Code
 		c.LastProbeLatencyMS = res.LatencyMS
-		if isProbeAuthFailure(res.Code) {
-			return c, fmt.Errorf("探测 API Key 鉴权失败，未熔断候选分组 %s：%s", c.GroupName, res.Message)
+		if msg, ok := probeConfigurationFailureMessage(res.Code, c.GroupName, res.Message); ok {
+			return c, errors.New(msg)
 		}
 		failed, markErr := s.Repo.MarkCandidateProbeFailure(p.ID, c.GroupName, p.FailureThreshold, circuitDuration(p), res.Code, res.Message, res.LatencyMS)
 		if markErr != nil {
@@ -1238,8 +1237,15 @@ func (s *Service) probeCandidate(ctx context.Context, p *storage.AutoGroupPolicy
 	return c, nil
 }
 
-func isProbeAuthFailure(code string) bool {
-	return strings.TrimSpace(code) == upstreamcap.ProbeCodeProbeKeyUnauthorized
+func probeConfigurationFailureMessage(code, groupName, message string) (string, bool) {
+	switch strings.TrimSpace(code) {
+	case upstreamcap.ProbeCodeProbeKeyUnauthorized:
+		return fmt.Sprintf("探测 API Key 鉴权失败，未熔断候选分组 %s：%s", groupName, message), true
+	case upstreamcap.ProbeCodeProbeModelForbidden:
+		return fmt.Sprintf("探测模型无权限，未熔断候选分组 %s：%s", groupName, message), true
+	default:
+		return "", false
+	}
 }
 
 func (s *Service) moveProbeKey(ctx context.Context, p *storage.AutoGroupPolicy, probeID int64, c CandidateDecision) error {

@@ -254,6 +254,8 @@ type APIKey struct {
 	GroupDescription   string     `json:"group_description,omitempty"`
 	GroupRatio         float64    `json:"group_ratio"`
 	GroupID            *int64     `json:"group_id,omitempty"`
+	RemainAmount       float64    `json:"remain_amount,omitempty"`
+	UsedAmount         float64    `json:"used_amount,omitempty"`
 	Quota              float64    `json:"quota"`
 	QuotaUsed          float64    `json:"quota_used"`
 	UnlimitedQuota     bool       `json:"unlimited_quota"`
@@ -281,6 +283,7 @@ type APIKeyCreateRequest struct {
 	CustomKey          string   `json:"custom_key,omitempty"`
 	Group              string   `json:"group,omitempty"`
 	GroupID            *int64   `json:"group_id,omitempty"`
+	RemainAmount       *float64 `json:"remain_amount,omitempty"`
 	RemainQuota        *int     `json:"remain_quota,omitempty"`
 	Quota              *float64 `json:"quota,omitempty"`
 	UnlimitedQuota     *bool    `json:"unlimited_quota,omitempty"`
@@ -302,6 +305,7 @@ type APIKeyUpdateRequest struct {
 	Group               *string  `json:"group,omitempty"`
 	GroupID             *int64   `json:"group_id,omitempty"`
 	Status              *string  `json:"status,omitempty"`
+	RemainAmount        *float64 `json:"remain_amount,omitempty"`
 	RemainQuota         *int     `json:"remain_quota,omitempty"`
 	Quota               *float64 `json:"quota,omitempty"`
 	UnlimitedQuota      *bool    `json:"unlimited_quota,omitempty"`

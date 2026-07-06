@@ -533,10 +533,10 @@ func TestCreateUpdateDeleteRevealAPIKey(t *testing.T) {
 	}
 }
 
-func TestCreateAPIKeyMapsQuotaToRemainQuotaForNewAPI(t *testing.T) {
+func TestCreateAPIKeyMapsRemainAmountToNewAPIQuota(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/token/search", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"items":[{"id":15,"status":1,"name":"probe","remain_quota":500000}],"total":1,"page":1,"page_size":100,"pages":1}}`))
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"items":[{"id":15,"status":1,"name":"probe","remain_amount":1,"remain_quota":500000}],"total":1,"page":1,"page_size":100,"pages":1}}`))
 	})
 	mux.HandleFunc("/api/token/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -549,22 +549,25 @@ func TestCreateAPIKeyMapsQuotaToRemainQuotaForNewAPI(t *testing.T) {
 		if body["remain_quota"] != float64(500000) {
 			t.Fatalf("remain_quota = %#v, want 500000", body["remain_quota"])
 		}
+		if body["remain_amount"] != float64(1) {
+			t.Fatalf("remain_amount = %#v, want 1", body["remain_amount"])
+		}
 		_, _ = w.Write([]byte(`{"success":true,"message":"","data":null}`))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
 	c := New()
-	quota := 500000.0
+	amount := 1.0
 	created, err := c.CreateAPIKey(context.Background(), &connector.Channel{SiteURL: srv.URL}, &connector.AuthSession{
 		Cookie: "session=1",
 		UserID: "7",
-	}, connector.APIKeyCreateRequest{Name: "probe", Quota: &quota})
+	}, connector.APIKeyCreateRequest{Name: "probe", RemainAmount: &amount})
 	if err != nil {
 		t.Fatalf("CreateAPIKey: %v", err)
 	}
-	if created.ID != 15 || created.Quota != 500000 {
-		t.Fatalf("created = %#v, want id 15 quota 500000", created)
+	if created.ID != 15 || created.Quota != 1 || created.RemainAmount != 1 {
+		t.Fatalf("created = %#v, want id 15 amount 1", created)
 	}
 }
 

@@ -50,7 +50,9 @@ func (f *fakeUpstreamCapability) ListAPIKeyGroups(ctx context.Context, channelID
 func (f *fakeUpstreamCapability) CreateAPIKey(ctx context.Context, channelID uint, req connector.APIKeyCreateRequest) (*connector.APIKey, error) {
 	f.nextKeyID++
 	key := connector.APIKey{ID: f.nextKeyID, Name: req.Name, Status: "active", Group: req.Group, GroupName: req.Group, GroupID: req.GroupID}
-	if req.RemainQuota != nil {
+	if req.RemainAmount != nil {
+		key.Quota = *req.RemainAmount
+	} else if req.RemainQuota != nil {
 		key.Quota = float64(*req.RemainQuota)
 	} else if req.Quota != nil {
 		key.Quota = *req.Quota
@@ -90,6 +92,9 @@ func (f *fakeUpstreamCapability) UpdateAPIKey(ctx context.Context, channelID uin
 		}
 		if req.Status != nil {
 			f.keys[i].Status = *req.Status
+		}
+		if req.RemainAmount != nil {
+			f.keys[i].Quota = *req.RemainAmount
 		}
 		if req.RemainQuota != nil {
 			f.keys[i].Quota = float64(*req.RemainQuota)
@@ -342,7 +347,7 @@ func TestEvaluatePolicyRecoversExhaustedNewAPIProbeKey(t *testing.T) {
 	if len(fake.updates) < 2 {
 		t.Fatalf("updates = %d, want quota refill and status restore", len(fake.updates))
 	}
-	if fake.updateKeyIDs[0] != 2 || fake.updates[0].RemainQuota == nil || *fake.updates[0].RemainQuota != newAPIProbeRemainQuota {
+	if fake.updateKeyIDs[0] != 2 || fake.updates[0].RemainAmount == nil || *fake.updates[0].RemainAmount != newAPIProbeRemainAmountUSD {
 		t.Fatalf("first update = key %d %#v, want probe quota refill", fake.updateKeyIDs[0], fake.updates[0])
 	}
 	if fake.updateKeyIDs[1] != 2 || fake.updates[1].Status == nil || *fake.updates[1].Status != "active" {
@@ -365,7 +370,7 @@ func TestEvaluatePolicyDoesNotCircuitCandidateOnProbeUnauthorized(t *testing.T) 
 	fake := &fakeUpstreamCapability{
 		keys: []connector.APIKey{
 			{ID: 1, Name: "auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},
-			{ID: 2, Name: "ops-probe-auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04, Quota: newAPIProbeRemainQuota},
+			{ID: 2, Name: "ops-probe-auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04, Quota: newAPIProbeRemainAmountUSD},
 		},
 		groups:      []connector.APIKeyGroup{{ID: &fastID, Name: "fast", Ratio: 0.04}},
 		revealByID:  map[int64]string{2: "sk-probe"},
@@ -391,6 +396,55 @@ func TestEvaluatePolicyDoesNotCircuitCandidateOnProbeUnauthorized(t *testing.T) 
 	}
 	if candidate != nil && candidate.Status == "circuit_open" {
 		t.Fatalf("candidate should not circuit on unauthorized: %#v", candidate)
+	}
+}
+
+func TestEvaluatePolicyDoesNotCircuitCandidateOnProbeModelForbidden(t *testing.T) {
+	db := openAutoGroupTestDB(t)
+	server := newProbeServer(t)
+	defer server.Close()
+
+	channels := storage.NewChannels(db)
+	ch := &storage.Channel{Name: "newapi", Type: storage.ChannelTypeNewAPI, SiteURL: server.URL, Username: "u", PasswordCipher: "x", MonitorEnabled: true}
+	if err := channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	fastID := int64(11)
+	fake := &fakeUpstreamCapability{
+		keys: []connector.APIKey{
+			{ID: 1, Name: "auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},
+			{ID: 2, Name: "ops-probe-auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04, Quota: newAPIProbeRemainAmountUSD},
+		},
+		groups:     []connector.APIKeyGroup{{ID: &fastID, Name: "fast", Ratio: 0.04}},
+		revealByID: map[int64]string{2: "sk-probe"},
+		probeResult: &upstreamcap.ProbeResult{
+			Success:   false,
+			Code:      upstreamcap.ProbeCodeProbeModelForbidden,
+			Message:   `探测接口返回 HTTP 403：{"error":{"message":"This token has no access to model gpt-5.4"}}`,
+			LatencyMS: 1,
+		},
+	}
+	repo := storage.NewAutoGroups(db)
+	rates := storage.NewRates(db)
+	if _, err := rates.Upsert(&storage.RateSnapshot{ChannelID: ch.ID, ModelName: "fast", Ratio: 0.04, LastSeenAt: time.Now()}); err != nil {
+		t.Fatalf("upsert rates: %v", err)
+	}
+	policy := &storage.AutoGroupPolicy{ChannelID: ch.ID, Name: "auto", Enabled: true, NotifyEnabled: false, TargetKeyName: "auto", ProbeKeyName: "ops-probe-auto", ProbeModel: "gpt-5.4", ProbeTimeoutSeconds: 3, FailureThreshold: 1, CircuitDurationMinutes: 30, HalfOpenSuccessThreshold: 1, KeepCurrentWhenNoAvailable: true, ForceSwitchOnCurrentUnhealthy: true}
+	if err := repo.CreatePolicy(policy); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+
+	svc := NewService(repo, channels, rates, fake, nil, nil)
+	if _, err := svc.EvaluatePolicy(context.Background(), policy.ID); err == nil || !strings.Contains(err.Error(), "探测模型无权限") {
+		t.Fatalf("evaluate err = %v, want probe model forbidden", err)
+	}
+	candidate, err := repo.FindCandidate(policy.ID, "fast")
+	if err != nil {
+		t.Fatalf("find candidate: %v", err)
+	}
+	if candidate != nil && candidate.Status == "circuit_open" {
+		t.Fatalf("candidate should not circuit on probe model forbidden: %#v", candidate)
 	}
 }
 

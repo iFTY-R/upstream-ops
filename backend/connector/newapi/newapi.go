@@ -530,6 +530,10 @@ func (c *Client) GetSubscriptionUsage(ctx context.Context, ch *connector.Channel
 func (c *Client) ListAPIKeys(ctx context.Context, ch *connector.Channel, session *connector.AuthSession, query connector.APIKeyQuery) (*connector.APIKeyPage, error) {
 	page, pageSize := normalizeAPIKeyPage(query.Page, query.PageSize)
 	site := strings.TrimRight(ch.SiteURL, "/")
+	quotaPerUnit, err := c.newAPIQuotaPerUnit(ctx, ch)
+	if err != nil {
+		return nil, fmt.Errorf("newapi quota unit: %w", err)
+	}
 	params := url.Values{}
 	params.Set("p", strconv.Itoa(page))
 	params.Set("page_size", strconv.Itoa(pageSize))
@@ -556,7 +560,7 @@ func (c *Client) ListAPIKeys(ctx context.Context, ch *connector.Channel, session
 	groups, _ := c.newAPIGroupMap(ctx, ch, session)
 	items := make([]connector.APIKey, 0, len(raw.Items))
 	for _, item := range raw.Items {
-		key := item.toConnector()
+		key := item.toConnector(quotaPerUnit)
 		if g, ok := groups[key.Group]; ok {
 			key.GroupName = g.Name
 			key.GroupDescription = g.Description
@@ -598,7 +602,11 @@ func (c *Client) CreateAPIKey(ctx context.Context, ch *connector.Channel, sessio
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, errors.New("密钥名称不能为空")
 	}
-	body := buildNewAPICreateToken(req)
+	quotaPerUnit, err := c.newAPIQuotaPerUnit(ctx, ch)
+	if err != nil {
+		return nil, fmt.Errorf("newapi quota unit: %w", err)
+	}
+	body := buildNewAPICreateToken(req, quotaPerUnit)
 	restyReq := c.http.R().
 		SetContext(ctx).
 		SetHeader("Content-Type", "application/json").
@@ -615,7 +623,7 @@ func (c *Client) CreateAPIKey(ctx context.Context, ch *connector.Channel, sessio
 	if err != nil {
 		return nil, err
 	}
-	if key := newAPIKeyFromCreateData(data, req); key != nil && key.ID > 0 {
+	if key := newAPIKeyFromCreateData(data, req, quotaPerUnit); key != nil && key.ID > 0 {
 		return key, nil
 	}
 	if key, err := c.findAPIKeyByName(ctx, ch, session, req.Name); err == nil && key != nil {
@@ -634,7 +642,11 @@ func (c *Client) UpdateAPIKey(ctx context.Context, ch *connector.Channel, sessio
 	if err != nil {
 		return nil, fmt.Errorf("newapi get api key before update: %w", err)
 	}
-	body := buildNewAPIUpdateToken(id, current, req)
+	quotaPerUnit, err := c.newAPIQuotaPerUnit(ctx, ch)
+	if err != nil {
+		return nil, fmt.Errorf("newapi quota unit: %w", err)
+	}
+	body := buildNewAPIUpdateToken(id, current, req, quotaPerUnit)
 	restyReq := c.http.R().
 		SetContext(ctx).
 		SetHeader("Content-Type", "application/json").
@@ -687,11 +699,15 @@ func (c *Client) UpdateAPIKey(ctx context.Context, ch *connector.Channel, sessio
 			token.Status = v
 		}
 	}
-	out := token.toConnector()
+	out := token.toConnector(quotaPerUnit)
 	return &out, nil
 }
 
 func (c *Client) getAPIKeyByID(ctx context.Context, ch *connector.Channel, session *connector.AuthSession, id int64) (*connector.APIKey, error) {
+	quotaPerUnit, err := c.newAPIQuotaPerUnit(ctx, ch)
+	if err != nil {
+		return nil, fmt.Errorf("newapi quota unit: %w", err)
+	}
 	body, err := c.getJSON(ctx, strings.TrimRight(ch.SiteURL, "/")+"/api/token/"+strconv.FormatInt(id, 10), session)
 	if err != nil {
 		return nil, err
@@ -703,7 +719,7 @@ func (c *Client) getAPIKeyByID(ctx context.Context, ch *connector.Channel, sessi
 	if token.ID <= 0 {
 		return nil, fmt.Errorf("newapi api key %d not found", id)
 	}
-	out := token.toConnector()
+	out := token.toConnector(quotaPerUnit)
 	if groups, err := c.newAPIGroupMap(ctx, ch, session); err == nil {
 		if g, ok := groups[out.Group]; ok {
 			out.GroupName = g.Name
@@ -759,20 +775,20 @@ func (c *Client) RevealAPIKey(ctx context.Context, ch *connector.Channel, sessio
 	return raw.Key, nil
 }
 
-func newAPIKeyFromCreateData(data json.RawMessage, req connector.APIKeyCreateRequest) *connector.APIKey {
+func newAPIKeyFromCreateData(data json.RawMessage, req connector.APIKeyCreateRequest, quotaPerUnit float64) *connector.APIKey {
 	if len(data) == 0 || string(data) == "null" {
 		return nil
 	}
 	var token newAPIToken
 	if err := json.Unmarshal(data, &token); err == nil && token.ID > 0 {
-		out := token.toConnector()
+		out := token.toConnector(quotaPerUnit)
 		return &out
 	}
 	var wrapped struct {
 		Token newAPIToken `json:"token"`
 	}
 	if err := json.Unmarshal(data, &wrapped); err == nil && wrapped.Token.ID > 0 {
-		out := wrapped.Token.toConnector()
+		out := wrapped.Token.toConnector(quotaPerUnit)
 		return &out
 	}
 	return nil
@@ -1008,6 +1024,49 @@ func (c *Client) quotaToUSD(quota float64, quotaPerUnit float64) float64 {
 	return round4(quota / quotaPerUnit)
 }
 
+func (c *Client) newAPIQuotaPerUnit(ctx context.Context, ch *connector.Channel) (float64, error) {
+	site := strings.TrimRight(ch.SiteURL, "/")
+	body, err := c.getJSON(ctx, site+"/api/status", nil)
+	if err != nil {
+		return 500000, nil
+	}
+	var status struct {
+		QuotaPerUnit float64 `json:"quota_per_unit"`
+	}
+	if err := json.Unmarshal(body, &status); err != nil {
+		return 500000, nil
+	}
+	if status.QuotaPerUnit <= 0 {
+		status.QuotaPerUnit = 500000
+	}
+	return status.QuotaPerUnit, nil
+}
+
+func quotaUnitsToAmount(quota int, quotaPerUnit float64) float64 {
+	if quotaPerUnit <= 0 {
+		quotaPerUnit = 500000
+	}
+	return round6(float64(quota) / quotaPerUnit)
+}
+
+func amountToQuotaUnits(amount float64, quotaPerUnit float64) int {
+	if !isFinite(amount) || amount <= 0 {
+		return 0
+	}
+	if quotaPerUnit <= 0 {
+		quotaPerUnit = 500000
+	}
+	return int(math.Round(amount * quotaPerUnit))
+}
+
+func round6(v float64) float64 {
+	return math.Round(v*1000000) / 1000000
+}
+
+func isFinite(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
 func newAPIRechargeMultiplier(ch *connector.Channel, price float64) *float64 {
 	if ch.RechargeMultiplier != nil && *ch.RechargeMultiplier > 0 {
 		return ch.RechargeMultiplier
@@ -1167,6 +1226,8 @@ type newAPIToken struct {
 	ExpiredTime        int64   `json:"expired_time"`
 	RemainQuota        int     `json:"remain_quota"`
 	UsedQuota          int     `json:"used_quota"`
+	RemainAmount       float64 `json:"remain_amount"`
+	UsedAmount         float64 `json:"used_amount"`
 	UnlimitedQuota     bool    `json:"unlimited_quota"`
 	ModelLimitsEnabled bool    `json:"model_limits_enabled"`
 	ModelLimits        string  `json:"model_limits"`
@@ -1175,7 +1236,7 @@ type newAPIToken struct {
 	CrossGroupRetry    bool    `json:"cross_group_retry"`
 }
 
-func (t newAPIToken) toConnector() connector.APIKey {
+func (t newAPIToken) toConnector(quotaPerUnit float64) connector.APIKey {
 	var createdAt *time.Time
 	if t.CreatedTime > 0 {
 		v := time.Unix(t.CreatedTime, 0)
@@ -1190,14 +1251,24 @@ func (t newAPIToken) toConnector() connector.APIKey {
 	if t.AllowIPs != nil {
 		allowIPs = *t.AllowIPs
 	}
+	remainAmount := t.RemainAmount
+	if remainAmount <= 0 && t.RemainQuota > 0 {
+		remainAmount = quotaUnitsToAmount(t.RemainQuota, quotaPerUnit)
+	}
+	usedAmount := t.UsedAmount
+	if usedAmount <= 0 && t.UsedQuota > 0 {
+		usedAmount = quotaUnitsToAmount(t.UsedQuota, quotaPerUnit)
+	}
 	return connector.APIKey{
 		ID:                 int64(t.ID),
 		Key:                t.Key,
 		Name:               t.Name,
 		Status:             newAPITokenStatusToString(t.Status),
 		Group:              t.Group,
-		Quota:              float64(t.RemainQuota),
-		QuotaUsed:          float64(t.UsedQuota),
+		RemainAmount:       remainAmount,
+		UsedAmount:         usedAmount,
+		Quota:              remainAmount,
+		QuotaUsed:          usedAmount,
 		UnlimitedQuota:     t.UnlimitedQuota,
 		ExpiredTime:        t.ExpiredTime,
 		CreatedAt:          createdAt,
@@ -1209,14 +1280,16 @@ func (t newAPIToken) toConnector() connector.APIKey {
 	}
 }
 
-func buildNewAPICreateToken(req connector.APIKeyCreateRequest) map[string]any {
+func buildNewAPICreateToken(req connector.APIKeyCreateRequest, quotaPerUnit float64) map[string]any {
+	remainAmount := apiKeyCreateRemainAmount(req)
 	remainQuota := valueOr(req.RemainQuota, 0)
-	if req.RemainQuota == nil && req.Quota != nil {
-		remainQuota = int(*req.Quota)
+	if req.RemainQuota == nil {
+		remainQuota = amountToQuotaUnits(remainAmount, quotaPerUnit)
 	}
 	body := map[string]any{
 		"name":                 strings.TrimSpace(req.Name),
 		"expired_time":         valueOr(req.ExpiredTime, int64(-1)),
+		"remain_amount":        remainAmount,
 		"remain_quota":         remainQuota,
 		"unlimited_quota":      valueOr(req.UnlimitedQuota, false),
 		"model_limits_enabled": valueOr(req.ModelLimitsEnabled, false),
@@ -1231,10 +1304,11 @@ func buildNewAPICreateToken(req connector.APIKeyCreateRequest) map[string]any {
 	return body
 }
 
-func buildNewAPIUpdateToken(id int64, current *connector.APIKey, req connector.APIKeyUpdateRequest) map[string]any {
+func buildNewAPIUpdateToken(id int64, current *connector.APIKey, req connector.APIKeyUpdateRequest, quotaPerUnit float64) map[string]any {
 	name := ""
 	status := "active"
 	group := ""
+	remainAmount := 0.0
 	remainQuota := 0
 	unlimitedQuota := false
 	expiredTime := int64(-1)
@@ -1246,7 +1320,8 @@ func buildNewAPIUpdateToken(id int64, current *connector.APIKey, req connector.A
 		name = current.Name
 		status = current.Status
 		group = current.Group
-		remainQuota = int(current.Quota)
+		remainAmount = current.Quota
+		remainQuota = amountToQuotaUnits(remainAmount, quotaPerUnit)
 		unlimitedQuota = current.UnlimitedQuota
 		expiredTime = current.ExpiredTime
 		modelLimitsEnabled = current.ModelLimitsEnabled
@@ -1265,8 +1340,10 @@ func buildNewAPIUpdateToken(id int64, current *connector.APIKey, req connector.A
 	}
 	if req.RemainQuota != nil {
 		remainQuota = *req.RemainQuota
-	} else if req.Quota != nil {
-		remainQuota = int(*req.Quota)
+		remainAmount = quotaUnitsToAmount(*req.RemainQuota, quotaPerUnit)
+	} else if amount, ok := apiKeyUpdateRemainAmount(req); ok {
+		remainAmount = amount
+		remainQuota = amountToQuotaUnits(amount, quotaPerUnit)
 	}
 	if req.UnlimitedQuota != nil {
 		unlimitedQuota = *req.UnlimitedQuota
@@ -1291,6 +1368,7 @@ func buildNewAPIUpdateToken(id int64, current *connector.APIKey, req connector.A
 		"name":                 strings.TrimSpace(name),
 		"status":               newAPITokenStatusFromString(status),
 		"expired_time":         expiredTime,
+		"remain_amount":        remainAmount,
 		"remain_quota":         remainQuota,
 		"unlimited_quota":      unlimitedQuota,
 		"model_limits_enabled": modelLimitsEnabled,
@@ -1300,6 +1378,28 @@ func buildNewAPIUpdateToken(id int64, current *connector.APIKey, req connector.A
 		"cross_group_retry":    crossGroupRetry,
 	}
 	return body
+}
+
+func apiKeyCreateRemainAmount(req connector.APIKeyCreateRequest) float64 {
+	switch {
+	case req.RemainAmount != nil:
+		return *req.RemainAmount
+	case req.Quota != nil:
+		return *req.Quota
+	default:
+		return 0
+	}
+}
+
+func apiKeyUpdateRemainAmount(req connector.APIKeyUpdateRequest) (float64, bool) {
+	switch {
+	case req.RemainAmount != nil:
+		return *req.RemainAmount, true
+	case req.Quota != nil:
+		return *req.Quota, true
+	default:
+		return 0, false
+	}
 }
 
 func decodeNewAPIWrite(body []byte, prefix string) error {

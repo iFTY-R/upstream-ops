@@ -645,6 +645,8 @@ export interface ChannelAPIKey {
   group_description?: string
   group_ratio: number
   group_id?: number | null
+  remain_amount?: number
+  used_amount?: number
   quota: number
   quota_used: number
   unlimited_quota: boolean
