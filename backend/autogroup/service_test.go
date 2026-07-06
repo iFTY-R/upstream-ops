@@ -60,6 +60,10 @@ func (f *fakeUpstreamCapability) CreateAPIKey(ctx context.Context, channelID uin
 	if req.UnlimitedQuota != nil {
 		key.UnlimitedQuota = *req.UnlimitedQuota
 	}
+	if req.ModelLimitsEnabled != nil {
+		key.ModelLimitsEnabled = *req.ModelLimitsEnabled
+	}
+	key.ModelLimits = req.ModelLimits
 	if req.GroupID != nil {
 		for _, group := range f.groups {
 			if group.ID != nil && *group.ID == *req.GroupID {
@@ -104,6 +108,12 @@ func (f *fakeUpstreamCapability) UpdateAPIKey(ctx context.Context, channelID uin
 		}
 		if req.UnlimitedQuota != nil {
 			f.keys[i].UnlimitedQuota = *req.UnlimitedQuota
+		}
+		if req.ModelLimitsEnabled != nil {
+			f.keys[i].ModelLimitsEnabled = *req.ModelLimitsEnabled
+		}
+		if req.ModelLimits != nil {
+			f.keys[i].ModelLimits = *req.ModelLimits
 		}
 		if req.Group != nil {
 			f.keys[i].Group = *req.Group
@@ -308,6 +318,12 @@ func TestEvaluatePolicyBackfillsProbeKeyIDAfterInvalidCreateResponse(t *testing.
 	if got.ProbeKeyID != 21 || got.ProbeKeyName != "ops-probe-auto" {
 		t.Fatalf("probe key not backfilled: %#v", got)
 	}
+	if len(fake.created) != 1 {
+		t.Fatalf("created = %d, want probe key only", len(fake.created))
+	}
+	if fake.created[0].ModelLimitsEnabled != nil || strings.TrimSpace(fake.created[0].ModelLimits) != "" {
+		t.Fatalf("probe key should not limit models: %#v", fake.created[0])
+	}
 }
 
 func TestEvaluatePolicyRecoversExhaustedNewAPIProbeKey(t *testing.T) {
@@ -352,6 +368,51 @@ func TestEvaluatePolicyRecoversExhaustedNewAPIProbeKey(t *testing.T) {
 	}
 	if fake.updateKeyIDs[1] != 2 || fake.updates[1].Status == nil || *fake.updates[1].Status != "active" {
 		t.Fatalf("second update = key %d %#v, want probe status active", fake.updateKeyIDs[1], fake.updates[1])
+	}
+}
+
+func TestEvaluatePolicyClearsNewAPIProbeKeyModelLimits(t *testing.T) {
+	db := openAutoGroupTestDB(t)
+	server := newProbeServer(t)
+	defer server.Close()
+
+	channels := storage.NewChannels(db)
+	ch := &storage.Channel{Name: "newapi", Type: storage.ChannelTypeNewAPI, SiteURL: server.URL, Username: "u", PasswordCipher: "x", MonitorEnabled: true}
+	if err := channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	fastID := int64(11)
+	fake := &fakeUpstreamCapability{
+		keys: []connector.APIKey{
+			{ID: 1, Name: "auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04},
+			{ID: 2, Name: "ops-probe-auto", Status: "active", GroupName: "fast", GroupID: &fastID, GroupRatio: 0.04, Quota: newAPIProbeRemainAmountUSD, ModelLimitsEnabled: true, ModelLimits: "gpt-4o-mini"},
+		},
+		groups:     []connector.APIKeyGroup{{ID: &fastID, Name: "fast", Ratio: 0.04}},
+		revealByID: map[int64]string{2: "sk-probe"},
+	}
+	repo := storage.NewAutoGroups(db)
+	rates := storage.NewRates(db)
+	if _, err := rates.Upsert(&storage.RateSnapshot{ChannelID: ch.ID, ModelName: "fast", Ratio: 0.04, LastSeenAt: time.Now()}); err != nil {
+		t.Fatalf("upsert rates: %v", err)
+	}
+	policy := &storage.AutoGroupPolicy{ChannelID: ch.ID, Name: "auto", Enabled: true, NotifyEnabled: false, TargetKeyName: "auto", ProbeKeyName: "ops-probe-auto", ProbeModel: "gpt-5.4", ProbeTimeoutSeconds: 3, FailureThreshold: 2, CircuitDurationMinutes: 30, HalfOpenSuccessThreshold: 1, KeepCurrentWhenNoAvailable: true, ForceSwitchOnCurrentUnhealthy: true}
+	if err := repo.CreatePolicy(policy); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+
+	svc := NewService(repo, channels, rates, fake, nil, nil)
+	if _, err := svc.EvaluatePolicy(context.Background(), policy.ID); err != nil {
+		t.Fatalf("evaluate policy: %v", err)
+	}
+	if len(fake.updates) < 1 || fake.updateKeyIDs[0] != 2 {
+		t.Fatalf("updates = ids %#v reqs %#v, want probe model limit correction first", fake.updateKeyIDs, fake.updates)
+	}
+	if fake.updates[0].ModelLimitsEnabled == nil || *fake.updates[0].ModelLimitsEnabled {
+		t.Fatalf("first update should disable model limits: %#v", fake.updates[0])
+	}
+	if fake.updates[0].ModelLimits == nil || *fake.updates[0].ModelLimits != "" {
+		t.Fatalf("first update should clear model limits: %#v", fake.updates[0])
 	}
 }
 
@@ -718,6 +779,99 @@ func TestEvaluatePolicySwitchesToBetterHealthyCandidateDuringCooldown(t *testing
 	}
 	if got.CurrentGroupName != "fast" || got.CurrentRatio != 0.04 {
 		t.Fatalf("current group = %q ratio %.2f, want fast 0.04", got.CurrentGroupName, got.CurrentRatio)
+	}
+}
+
+func TestEvaluatePolicySwitchesNewAPIByGroupName(t *testing.T) {
+	db := openAutoGroupTestDB(t)
+	server := newProbeServer(t)
+	defer server.Close()
+
+	channels := storage.NewChannels(db)
+	ch := &storage.Channel{Name: "newapi", Type: storage.ChannelTypeNewAPI, SiteURL: server.URL, Username: "u", PasswordCipher: "x", MonitorEnabled: true}
+	if err := channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	bestID := int64(1001)
+	currentID := int64(1002)
+	fake := &fakeUpstreamCapability{
+		keys: []connector.APIKey{
+			{ID: 1, Name: "auto", Status: "active", Group: "特惠分组0.025倍率", GroupName: "特惠分组0.025倍率", GroupRatio: 0.025},
+			{ID: 2, Name: "ops-probe-auto", Status: "active", Group: "特惠分组0.025倍率", GroupName: "特惠分组0.025倍率", GroupRatio: 0.025, Quota: newAPIProbeRemainAmountUSD},
+		},
+		groups: []connector.APIKeyGroup{
+			{ID: &bestID, Name: "特惠分组0.01倍率", Ratio: 0.01},
+			{ID: &currentID, Name: "特惠分组0.025倍率", Ratio: 0.025},
+		},
+		revealByID: map[int64]string{2: "sk-probe"},
+	}
+	repo := storage.NewAutoGroups(db)
+	rates := storage.NewRates(db)
+	for _, snapshot := range []storage.RateSnapshot{
+		{ChannelID: ch.ID, ModelName: "特惠分组0.01倍率", Ratio: 0.01, LastSeenAt: time.Now()},
+		{ChannelID: ch.ID, ModelName: "特惠分组0.025倍率", Ratio: 0.025, LastSeenAt: time.Now()},
+	} {
+		snapshot := snapshot
+		if _, err := rates.Upsert(&snapshot); err != nil {
+			t.Fatalf("upsert rates: %v", err)
+		}
+	}
+	policy := &storage.AutoGroupPolicy{
+		ChannelID:                     ch.ID,
+		Name:                          "WorldClawPro",
+		Enabled:                       true,
+		NotifyEnabled:                 false,
+		TargetKeyName:                 "auto",
+		ProbeKeyName:                  "ops-probe-auto",
+		ProbeModel:                    "gpt-5.4",
+		ProbeTimeoutSeconds:           3,
+		ProbeSuccessCacheMinutes:      60,
+		ProbeFailureRetryMinutes:      10,
+		ProbeMaxPerRun:                3,
+		FailureThreshold:              2,
+		CircuitDurationMinutes:        30,
+		HalfOpenSuccessThreshold:      1,
+		MinRatioImprovementPct:        5,
+		SwitchCooldownMinutes:         30,
+		KeepCurrentWhenNoAvailable:    true,
+		ForceSwitchOnCurrentUnhealthy: true,
+	}
+	if err := repo.CreatePolicy(policy); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	probeOK := true
+	lastProbe := time.Now().Add(-30 * time.Minute)
+	for _, c := range []storage.AutoGroupCandidate{
+		{PolicyID: policy.ID, GroupName: "特惠分组0.01倍率", GroupID: &bestID, Ratio: 0.01, Status: "healthy", Reason: "探测通过", LastProbeAt: &lastProbe, LastProbeSuccess: &probeOK},
+		{PolicyID: policy.ID, GroupName: "特惠分组0.025倍率", GroupID: &currentID, Ratio: 0.025, Status: "healthy", Reason: "探测通过", LastProbeAt: &lastProbe, LastProbeSuccess: &probeOK},
+	} {
+		c := c
+		if err := repo.UpsertCandidate(&c); err != nil {
+			t.Fatalf("upsert candidate %s: %v", c.GroupName, err)
+		}
+	}
+
+	svc := NewService(repo, channels, rates, fake, nil, nil)
+	res, err := svc.EvaluatePolicy(context.Background(), policy.ID)
+	if err != nil {
+		t.Fatalf("evaluate policy: %v", err)
+	}
+	if res.EvaluationLog.Status != "switched" || res.Selected == nil || res.Selected.GroupName != "特惠分组0.01倍率" {
+		t.Fatalf("status = %q selected = %#v, want switched to best newapi group", res.EvaluationLog.Status, res.Selected)
+	}
+	if len(fake.updates) != 1 || fake.updates[0].Group == nil || *fake.updates[0].Group != "特惠分组0.01倍率" {
+		t.Fatalf("update req = %#v, want group name for newapi", fake.updates)
+	}
+	if fake.updates[0].GroupID != nil {
+		t.Fatalf("newapi update used group_id = %v, want nil", *fake.updates[0].GroupID)
+	}
+	got, err := repo.FindPolicy(policy.ID)
+	if err != nil {
+		t.Fatalf("find policy: %v", err)
+	}
+	if got.CurrentGroupName != "特惠分组0.01倍率" || got.CurrentRatio != 0.01 {
+		t.Fatalf("current group = %q ratio %.3f, want best group 0.01", got.CurrentGroupName, got.CurrentRatio)
 	}
 }
 

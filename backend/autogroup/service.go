@@ -1054,13 +1054,10 @@ func (s *Service) ensureProbeKey(ctx context.Context, p *storage.AutoGroupPolicy
 		unlimited := false
 		quota := 10.0
 		remainAmount := newAPIProbeRemainAmountUSD
-		limitEnabled := true
 		req := connector.APIKeyCreateRequest{
-			Name:               name,
-			Quota:              &quota,
-			UnlimitedQuota:     &unlimited,
-			ModelLimitsEnabled: &limitEnabled,
-			ModelLimits:        emptyAs(strings.TrimSpace(p.ProbeModel), "gpt-4o-mini"),
+			Name:           name,
+			Quota:          &quota,
+			UnlimitedQuota: &unlimited,
 		}
 		if ch != nil && ch.Type == storage.ChannelTypeNewAPI {
 			req.RemainAmount = &remainAmount
@@ -1142,6 +1139,20 @@ func (s *Service) ensureNewAPIProbeKeyUsable(ctx context.Context, p *storage.Aut
 		updated, err := s.Upstream.UpdateAPIKey(ctx, p.ChannelID, current.ID, connector.APIKeyUpdateRequest{Status: &status})
 		if err != nil {
 			return nil, fmt.Errorf("启用探测 API Key %s 失败：%w", emptyAs(current.Name, p.ProbeKeyName), err)
+		}
+		if updated != nil {
+			current = updated
+		}
+	}
+	if current.ModelLimitsEnabled || strings.TrimSpace(current.ModelLimits) != "" {
+		disabled := false
+		empty := ""
+		updated, err := s.Upstream.UpdateAPIKey(ctx, p.ChannelID, current.ID, connector.APIKeyUpdateRequest{
+			ModelLimitsEnabled: &disabled,
+			ModelLimits:        &empty,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("取消探测 API Key %s 模型限制失败：%w", emptyAs(current.Name, p.ProbeKeyName), err)
 		}
 		if updated != nil {
 			current = updated
@@ -1286,14 +1297,15 @@ func (s *Service) probeOpenAI(ctx context.Context, p *storage.AutoGroupPolicy, a
 }
 
 func (s *Service) switchTargetKey(ctx context.Context, p *storage.AutoGroupPolicy, ch *storage.Channel, target *connector.APIKey, selected CandidateDecision, fromGroup string) (*connector.APIKey, *storage.AutoGroupSwitchLog, error) {
-	req := connector.APIKeyUpdateRequest{}
-	if selected.GroupID != nil {
-		req.GroupID = selected.GroupID
-	} else {
-		group := selected.GroupName
-		req.Group = &group
-	}
+	req := switchTargetKeyRequest(ch, selected)
 	updated, err := s.Upstream.UpdateAPIKey(ctx, p.ChannelID, target.ID, req)
+	if err == nil {
+		if updated == nil || updated.ID <= 0 {
+			err = fmt.Errorf("上游切换后未返回有效目标 key")
+		} else if strings.TrimSpace(currentKeyGroup(updated)) != "" && !sameGroup(updated, selected) {
+			err = fmt.Errorf("上游返回分组仍为 %s，未切换到 %s", currentKeyGroup(updated), selected.GroupName)
+		}
+	}
 	log := &storage.AutoGroupSwitchLog{
 		PolicyID:      p.ID,
 		ChannelID:     p.ChannelID,
@@ -1313,6 +1325,21 @@ func (s *Service) switchTargetKey(ctx context.Context, p *storage.AutoGroupPolic
 		s.Log.Warn("append auto group switch log failed", "policy_id", p.ID, "err", appendErr)
 	}
 	return updated, log, err
+}
+
+func switchTargetKeyRequest(ch *storage.Channel, selected CandidateDecision) connector.APIKeyUpdateRequest {
+	req := connector.APIKeyUpdateRequest{}
+	group := strings.TrimSpace(selected.GroupName)
+	if ch != nil && ch.Type == storage.ChannelTypeNewAPI {
+		req.Group = &group
+		return req
+	}
+	if selected.GroupID != nil {
+		req.GroupID = selected.GroupID
+		return req
+	}
+	req.Group = &group
+	return req
 }
 
 func (s *Service) buildEvalLog(p *storage.AutoGroupPolicy, target *connector.APIKey, selected *CandidateDecision, success bool, status, action, msg string, count, availableCount, circuitCount int, ratio float64) *storage.AutoGroupEvaluationLog {
