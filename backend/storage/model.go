@@ -342,6 +342,7 @@ type ShopTarget struct {
 	RemovedGoodsEnabled bool          `gorm:"default:true" json:"removed_goods_enabled"`
 	ProxyEnabled        bool          `gorm:"default:false" json:"proxy_enabled"`
 	SortOrder           int           `gorm:"not null;default:1" json:"sort_order"`
+	GoodsSort           string        `gorm:"size:32;not null;default:'category'" json:"goods_sort"`
 	LastSyncAt          *time.Time    `json:"last_sync_at,omitempty"`
 	LastError           string        `gorm:"type:text" json:"last_error,omitempty"`
 	LastShopName        string        `gorm:"size:256" json:"last_shop_name,omitempty"`
@@ -451,7 +452,7 @@ type AutoGroupPolicy struct {
 	TargetKeyName                 string     `gorm:"size:128;not null;default:'auto';uniqueIndex:idx_auto_group_policy_channel_target" json:"target_key_name"`
 	ProbeKeyID                    int64      `gorm:"not null;default:0" json:"probe_key_id"`
 	ProbeKeyName                  string     `gorm:"size:128;not null;default:'ops-probe-auto'" json:"probe_key_name"`
-	ProbeModel                    string     `gorm:"size:128;not null;default:'gpt-4o-mini'" json:"probe_model"`
+	ProbeModel                    string     `gorm:"size:128;not null;default:'gpt-5.4'" json:"probe_model"`
 	ProbeTimeoutSeconds           int        `gorm:"not null;default:15" json:"probe_timeout_seconds"`
 	ProbeSuccessCacheMinutes      int        `gorm:"not null;default:60" json:"probe_success_cache_minutes"`
 	ProbeFailureRetryMinutes      int        `gorm:"not null;default:10" json:"probe_failure_retry_minutes"`

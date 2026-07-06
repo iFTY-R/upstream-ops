@@ -244,6 +244,13 @@ type APIKeyGroup struct {
 	Ratio       float64 `json:"ratio"`
 }
 
+type ModelOption struct {
+	ID      string `json:"id"`
+	Name    string `json:"name,omitempty"`
+	OwnedBy string `json:"owned_by,omitempty"`
+	Source  string `json:"source,omitempty"`
+}
+
 type APIKey struct {
 	ID                 int64      `json:"id"`
 	Key                string     `json:"key"`
@@ -351,6 +358,7 @@ type Connector interface {
 	GetSubscriptionUsage(ctx context.Context, channel *Channel, session *AuthSession) (*SubscriptionUsageInfo, error)
 	ListAPIKeys(ctx context.Context, channel *Channel, session *AuthSession, query APIKeyQuery) (*APIKeyPage, error)
 	ListAPIKeyGroups(ctx context.Context, channel *Channel, session *AuthSession) ([]APIKeyGroup, error)
+	ListModels(ctx context.Context, channel *Channel, session *AuthSession) ([]ModelOption, error)
 	CreateAPIKey(ctx context.Context, channel *Channel, session *AuthSession, req APIKeyCreateRequest) (*APIKey, error)
 	UpdateAPIKey(ctx context.Context, channel *Channel, session *AuthSession, id int64, req APIKeyUpdateRequest) (*APIKey, error)
 	DeleteAPIKey(ctx context.Context, channel *Channel, session *AuthSession, id int64) error

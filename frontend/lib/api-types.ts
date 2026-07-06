@@ -136,6 +136,7 @@ export interface ShopTarget {
   removed_goods_enabled: boolean
   proxy_enabled: boolean
   sort_order: number
+  goods_sort: ShopGoodsSort
   last_sync_at?: string | null
   last_error?: string
   last_shop_name?: string
@@ -171,6 +172,21 @@ export interface ShopWatchRuleInput {
   keywords: string[]
   events: ShopGoodsChangeEvent[]
   stock_threshold: number
+}
+
+export interface ShopBulkNotificationInput {
+  target_ids: number[]
+  notify_enabled?: boolean
+  upsert_rule: boolean
+  replace_same_name: boolean
+  rule: ShopWatchRuleInput
+}
+
+export interface ShopBulkNotificationResult {
+  updated_targets: number
+  created_rules: number
+  updated_rules: number
+  targets: ShopTarget[]
 }
 
 export interface ShopWatchRulePreview {
@@ -857,6 +873,19 @@ export interface AutoGroupCapabilityMatrix {
   level: "full" | "suggest" | "observe" | "error" | string
   message?: string
   capabilities: AutoGroupCapabilityItem[]
+}
+
+export interface ProbeModelOption {
+  id: string
+  name?: string
+  owned_by?: string
+  source?: string
+}
+
+export interface AutoGroupProbeModelOptions {
+  default_model: string
+  items: ProbeModelOption[]
+  warning?: string
 }
 
 export interface AutoGroupPolicyInput {

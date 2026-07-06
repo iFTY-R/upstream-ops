@@ -98,6 +98,29 @@ func TestRefreshSession(t *testing.T) {
 	}
 }
 
+func TestListModelsUsesAdminGroupCandidates(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/admin/groups/0/models-list-candidates", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		if got := r.URL.Query().Get("platform"); got != "openai" {
+			t.Fatalf("platform = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"code":0,"message":"success","data":{"models":["gpt-5.4","claude-sonnet-4.5","gpt-5.4"]}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	models, err := New().ListModels(context.Background(), &connector.Channel{SiteURL: srv.URL}, &connector.AuthSession{AccessToken: "token"})
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(models) != 2 || models[0].ID != "claude-sonnet-4.5" || models[1].ID != "gpt-5.4" {
+		t.Fatalf("models = %#v", models)
+	}
+}
+
 func TestGetCosts(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/usage/dashboard/stats", func(w http.ResponseWriter, r *http.Request) {

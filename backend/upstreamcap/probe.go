@@ -78,7 +78,7 @@ func probeOpenAICompatible(ctx context.Context, siteURL, proxyURL, apiKey string
 
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
-		model = "gpt-4o-mini"
+        model = "gpt-5.4"
 	}
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {

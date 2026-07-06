@@ -42,6 +42,7 @@ func capabilityItemsFor(t storage.ChannelType) []CapabilityItem {
 		{Key: CapAPIKeyUpdate, Label: "更新 API Key", Supported: true, Required: true},
 		{Key: CapAPIKeyDelete, Label: "删除 API Key", Supported: true},
 		{Key: CapAPIKeyReveal, Label: "读取明文 Key", Supported: true, Required: true},
+		{Key: CapModels, Label: "读取模型列表", Supported: true},
 		{Key: CapOpenAIProbe, Label: "OpenAI 兼容探测", Supported: true, Required: true},
 	}
 	switch t {

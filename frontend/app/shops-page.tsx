@@ -40,6 +40,8 @@ import type {
   ShopGoodsSort,
   ShopGoodsSnapshot,
   ShopGoodsStatus,
+  ShopBulkNotificationInput,
+  ShopBulkNotificationResult,
   ShopMonitorLog,
   ShopRefreshGoodsResult,
   ShopScopeMode,
@@ -49,6 +51,7 @@ import type {
   ShopTarget,
   ShopTestResult,
   ShopWatchRule,
+  ShopWatchRuleInput,
 } from "@/lib/api-types"
 
 type ShopForm = {
@@ -74,6 +77,7 @@ type ShopForm = {
   new_goods_enabled: boolean
   removed_goods_enabled: boolean
   sort_order: number
+  goods_sort: ShopGoodsSort
 }
 
 const emptyForm: ShopForm = {
@@ -99,6 +103,20 @@ const emptyForm: ShopForm = {
   new_goods_enabled: true,
   removed_goods_enabled: true,
   sort_order: 0,
+  goods_sort: "category",
+}
+
+type BulkNotificationForm = {
+  targetIDs: number[]
+  notifyMode: "keep" | "on" | "off"
+  upsertRule: boolean
+  replaceSameName: boolean
+  ruleName: string
+  events: ShopGoodsChangeEvent[]
+  stockThreshold: number
+  categoryNames: string
+  keywords: string
+  goodsKeys: string
 }
 
 const eventLabels: Record<ShopGoodsChangeEvent, string> = {
@@ -172,6 +190,7 @@ function formFromTarget(target: ShopTarget): ShopForm {
     new_goods_enabled: target.new_goods_enabled,
     removed_goods_enabled: target.removed_goods_enabled,
     sort_order: target.sort_order,
+    goods_sort: target.goods_sort || "category",
   }
 }
 
@@ -199,8 +218,22 @@ function shopTargetUpdateBody(target: ShopTarget, patch: Partial<ShopForm>) {
     new_goods_enabled: target.new_goods_enabled,
     removed_goods_enabled: target.removed_goods_enabled,
     sort_order: target.sort_order,
+    goods_sort: target.goods_sort || "category",
     ...patch,
   }
+}
+
+const defaultBulkNotificationForm: BulkNotificationForm = {
+  targetIDs: [],
+  notifyMode: "on",
+  upsertRule: true,
+  replaceSameName: true,
+  ruleName: "批量关注规则",
+  events: ["stock_changed", "stock_low", "goods_restocked"],
+  stockThreshold: 1,
+  categoryNames: "",
+  keywords: "",
+  goodsKeys: "",
 }
 
 function shopRulesMatchRow(rules: ShopWatchRule[], row: ShopGoodsSnapshot): boolean {
@@ -256,6 +289,8 @@ export default function ShopsPage() {
   const [highlightedGoodsKey, setHighlightedGoodsKey] = useState<string | null>(null)
   const [watchRulesOpen, setWatchRulesOpen] = useState(false)
   const [watchSeed, setWatchSeed] = useState<ShopWatchSeed | null>(null)
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkForm, setBulkForm] = useState<BulkNotificationForm>(defaultBulkNotificationForm)
   const goodsRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({})
   const goodsFilters = useMemo(
     () => ({
@@ -271,6 +306,7 @@ export default function ShopsPage() {
   const watchRules = useShopWatchRules(selectedID)
   const changes = useShopChangeLogs(selectedID, changesPage, 20)
   const monitorLogs = useShopMonitorLogs(selectedID, logsPage, 20)
+  const selected = targets.data?.find((t) => t.id === selectedID) ?? null
 
   useEffect(() => {
     if (selectedID != null) return
@@ -285,9 +321,9 @@ export default function ShopsPage() {
     setSelectedCategoryID(null)
     setGoodsStatus("all")
     setInStockOnly(false)
-    setGoodsSort("category")
+    setGoodsSort(selected?.goods_sort || "category")
     setGoodsKeyword("")
-  }, [selectedID])
+  }, [selectedID, selected?.goods_sort])
 
   useEffect(() => {
     setGoodsPage(1)
@@ -304,7 +340,6 @@ export default function ShopsPage() {
     return () => window.clearTimeout(timer)
   }, [goods.data?.items, highlightedGoodsKey])
 
-  const selected = targets.data?.find((t) => t.id === selectedID) ?? null
   const selectedWatchRules = useMemo(
     () => (watchRules.data ?? []).filter((rule) => rule.target_id === selectedID),
     [selectedID, watchRules.data],
@@ -332,6 +367,12 @@ export default function ShopsPage() {
     setEditing(null)
     setForm(emptyForm)
     setFormOpen(true)
+  }
+
+  function openBulkNotification() {
+    const ids = (targets.data ?? []).map((target) => target.id)
+    setBulkForm({ ...defaultBulkNotificationForm, targetIDs: ids })
+    setBulkOpen(true)
   }
 
   function openEdit(target: ShopTarget) {
@@ -406,6 +447,69 @@ export default function ShopsPage() {
     targets.setData((targets.data ?? []).map((item) => (item.id === next.id ? { ...next, watch_rule_count: item.watch_rule_count } : item)))
     toast.success(enabled ? "店铺通知已开启" : "店铺通知已关闭")
     refresh()
+  }
+
+  async function saveBulkNotification() {
+    const targetIDs = bulkForm.targetIDs.filter(Boolean)
+    if (targetIDs.length === 0) {
+      toast.error("请选择至少一个店铺")
+      return
+    }
+    if (bulkForm.notifyMode === "keep" && !bulkForm.upsertRule) {
+      toast.error("请选择要批量修改的通知配置")
+      return
+    }
+    setBusy("bulk-notify")
+    try {
+      const rule: ShopWatchRuleInput = {
+        name: bulkForm.ruleName.trim() || "批量关注规则",
+        enabled: true,
+        goods_keys: csv(bulkForm.goodsKeys),
+        category_ids: [],
+        category_names: csv(bulkForm.categoryNames),
+        keywords: csv(bulkForm.keywords),
+        events: bulkForm.events,
+        stock_threshold: bulkForm.stockThreshold,
+      }
+      const body: ShopBulkNotificationInput = {
+        target_ids: targetIDs,
+        notify_enabled: bulkForm.notifyMode === "keep" ? undefined : bulkForm.notifyMode === "on",
+        upsert_rule: bulkForm.upsertRule,
+        replace_same_name: bulkForm.replaceSameName,
+        rule,
+      }
+      const result = await apiFetch<ShopBulkNotificationResult>("/shop-targets/bulk-notification", {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
+      targets.setData(result.targets)
+      setBulkOpen(false)
+      toast.success(`批量配置完成：店铺 ${result.updated_targets} 个，新增规则 ${result.created_rules} 条，更新规则 ${result.updated_rules} 条`)
+      refresh()
+      watchRules.refetch()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "批量配置通知失败")
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function saveGoodsSortAsDefault() {
+    if (!selected || goodsSort === (selected.goods_sort || "category")) return
+    setBusy(`goods-sort:${selected.id}`)
+    try {
+      const next = await apiFetch<ShopTarget>(`/shop-targets/${selected.id}`, {
+        method: "PUT",
+        body: JSON.stringify(shopTargetUpdateBody(selected, { goods_sort: goodsSort })),
+      })
+      targets.setData((targets.data ?? []).map((item) => (item.id === next.id ? { ...next, watch_rule_count: item.watch_rule_count } : item)))
+      toast.success(`已保存默认排序：${goodsSortLabels[goodsSort]}`)
+      refresh()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "保存默认排序失败")
+    } finally {
+      setBusy(null)
+    }
   }
 
   function openWatchRules(target: ShopTarget) {
@@ -517,7 +621,7 @@ export default function ShopsPage() {
     reordered.splice(nextIndex, 0, item)
     const ordered = reordered.map((target, itemIndex) => ({
       ...target,
-      sort_order: reordered.length - itemIndex,
+      sort_order: itemIndex + 1,
     }))
 
     targets.setData(ordered)
@@ -595,6 +699,10 @@ export default function ShopsPage() {
             </p>
           </div>
           <div className="relative flex flex-wrap items-end justify-start gap-2 lg:justify-end">
+            <Button variant="outline" onClick={openBulkNotification} disabled={(targets.data?.length ?? 0) === 0 || busy === "bulk-notify"} className="gap-2">
+              {busy === "bulk-notify" ? <Loader2 className="size-4 animate-spin" /> : <Bell className="size-4" />}
+              {"批量通知"}
+            </Button>
             <Button variant="outline" onClick={syncAllTargets} disabled={busy === "sync-all"} className="gap-2">
               {busy === "sync-all" ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
               {"同步全部"}
@@ -659,6 +767,7 @@ export default function ShopsPage() {
             status={goodsStatus}
             inStockOnly={inStockOnly}
             sort={goodsSort}
+            savingDefaultSort={selected ? busy === `goods-sort:${selected.id}` : false}
             keyword={goodsKeyword}
             refreshingKey={busy?.startsWith("refresh-goods:") ? busy.slice("refresh-goods:".length) : null}
             highlightedGoodsKey={highlightedGoodsKey}
@@ -668,6 +777,7 @@ export default function ShopsPage() {
             onStatus={setGoodsStatus}
             onInStockOnly={setInStockOnly}
             onSort={setGoodsSort}
+            onSaveDefaultSort={saveGoodsSortAsDefault}
             onKeyword={setGoodsKeyword}
             onClearSearch={clearGoodsSearch}
             onRefreshGoods={refreshGoodsStock}
@@ -695,7 +805,7 @@ export default function ShopsPage() {
       </div>
 
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-h-[calc(100vh-2rem)] max-w-3xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editing ? "编辑店铺监控" : "添加店铺监控"}</DialogTitle>
             <DialogDescription>
@@ -748,6 +858,16 @@ export default function ShopsPage() {
             <Field label="低库存阈值">
               <Input type="number" value={form.stock_threshold} onChange={(e) => setForm({ ...form, stock_threshold: Number(e.target.value) || 0 })} />
             </Field>
+            <Field label="默认商品排序">
+              <Select value={form.goods_sort} onValueChange={(value) => setForm({ ...form, goods_sort: value as ShopGoodsSort })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {Object.entries(goodsSortLabels).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
           </div>
           <div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3 sm:grid-cols-3">
             <Check label="启用监控" checked={form.monitor_enabled} onChange={(v) => setForm({ ...form, monitor_enabled: v })} />
@@ -783,6 +903,141 @@ export default function ShopsPage() {
           await updateShopNotify(selected, enabled)
         }}
       />
+      <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
+        <DialogContent className="max-h-[calc(100vh-2rem)] max-w-3xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{"批量通知配置"}</DialogTitle>
+            <DialogDescription>
+              {"一次性修改多个店铺的通知开关，并可批量创建或更新同名关注规则。"}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <Label className="text-xs text-muted-foreground">{"选择店铺"}</Label>
+                <div className="flex gap-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setBulkForm((prev) => ({ ...prev, targetIDs: (targets.data ?? []).map((target) => target.id) }))}
+                  >
+                    {"全选"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setBulkForm((prev) => ({ ...prev, targetIDs: [] }))}
+                  >
+                    {"清空"}
+                  </Button>
+                </div>
+              </div>
+              <div className="grid max-h-56 gap-2 overflow-y-auto rounded-lg border border-border p-2 sm:grid-cols-2">
+                {(targets.data ?? []).map((target) => {
+                  const checked = bulkForm.targetIDs.includes(target.id)
+                  return (
+                    <button
+                      key={target.id}
+                      type="button"
+                      onClick={() =>
+                        setBulkForm((prev) => ({
+                          ...prev,
+                          targetIDs: checked ? prev.targetIDs.filter((id) => id !== target.id) : [...prev.targetIDs, target.id],
+                        }))
+                      }
+                      className={cn(
+                        "rounded-md border px-3 py-2 text-left text-sm transition",
+                        checked ? "border-emerald-500 bg-emerald-500/10 text-emerald-800" : "border-border hover:border-foreground/40",
+                      )}
+                    >
+                      <div className="truncate font-medium">{shopDisplayName(target)}</div>
+                      <div className="mt-0.5 text-[11px] text-muted-foreground">{target.notify_enabled ? "通知已开" : "通知关闭"} · 规则 {target.watch_rule_count ?? 0}</div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="店铺通知开关">
+                <Select value={bulkForm.notifyMode} onValueChange={(value) => setBulkForm({ ...bulkForm, notifyMode: value as BulkNotificationForm["notifyMode"] })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="on">全部开启</SelectItem>
+                    <SelectItem value="off">全部关闭</SelectItem>
+                    <SelectItem value="keep">保持不变</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="同名规则处理">
+                <Select value={bulkForm.replaceSameName ? "replace" : "skip"} onValueChange={(value) => setBulkForm({ ...bulkForm, replaceSameName: value === "replace" })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="replace">更新同名规则</SelectItem>
+                    <SelectItem value="skip">已有同名则跳过</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </div>
+            <div className="rounded-lg border border-border bg-muted/20 p-3">
+              <Check label="批量创建/更新关注规则" checked={bulkForm.upsertRule} onChange={(v) => setBulkForm({ ...bulkForm, upsertRule: v })} />
+              {bulkForm.upsertRule ? (
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <Field label="规则名称">
+                    <Input value={bulkForm.ruleName} onChange={(e) => setBulkForm({ ...bulkForm, ruleName: e.target.value })} />
+                  </Field>
+                  <Field label="低库存阈值">
+                    <Input type="number" value={bulkForm.stockThreshold} onChange={(e) => setBulkForm({ ...bulkForm, stockThreshold: Number(e.target.value) || 0 })} />
+                  </Field>
+                  <Field label="分类名称">
+                    <Input value={bulkForm.categoryNames} onChange={(e) => setBulkForm({ ...bulkForm, categoryNames: e.target.value })} placeholder="分类名，逗号或换行分隔" />
+                  </Field>
+                  <Field label="商品 Key">
+                    <Input value={bulkForm.goodsKeys} onChange={(e) => setBulkForm({ ...bulkForm, goodsKeys: e.target.value })} placeholder="商品 key，逗号或换行分隔" />
+                  </Field>
+                  <Field label="关键词">
+                    <Input value={bulkForm.keywords} onChange={(e) => setBulkForm({ ...bulkForm, keywords: e.target.value })} placeholder="关键词，逗号或换行分隔" />
+                  </Field>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">{"通知事件"}</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {(Object.entries(eventLabels) as Array<[ShopGoodsChangeEvent, string]>).map(([event, label]) => {
+                        const checked = bulkForm.events.includes(event)
+                        return (
+                          <button
+                            key={event}
+                            type="button"
+                            onClick={() =>
+                              setBulkForm((prev) => ({
+                                ...prev,
+                                events: checked ? prev.events.filter((item) => item !== event) : [...prev.events, event],
+                              }))
+                            }
+                            className={cn(
+                              "rounded-full border px-2.5 py-1 text-xs transition",
+                              checked ? "border-emerald-500 bg-emerald-500/10 text-emerald-800" : "border-border text-muted-foreground hover:text-foreground",
+                            )}
+                          >
+                            {label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setBulkOpen(false)}>取消</Button>
+            <Button onClick={saveBulkNotification} disabled={busy === "bulk-notify"}>
+              {busy === "bulk-notify" ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+              {"批量保存"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }
@@ -889,6 +1144,7 @@ function GoodsPanel({
   status,
   inStockOnly,
   sort,
+  savingDefaultSort,
   keyword,
   refreshingKey,
   highlightedGoodsKey,
@@ -898,6 +1154,7 @@ function GoodsPanel({
   onStatus,
   onInStockOnly,
   onSort,
+  onSaveDefaultSort,
   onKeyword,
   onClearSearch,
   onRefreshGoods,
@@ -916,6 +1173,7 @@ function GoodsPanel({
   status: GoodsStatusFilter
   inStockOnly: boolean
   sort: ShopGoodsSort
+  savingDefaultSort: boolean
   keyword: string
   refreshingKey: string | null
   highlightedGoodsKey: string | null
@@ -925,6 +1183,7 @@ function GoodsPanel({
   onStatus: (status: GoodsStatusFilter) => void
   onInStockOnly: (enabled: boolean) => void
   onSort: (sort: ShopGoodsSort) => void
+  onSaveDefaultSort: () => void
   onKeyword: (keyword: string) => void
   onClearSearch: () => void
   onRefreshGoods: (row: ShopGoodsSnapshot) => void
@@ -979,7 +1238,7 @@ function GoodsPanel({
             <span className="rounded-full border border-dashed border-border px-3 py-1.5 text-xs text-muted-foreground">同步后会显示分类</span>
           ) : null}
         </div>
-        <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(140px,180px)_minmax(150px,190px)_auto_minmax(220px,1fr)]">
+        <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(140px,180px)_minmax(220px,280px)_auto_minmax(220px,1fr)]">
           <Select value={status} onValueChange={(value) => onStatus(value as GoodsStatusFilter)}>
             <SelectTrigger>
               <SelectValue />
@@ -990,16 +1249,24 @@ function GoodsPanel({
               ))}
             </SelectContent>
           </Select>
-          <Select value={sort} onValueChange={(value) => onSort(value as ShopGoodsSort)}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {Object.entries(goodsSortLabels).map(([value, label]) => (
-                <SelectItem key={value} value={value}>{label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex min-w-0 gap-2">
+            <Select value={sort} onValueChange={(value) => onSort(value as ShopGoodsSort)}>
+              <SelectTrigger className="min-w-0 flex-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(goodsSortLabels).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>{label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {target && sort !== (target.goods_sort || "category") ? (
+              <Button type="button" variant="outline" onClick={onSaveDefaultSort} disabled={savingDefaultSort} className="shrink-0">
+                {savingDefaultSort ? <Loader2 className="mr-1 size-3 animate-spin" /> : null}
+                {"设为默认"}
+              </Button>
+            ) : null}
+          </div>
           <Button
             type="button"
             variant={inStockOnly ? "default" : "outline"}

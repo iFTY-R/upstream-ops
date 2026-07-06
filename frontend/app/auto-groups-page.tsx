@@ -8,6 +8,7 @@ import {
   ArrowDown,
   ArrowRightLeft,
   ArrowUp,
+  ChevronsUpDown,
   CheckCircle2,
   CircleDashed,
   Loader2,
@@ -24,8 +25,17 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Select,
@@ -47,6 +57,7 @@ import type {
   AutoGroupCapabilityMatrix,
   AutoGroupEvaluationLogPage,
   AutoGroupEvaluationResult,
+  AutoGroupProbeModelOptions,
   AutoGroupPolicyInput,
   AutoGroupPolicyView,
   AutoGroupSummary,
@@ -55,6 +66,7 @@ import type {
   ChannelAPIKey,
   ChannelAPIKeyGroup,
   ChannelAPIKeyPage,
+  ProbeModelOption,
 } from "@/lib/api-types"
 
 interface FormState {
@@ -110,6 +122,8 @@ const statusMeta = {
   probe_failed: { label: "探测失败", cls: "bg-danger/10 text-danger ring-danger/20", icon: XCircle },
 }
 
+const defaultProbeModel = "gpt-5.4"
+
 function emptyForm(channelID = ""): FormState {
   return {
     id: null,
@@ -121,7 +135,7 @@ function emptyForm(channelID = ""): FormState {
     target_key_name: "auto",
     probe_key_id: "0",
     probe_key_name: "ops-probe-auto",
-    probe_model: "gpt-4o-mini",
+    probe_model: defaultProbeModel,
     probe_timeout_seconds: "15",
     probe_success_cache_minutes: "60",
     probe_failure_retry_minutes: "10",
@@ -153,7 +167,7 @@ function formFromPolicy(p: AutoGroupPolicyView): FormState {
     target_key_name: p.target_key_name || "auto",
     probe_key_id: String(p.probe_key_id || 0),
     probe_key_name: p.probe_key_name || "ops-probe-auto",
-    probe_model: p.probe_model || "gpt-4o-mini",
+    probe_model: p.probe_model || defaultProbeModel,
     probe_timeout_seconds: String(p.probe_timeout_seconds || 15),
     probe_success_cache_minutes: String(p.probe_success_cache_minutes || 60),
     probe_failure_retry_minutes: String(p.probe_failure_retry_minutes || 10),
@@ -191,6 +205,9 @@ export default function AutoGroupsPage() {
   const [keysLoading, setKeysLoading] = useState(false)
   const [groups, setGroups] = useState<ChannelAPIKeyGroup[]>([])
   const [groupsLoading, setGroupsLoading] = useState(false)
+  const [probeModels, setProbeModels] = useState<ProbeModelOption[]>([{ id: defaultProbeModel, source: "default" }])
+  const [probeModelsLoading, setProbeModelsLoading] = useState(false)
+  const [probeModelsWarning, setProbeModelsWarning] = useState("")
   const [logs, setLogs] = useState<AutoGroupEvaluationLogPage | null>(null)
   const [switchLogs, setSwitchLogs] = useState<AutoGroupSwitchLogPage | null>(null)
   const [logsBump, setLogsBump] = useState(0)
@@ -230,6 +247,8 @@ export default function AutoGroupsPage() {
     if (!channelID) {
       setKeys([])
       setGroups([])
+      setProbeModels([{ id: defaultProbeModel, source: "default" }])
+      setProbeModelsWarning("")
       return
     }
     let cancelled = false
@@ -255,6 +274,22 @@ export default function AutoGroupsPage() {
       })
       .finally(() => {
         if (!cancelled) setGroupsLoading(false)
+      })
+
+    setProbeModelsLoading(true)
+    apiFetch<AutoGroupProbeModelOptions>(`/auto-groups/probe-models/${channelID}`)
+      .then((res) => {
+        if (cancelled) return
+        setProbeModels(normalizeProbeModelOptions(res.items, res.default_model || defaultProbeModel, form.probe_model))
+        setProbeModelsWarning(res.warning || "")
+      })
+      .catch((e: Error) => {
+        if (cancelled) return
+        setProbeModels(normalizeProbeModelOptions([], defaultProbeModel, form.probe_model))
+        setProbeModelsWarning(e.message || "读取上游模型列表失败，已使用默认模型")
+      })
+      .finally(() => {
+        if (!cancelled) setProbeModelsLoading(false)
       })
     return () => {
       cancelled = true
@@ -294,6 +329,11 @@ export default function AutoGroupsPage() {
       return a.name.localeCompare(b.name, "zh-CN")
     })
   }, [keys])
+
+  const probeModelOptions = useMemo(
+    () => normalizeProbeModelOptions(probeModels, defaultProbeModel, form.probe_model),
+    [form.probe_model, probeModels],
+  )
 
   function selectPolicy(p: AutoGroupPolicyView) {
     setSelectedID(p.id)
@@ -635,10 +675,12 @@ export default function AutoGroupsPage() {
                       />
                     </Field>
                     <Field label="探测模型">
-                      <Input
+                      <ProbeModelSelect
                         value={form.probe_model}
-                        onChange={(e) => patchForm({ probe_model: e.target.value })}
-                        placeholder="gpt-4o-mini"
+                        options={probeModelOptions}
+                        loading={probeModelsLoading}
+                        warning={probeModelsWarning}
+                        onChange={(probe_model) => patchForm({ probe_model })}
                       />
                     </Field>
                     <Field label="探测超时(秒)">
@@ -1065,6 +1107,76 @@ function capabilityLevelLabel(level?: string) {
   if (level === "suggest") return "建议模式"
   if (level === "error") return "检测失败"
   return "待检测"
+}
+
+function ProbeModelSelect({
+  value,
+  options,
+  loading,
+  warning,
+  onChange,
+}: {
+  value: string
+  options: ProbeModelOption[]
+  loading: boolean
+  warning: string
+  onChange: (value: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const selected = options.find((item) => item.id === value)
+  return (
+    <div className="space-y-2">
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            className="w-full justify-between"
+            disabled={loading && options.length === 0}
+          >
+            <span className="truncate text-left">
+              {loading ? "加载模型..." : selected?.id || value || defaultProbeModel}
+            </span>
+            <ChevronsUpDown className="ml-2 size-3.5 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+          <Command>
+            <CommandInput placeholder="搜索模型..." />
+            <CommandList>
+              <CommandEmpty>{"没有匹配的模型，可在下方手动输入。"}</CommandEmpty>
+              <CommandGroup>
+                {options.map((item) => (
+                  <CommandItem
+                    key={item.id}
+                    value={item.id}
+                    onSelect={() => {
+                      onChange(item.id)
+                      setOpen(false)
+                    }}
+                  >
+                    <CheckCircle2 className={cn("size-3.5", value === item.id ? "opacity-100" : "opacity-0")} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{item.id}</span>
+                      {item.name || item.owned_by ? (
+                        <span className="block truncate text-[11px] text-muted-foreground">
+                          {[item.name && item.name !== item.id ? item.name : "", item.owned_by].filter(Boolean).join(" · ")}
+                        </span>
+                      ) : null}
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+      <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder={defaultProbeModel} />
+      {warning ? <p className="text-[11px] leading-4 text-warning">{warning}</p> : null}
+    </div>
+  )
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
@@ -1520,7 +1632,7 @@ function buildInput(form: FormState): AutoGroupPolicyInput {
     target_key_name: form.target_key_name.trim() || "auto",
     probe_key_id: numberOrZero(form.probe_key_id),
     probe_key_name: form.probe_key_name.trim() || "ops-probe-auto",
-    probe_model: form.probe_model.trim() || "gpt-4o-mini",
+    probe_model: form.probe_model.trim() || defaultProbeModel,
     probe_timeout_seconds: Math.max(1, numberOrZero(form.probe_timeout_seconds) || 15),
     probe_success_cache_minutes: Math.max(1, numberOrZero(form.probe_success_cache_minutes) || 60),
     probe_failure_retry_minutes: Math.max(1, numberOrZero(form.probe_failure_retry_minutes) || 10),
@@ -1552,6 +1664,22 @@ function numberOrZero(value: string) {
 
 function splitList(raw: string) {
   return raw.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean)
+}
+
+function normalizeProbeModelOptions(options: ProbeModelOption[] = [], defaultModel = defaultProbeModel, current = "") {
+  const seen = new Map<string, ProbeModelOption>()
+  const add = (item: ProbeModelOption) => {
+    const id = item.id?.trim()
+    if (!id) return
+    seen.set(id, { ...item, id })
+  }
+  add({ id: defaultModel, source: "default" })
+  options.forEach(add)
+  if (current.trim()) add({ id: current.trim(), source: "current" })
+  const first = seen.get(defaultModel)
+  if (first) seen.delete(defaultModel)
+  const rest = Array.from(seen.values()).sort((a, b) => a.id.localeCompare(b.id, "zh-CN"))
+  return first ? [first, ...rest] : rest
 }
 
 function parseJSONList(raw?: string) {

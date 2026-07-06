@@ -72,6 +72,15 @@ func (s *Service) ListAPIKeyGroups(ctx context.Context, channelID uint) ([]conne
 	return groups, s.normalizeAndClear(c.ID, CapAPIKeyGroups, err)
 }
 
+func (s *Service) ListModels(ctx context.Context, channelID uint) ([]connector.ModelOption, error) {
+	c, resolved, conn, session, err := s.prepare(ctx, channelID, CapModels)
+	if err != nil {
+		return nil, err
+	}
+	models, err := conn.ListModels(ctx, resolved, session)
+	return models, s.normalizeAndClear(c.ID, CapModels, err)
+}
+
 func (s *Service) CreateAPIKey(ctx context.Context, channelID uint, req connector.APIKeyCreateRequest) (*connector.APIKey, error) {
 	c, resolved, conn, session, err := s.prepare(ctx, channelID, CapAPIKeyCreate)
 	if err != nil {

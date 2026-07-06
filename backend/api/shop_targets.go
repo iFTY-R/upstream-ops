@@ -21,6 +21,7 @@ func registerShopTargets(g *gin.RouterGroup, d *Deps) {
 	gp.POST("/parse-url", func(c *gin.Context) { parseShopURL(c, d) })
 	gp.POST("/sync-all", func(c *gin.Context) { syncAllShopTargets(c, d) })
 	gp.POST("/reorder", func(c *gin.Context) { reorderShopTargets(c, d) })
+	gp.POST("/bulk-notification", func(c *gin.Context) { bulkConfigureShopNotifications(c, d) })
 	gp.GET("/:id", func(c *gin.Context) { getShopTarget(c, d) })
 	gp.PUT("/:id", func(c *gin.Context) { updateShopTarget(c, d) })
 	gp.DELETE("/:id", func(c *gin.Context) { deleteShopTarget(c, d) })
@@ -62,6 +63,7 @@ type shopTargetInput struct {
 	RemovedGoodsEnabled *bool                 `json:"removed_goods_enabled"`
 	ProxyEnabled        bool                  `json:"proxy_enabled"`
 	SortOrder           int                   `json:"sort_order"`
+	GoodsSort           string                `json:"goods_sort"`
 }
 
 type parseShopURLInput struct {
@@ -73,6 +75,21 @@ type shopTargetReorderInput struct {
 		ID        uint `json:"id"`
 		SortOrder int  `json:"sort_order"`
 	} `json:"items"`
+}
+
+type shopBulkNotificationInput struct {
+	TargetIDs       []uint             `json:"target_ids"`
+	NotifyEnabled   *bool              `json:"notify_enabled"`
+	UpsertRule      bool               `json:"upsert_rule"`
+	ReplaceSameName bool               `json:"replace_same_name"`
+	Rule            shopWatchRuleInput `json:"rule"`
+}
+
+type shopBulkNotificationResult struct {
+	UpdatedTargets int                  `json:"updated_targets"`
+	CreatedRules   int                  `json:"created_rules"`
+	UpdatedRules   int                  `json:"updated_rules"`
+	Targets        []storage.ShopTarget `json:"targets"`
 }
 
 func listShopTargets(c *gin.Context, d *Deps) {
@@ -143,6 +160,91 @@ func reorderShopTargets(c *gin.Context, d *Deps) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": list})
+}
+
+func bulkConfigureShopNotifications(c *gin.Context, d *Deps) {
+	if !shopWatchReposReady(c, d) {
+		return
+	}
+	var in shopBulkNotificationInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	targetIDs := cleanUintIDs(in.TargetIDs)
+	if len(targetIDs) == 0 {
+		fail(c, http.StatusBadRequest, fmt.Errorf("请选择至少一个店铺"))
+		return
+	}
+	if in.NotifyEnabled == nil && !in.UpsertRule {
+		fail(c, http.StatusBadRequest, fmt.Errorf("请选择要批量修改的通知配置"))
+		return
+	}
+
+	if in.UpsertRule {
+		if _, err := buildShopWatchRule(0, in.Rule, nil); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+	}
+	targets := make([]*storage.ShopTarget, 0, len(targetIDs))
+	for _, targetID := range targetIDs {
+		target, err := d.ShopTargets.FindByID(targetID)
+		if err != nil {
+			fail(c, http.StatusNotFound, fmt.Errorf("店铺不存在：%d", targetID))
+			return
+		}
+		targets = append(targets, target)
+	}
+
+	result := shopBulkNotificationResult{}
+	for _, target := range targets {
+		if in.NotifyEnabled != nil && target.NotifyEnabled != *in.NotifyEnabled {
+			target.NotifyEnabled = *in.NotifyEnabled
+			if err := d.ShopTargets.Update(target); err != nil {
+				fail(c, http.StatusInternalServerError, err)
+				return
+			}
+			result.UpdatedTargets++
+		}
+		if in.UpsertRule {
+			rule, err := buildShopWatchRule(target.ID, in.Rule, nil)
+			if err != nil {
+				fail(c, http.StatusBadRequest, err)
+				return
+			}
+			current, err := d.ShopWatchRules.FindByTargetAndName(target.ID, rule.Name)
+			if err != nil {
+				fail(c, http.StatusInternalServerError, err)
+				return
+			}
+			if current != nil && in.ReplaceSameName {
+				rule.ID = current.ID
+				rule.CreatedAt = current.CreatedAt
+				if err := d.ShopWatchRules.Update(rule); err != nil {
+					fail(c, http.StatusInternalServerError, err)
+					return
+				}
+				result.UpdatedRules++
+			} else if current == nil {
+				if err := d.ShopWatchRules.Create(rule); err != nil {
+					fail(c, http.StatusInternalServerError, err)
+					return
+				}
+				result.CreatedRules++
+			}
+		}
+	}
+	list, err := d.ShopTargets.List()
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	if !attachShopWatchRuleCounts(c, d, list) {
+		return
+	}
+	result.Targets = list
+	c.JSON(http.StatusOK, gin.H{"data": result})
 }
 
 func attachShopWatchRuleCounts(c *gin.Context, d *Deps, list []storage.ShopTarget) bool {
@@ -494,6 +596,10 @@ func buildShopTarget(in shopTargetInput, current *storage.ShopTarget) (*storage.
 	target.RemovedGoodsEnabled = boolDefault(in.RemovedGoodsEnabled, true)
 	target.ProxyEnabled = in.ProxyEnabled
 	target.SortOrder = in.SortOrder
+	target.GoodsSort = normalizeShopGoodsSort(in.GoodsSort)
+	if current != nil && strings.TrimSpace(in.GoodsSort) == "" {
+		target.GoodsSort = current.GoodsSort
+	}
 	if current != nil && target.SortOrder == 0 {
 		target.SortOrder = current.SortOrder
 	}
@@ -501,6 +607,33 @@ func buildShopTarget(in shopTargetInput, current *storage.ShopTarget) (*storage.
 		target.SortOrder = 1
 	}
 	return target, nil
+}
+
+func normalizeShopGoodsSort(sort string) string {
+	switch strings.TrimSpace(sort) {
+	case "", "category":
+		return "category"
+	case "stock_asc", "stock_desc", "price_asc", "price_desc", "last_seen_desc":
+		return strings.TrimSpace(sort)
+	default:
+		return "category"
+	}
+}
+
+func cleanUintIDs(ids []uint) []uint {
+	out := make([]uint, 0, len(ids))
+	seen := map[uint]struct{}{}
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func parseUintParam(c *gin.Context, name string) (uint, bool) {

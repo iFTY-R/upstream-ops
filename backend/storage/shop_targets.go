@@ -73,7 +73,7 @@ func (r *ShopTargets) FindByID(id uint) (*ShopTarget, error) {
 
 func (r *ShopTargets) List() ([]ShopTarget, error) {
 	var list []ShopTarget
-	if err := r.db.Order("sort_order DESC").Order("id ASC").Find(&list).Error; err != nil {
+	if err := r.db.Order("sort_order ASC").Order("id ASC").Find(&list).Error; err != nil {
 		return nil, err
 	}
 	return list, nil
@@ -81,7 +81,7 @@ func (r *ShopTargets) List() ([]ShopTarget, error) {
 
 func (r *ShopTargets) ListMonitorEnabled() ([]ShopTarget, error) {
 	var list []ShopTarget
-	if err := r.db.Where("monitor_enabled = ?", true).Order("sort_order DESC").Order("id ASC").Find(&list).Error; err != nil {
+	if err := r.db.Where("monitor_enabled = ?", true).Order("sort_order ASC").Order("id ASC").Find(&list).Error; err != nil {
 		return nil, err
 	}
 	return list, nil
@@ -173,6 +173,18 @@ func (r *ShopWatchRules) CountByTargets(targetIDs []uint) (map[uint]int, error) 
 func (r *ShopWatchRules) FindByID(targetID, ruleID uint) (*ShopWatchRule, error) {
 	var rule ShopWatchRule
 	if err := r.db.Where("target_id = ? AND id = ?", targetID, ruleID).First(&rule).Error; err != nil {
+		return nil, err
+	}
+	return &rule, nil
+}
+
+func (r *ShopWatchRules) FindByTargetAndName(targetID uint, name string) (*ShopWatchRule, error) {
+	var rule ShopWatchRule
+	err := r.db.Where("target_id = ? AND name = ?", targetID, strings.TrimSpace(name)).First(&rule).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
 		return nil, err
 	}
 	return &rule, nil

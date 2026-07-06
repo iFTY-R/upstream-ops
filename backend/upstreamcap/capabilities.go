@@ -18,6 +18,7 @@ const (
 	CapAPIKeyUpdate      = "api_key_update"
 	CapAPIKeyDelete      = "api_key_delete"
 	CapAPIKeyReveal      = "api_key_reveal"
+	CapModels            = "models"
 	CapRecharge          = "recharge"
 	CapSubscription      = "subscription"
 	CapSubscriptionUsage = "subscription_usage"
@@ -48,6 +49,10 @@ type APIKeyControlCapability interface {
 
 type GroupCapability interface {
 	ListAPIKeyGroups(ctx context.Context, channelID uint) ([]connector.APIKeyGroup, error)
+}
+
+type ModelCapability interface {
+	ListModels(ctx context.Context, channelID uint) ([]connector.ModelOption, error)
 }
 
 type RechargeCapability interface {

@@ -19,6 +19,7 @@ import (
 type fakeUpstreamCapability struct {
 	keys                   []connector.APIKey
 	groups                 []connector.APIKeyGroup
+	models                 []connector.ModelOption
 	created                []connector.APIKeyCreateRequest
 	updates                []connector.APIKeyUpdateRequest
 	updateKeyIDs           []int64
@@ -45,6 +46,10 @@ func (f *fakeUpstreamCapability) ListAPIKeys(ctx context.Context, channelID uint
 
 func (f *fakeUpstreamCapability) ListAPIKeyGroups(ctx context.Context, channelID uint) ([]connector.APIKeyGroup, error) {
 	return f.groups, nil
+}
+
+func (f *fakeUpstreamCapability) ListModels(ctx context.Context, channelID uint) ([]connector.ModelOption, error) {
+	return f.models, nil
 }
 
 func (f *fakeUpstreamCapability) CreateAPIKey(ctx context.Context, channelID uint, req connector.APIKeyCreateRequest) (*connector.APIKey, error) {
@@ -181,6 +186,29 @@ func newProbeServer(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": "probe-ok"})
 	}))
+}
+
+func TestPolicyFromInputDefaultsProbeModelToGPT54(t *testing.T) {
+	policy, err := policyFromInput(nil, PolicyInput{ChannelID: 1, Name: "auto"})
+	if err != nil {
+		t.Fatalf("policyFromInput: %v", err)
+	}
+	if policy.ProbeModel != defaultProbeModel {
+		t.Fatalf("probe model = %q, want %q", policy.ProbeModel, defaultProbeModel)
+	}
+}
+
+func TestProbeModelOptionsAlwaysIncludesDefault(t *testing.T) {
+	svc := NewService(nil, nil, nil, &fakeUpstreamCapability{
+		models: []connector.ModelOption{{ID: "claude-sonnet-4.5", Source: "test"}},
+	}, nil, nil)
+	got := svc.ProbeModelOptions(context.Background(), 1)
+	if got.DefaultModel != defaultProbeModel {
+		t.Fatalf("default model = %q, want %q", got.DefaultModel, defaultProbeModel)
+	}
+	if len(got.Items) < 2 || got.Items[0].ID != defaultProbeModel {
+		t.Fatalf("items = %#v, want default model first", got.Items)
+	}
 }
 
 func TestEvaluatePolicyCreatesMissingTargetAutoKey(t *testing.T) {

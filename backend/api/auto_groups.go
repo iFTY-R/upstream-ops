@@ -17,6 +17,7 @@ func registerAutoGroups(g *gin.RouterGroup, d *Deps) {
 	gp.POST("", func(c *gin.Context) { createAutoGroupPolicy(c, d) })
 	gp.GET("/summary", func(c *gin.Context) { getAutoGroupSummary(c, d) })
 	gp.GET("/capabilities/:channel_id", func(c *gin.Context) { getAutoGroupCapabilities(c, d) })
+	gp.GET("/probe-models/:channel_id", func(c *gin.Context) { getAutoGroupProbeModels(c, d) })
 	gp.POST("/reorder", func(c *gin.Context) { reorderAutoGroupPolicies(c, d) })
 	gp.GET("/:id", func(c *gin.Context) { getAutoGroupPolicy(c, d) })
 	gp.PUT("/:id", func(c *gin.Context) { updateAutoGroupPolicy(c, d) })
@@ -111,6 +112,19 @@ func getAutoGroupCapabilities(c *gin.Context, d *Deps) {
 		return
 	}
 	detectAutoGroupCapabilities(c, d, channelID)
+}
+
+func getAutoGroupProbeModels(c *gin.Context, d *Deps) {
+	svc, ok := requireAutoGroupService(c, d)
+	if !ok {
+		return
+	}
+	channelID, err := uintParam(c, "channel_id")
+	if err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": svc.ProbeModelOptions(c.Request.Context(), channelID)})
 }
 
 func getAutoGroupPolicy(c *gin.Context, d *Deps) {

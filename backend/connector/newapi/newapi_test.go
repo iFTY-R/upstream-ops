@@ -66,6 +66,26 @@ func TestLoginAddsExtraParams(t *testing.T) {
 	}
 }
 
+func TestListModelsUsesUserModels(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/user/models", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Cookie") == "" || r.Header.Get("New-Api-User") != "7" {
+			t.Fatalf("missing auth headers: cookie=%q user=%q", r.Header.Get("Cookie"), r.Header.Get("New-Api-User"))
+		}
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":["gpt-5.4","claude-sonnet-4.5","gpt-5.4"]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	models, err := New().ListModels(context.Background(), &connector.Channel{SiteURL: srv.URL}, &connector.AuthSession{UserID: "7", Cookie: "session=abc"})
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(models) != 2 || models[0].ID != "claude-sonnet-4.5" || models[1].ID != "gpt-5.4" {
+		t.Fatalf("models = %#v", models)
+	}
+}
+
 func TestGetCosts(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {

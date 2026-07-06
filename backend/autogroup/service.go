@@ -21,6 +21,7 @@ import (
 type UpstreamCapability interface {
 	upstreamcap.APIKeyControlCapability
 	upstreamcap.GroupCapability
+	upstreamcap.ModelCapability
 	upstreamcap.ProbeCapability
 }
 
@@ -34,7 +35,10 @@ type Service struct {
 	locks      sync.Map
 }
 
-const newAPIProbeRemainAmountUSD = 1.0
+const (
+	defaultProbeModel          = "gpt-5.4"
+	newAPIProbeRemainAmountUSD = 1.0
+)
 
 func NewService(repo *storage.AutoGroups, channels *storage.Channels, rates *storage.Rates, upstream UpstreamCapability, dispatcher *notify.Dispatcher, log *slog.Logger) *Service {
 	return &Service{
@@ -116,6 +120,12 @@ type CapabilityMatrix struct {
 	Level        string           `json:"level"`
 	Message      string           `json:"message,omitempty"`
 	Capabilities []CapabilityItem `json:"capabilities"`
+}
+
+type ProbeModelOptions struct {
+	DefaultModel string                  `json:"default_model"`
+	Items        []connector.ModelOption `json:"items"`
+	Warning      string                  `json:"warning,omitempty"`
 }
 
 type CandidateDecision struct {
@@ -228,6 +238,23 @@ func (s *Service) policyView(p storage.AutoGroupPolicy) PolicyView {
 		view.LatestLog = &logs[0]
 	}
 	return view
+}
+
+func (s *Service) ProbeModelOptions(ctx context.Context, channelID uint) ProbeModelOptions {
+	warning := ""
+	models := []connector.ModelOption{}
+	if s.Upstream == nil {
+		warning = "上游能力服务未初始化，已使用默认模型"
+	} else if list, err := s.Upstream.ListModels(ctx, channelID); err != nil {
+		warning = err.Error()
+	} else {
+		models = list
+	}
+	return ProbeModelOptions{
+		DefaultModel: defaultProbeModel,
+		Items:        mergeProbeModelOptions(defaultProbeModel, models),
+		Warning:      warning,
+	}
 }
 
 func (s *Service) DetectCapabilities(ctx context.Context, channelID uint) (*CapabilityMatrix, error) {
@@ -1294,7 +1321,7 @@ func (s *Service) probeOpenAI(ctx context.Context, p *storage.AutoGroupPolicy, a
 		timeout = 15 * time.Second
 	}
 	res, err := s.Upstream.ProbeOpenAICompatible(ctx, p.ChannelID, apiKey, upstreamcap.ProbeRequest{
-		Model:     emptyAs(strings.TrimSpace(p.ProbeModel), "gpt-4o-mini"),
+		Model:     emptyAs(strings.TrimSpace(p.ProbeModel), defaultProbeModel),
 		Timeout:   timeout,
 		MaxTokens: 1,
 	})
@@ -1441,7 +1468,7 @@ func policyFromInput(current *storage.AutoGroupPolicy, in PolicyInput) (*storage
 	p.TargetKeyName = emptyAs(strings.TrimSpace(in.TargetKeyName), "auto")
 	p.ProbeKeyID = in.ProbeKeyID
 	p.ProbeKeyName = emptyAs(strings.TrimSpace(in.ProbeKeyName), "ops-probe-auto")
-	p.ProbeModel = emptyAs(strings.TrimSpace(in.ProbeModel), "gpt-4o-mini")
+	p.ProbeModel = emptyAs(strings.TrimSpace(in.ProbeModel), defaultProbeModel)
 	p.ProbeTimeoutSeconds = in.ProbeTimeoutSeconds
 	if p.ProbeTimeoutSeconds <= 0 {
 		p.ProbeTimeoutSeconds = 15
@@ -1877,4 +1904,38 @@ func emptyAs(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func mergeProbeModelOptions(defaultModel string, models []connector.ModelOption) []connector.ModelOption {
+	defaultModel = strings.TrimSpace(defaultModel)
+	seen := map[string]connector.ModelOption{}
+	if defaultModel != "" {
+		seen[defaultModel] = connector.ModelOption{ID: defaultModel, Source: "default"}
+	}
+	for _, model := range models {
+		model.ID = strings.TrimSpace(model.ID)
+		if model.ID == "" {
+			continue
+		}
+		if model.Name == "" {
+			model.Name = strings.TrimSpace(model.Name)
+		}
+		if _, exists := seen[model.ID]; !exists || model.ID == defaultModel {
+			seen[model.ID] = model
+		}
+	}
+	out := make([]connector.ModelOption, 0, len(seen))
+	if opt, ok := seen[defaultModel]; ok {
+		out = append(out, opt)
+		delete(seen, defaultModel)
+	}
+	rest := make([]connector.ModelOption, 0, len(seen))
+	for _, opt := range seen {
+		rest = append(rest, opt)
+	}
+	sort.Slice(rest, func(i, j int) bool {
+		return strings.ToLower(rest[i].ID) < strings.ToLower(rest[j].ID)
+	})
+	out = append(out, rest...)
+	return out
 }

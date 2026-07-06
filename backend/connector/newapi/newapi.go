@@ -598,6 +598,22 @@ func (c *Client) ListAPIKeyGroups(ctx context.Context, ch *connector.Channel, se
 	return out, nil
 }
 
+func (c *Client) ListModels(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) ([]connector.ModelOption, error) {
+	site := strings.TrimRight(ch.SiteURL, "/")
+	body, err := c.getJSON(ctx, site+"/api/user/models", session)
+	if err != nil {
+		body, err = c.getJSON(ctx, site+"/api/channel/models_enabled", session)
+		if err != nil {
+			return nil, fmt.Errorf("newapi models: %w", err)
+		}
+	}
+	models, err := decodeModelOptions(body, "newapi")
+	if err != nil {
+		return nil, fmt.Errorf("newapi models decode: %w", err)
+	}
+	return models, nil
+}
+
 func (c *Client) CreateAPIKey(ctx context.Context, ch *connector.Channel, session *connector.AuthSession, req connector.APIKeyCreateRequest) (*connector.APIKey, error) {
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, errors.New("密钥名称不能为空")
@@ -1484,4 +1500,83 @@ func valueOr[T any](ptr *T, fallback T) T {
 		return fallback
 	}
 	return *ptr
+}
+
+func decodeModelOptions(body []byte, source string) ([]connector.ModelOption, error) {
+	var raw any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	return modelOptionsFromAny(raw, source), nil
+}
+
+func modelOptionsFromAny(raw any, source string) []connector.ModelOption {
+	seen := map[string]connector.ModelOption{}
+	var walk func(any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case []any:
+			for _, item := range x {
+				walk(item)
+			}
+		case map[string]any:
+			if data, ok := x["data"]; ok {
+				walk(data)
+				return
+			}
+			if models, ok := x["models"]; ok {
+				walk(models)
+				return
+			}
+			id := strings.TrimSpace(fmt.Sprint(firstNonNil(x["id"], x["Id"], x["name"], x["Name"])))
+			if id == "" || id == "<nil>" {
+				return
+			}
+			opt := connector.ModelOption{
+				ID:      id,
+				Name:    strings.TrimSpace(fmt.Sprint(firstNonNil(x["display_name"], x["DisplayName"], x["name"], x["Name"]))),
+				OwnedBy: strings.TrimSpace(fmt.Sprint(firstNonNil(x["owned_by"], x["OwnedBy"]))),
+				Source:  source,
+			}
+			if opt.Name == "<nil>" {
+				opt.Name = ""
+			}
+			if opt.OwnedBy == "<nil>" {
+				opt.OwnedBy = ""
+			}
+			seen[id] = opt
+		case map[string][]string:
+			for _, list := range x {
+				for _, id := range list {
+					id = strings.TrimSpace(id)
+					if id != "" {
+						seen[id] = connector.ModelOption{ID: id, Source: source}
+					}
+				}
+			}
+		case string:
+			id := strings.TrimSpace(x)
+			if id != "" {
+				seen[id] = connector.ModelOption{ID: id, Source: source}
+			}
+		}
+	}
+	walk(raw)
+	out := make([]connector.ModelOption, 0, len(seen))
+	for _, opt := range seen {
+		out = append(out, opt)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return strings.ToLower(out[i].ID) < strings.ToLower(out[j].ID)
+	})
+	return out
+}
+
+func firstNonNil(values ...any) any {
+	for _, v := range values {
+		if v != nil {
+			return v
+		}
+	}
+	return ""
 }

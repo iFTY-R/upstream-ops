@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -659,6 +660,19 @@ func (c *Client) ListAPIKeyGroups(ctx context.Context, ch *connector.Channel, se
 		out = append(out, g)
 	}
 	return out, nil
+}
+
+func (c *Client) ListModels(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) ([]connector.ModelOption, error) {
+	site := strings.TrimRight(ch.SiteURL, "/")
+	body, err := c.getJSON(ctx, site+"/api/v1/admin/groups/0/models-list-candidates?platform=openai", session)
+	if err != nil {
+		return nil, fmt.Errorf("sub2api models: %w", err)
+	}
+	models, err := decodeSub2ModelOptions(body)
+	if err != nil {
+		return nil, fmt.Errorf("sub2api models decode: %w", err)
+	}
+	return models, nil
 }
 
 func (c *Client) CreateAPIKey(ctx context.Context, ch *connector.Channel, session *connector.AuthSession, req connector.APIKeyCreateRequest) (*connector.APIKey, error) {
@@ -1420,4 +1434,62 @@ func (c *Client) sub2APIGroupMap(ctx context.Context, ch *connector.Channel, ses
 		}
 	}
 	return out, nil
+}
+
+func decodeSub2ModelOptions(body []byte) ([]connector.ModelOption, error) {
+	var raw any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	seen := map[string]connector.ModelOption{}
+	var walk func(any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case []any:
+			for _, item := range x {
+				walk(item)
+			}
+		case map[string]any:
+			if models, ok := x["models"]; ok {
+				walk(models)
+				return
+			}
+			if data, ok := x["data"]; ok {
+				walk(data)
+				return
+			}
+			id := strings.TrimSpace(fmt.Sprint(firstSub2NonNil(x["id"], x["name"])))
+			if id == "" || id == "<nil>" {
+				return
+			}
+			name := strings.TrimSpace(fmt.Sprint(firstSub2NonNil(x["display_name"], x["name"])))
+			if name == "<nil>" {
+				name = ""
+			}
+			seen[id] = connector.ModelOption{ID: id, Name: name, Source: "sub2api"}
+		case string:
+			id := strings.TrimSpace(x)
+			if id != "" {
+				seen[id] = connector.ModelOption{ID: id, Source: "sub2api"}
+			}
+		}
+	}
+	walk(raw)
+	out := make([]connector.ModelOption, 0, len(seen))
+	for _, opt := range seen {
+		out = append(out, opt)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return strings.ToLower(out[i].ID) < strings.ToLower(out[j].ID)
+	})
+	return out, nil
+}
+
+func firstSub2NonNil(values ...any) any {
+	for _, v := range values {
+		if v != nil {
+			return v
+		}
+	}
+	return ""
 }

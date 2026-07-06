@@ -335,7 +335,7 @@ func TestShopTargetsUpdateSortOrders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list targets: %v", err)
 	}
-	if len(list) != 3 || list[0].Name != "shop-a" || list[1].Name != "shop-c" || list[2].Name != "shop-b" {
+	if len(list) != 3 || list[0].Name != "shop-b" || list[1].Name != "shop-c" || list[2].Name != "shop-a" {
 		t.Fatalf("unexpected order: %#v", list)
 	}
 }
@@ -376,7 +376,7 @@ func TestShopTargetsCreateAssignsNextSortOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list targets: %v", err)
 	}
-	if len(list) != 2 || list[0].Name != "shop-b" || list[1].Name != "shop-a" {
+	if len(list) != 2 || list[0].Name != "shop-a" || list[1].Name != "shop-b" {
 		t.Fatalf("unexpected order after create: %#v", list)
 	}
 }
