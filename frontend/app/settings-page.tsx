@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -59,6 +60,15 @@ function num(v: string) {
 function normalizeSystemConfig(config: SystemConfig): SystemConfig {
   return {
     ...config,
+    auth: {
+      ...config.auth,
+      sub2apiEmbed: {
+        enabled: config.auth.sub2apiEmbed?.enabled ?? false,
+        baseURL: config.auth.sub2apiEmbed?.baseURL ?? "",
+        allowedOrigins: config.auth.sub2apiEmbed?.allowedOrigins ?? [],
+        requireAdmin: config.auth.sub2apiEmbed?.requireAdmin ?? true,
+      },
+    },
     scheduler: {
       ...config.scheduler,
       shopCron: config.scheduler.shopCron ?? "",
@@ -70,6 +80,13 @@ function normalizeSystemConfig(config: SystemConfig): SystemConfig {
       },
     },
   };
+}
+
+function parseLines(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 interface ProxyTestResult {
@@ -522,6 +539,107 @@ export default function SettingsPage() {
                     }
                   />
                 </Field>
+              </div>
+              <div className="mt-6 rounded-2xl border bg-muted/30 p-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <InlineSwitch
+                    id="sub2api-embed-enabled"
+                    label="允许 Sub2API 嵌入登录"
+                    description="用于 Sub2API 自定义菜单 iframe 进入 Ops 时免二次登录。"
+                    checked={form.auth.sub2apiEmbed.enabled}
+                    onCheckedChange={(checked) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              auth: {
+                                ...prev.auth,
+                                sub2apiEmbed: {
+                                  ...prev.auth.sub2apiEmbed,
+                                  enabled: checked,
+                                },
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                  <InlineSwitch
+                    id="sub2api-embed-require-admin"
+                    label="仅允许 Sub2API 管理员"
+                    description="开启后只有 role=admin 的 Sub2API 用户可以换取 Ops 会话。"
+                    checked={form.auth.sub2apiEmbed.requireAdmin}
+                    onCheckedChange={(checked) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              auth: {
+                                ...prev.auth,
+                                sub2apiEmbed: {
+                                  ...prev.auth.sub2apiEmbed,
+                                  requireAdmin: checked,
+                                },
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </div>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <Field
+                    label="Sub2API 地址"
+                    description="Ops 后端会调用该地址的 /api/auth/me 校验 Sub2API token。"
+                  >
+                    <Input
+                      placeholder="https://sub2api.example.com"
+                      value={form.auth.sub2apiEmbed.baseURL}
+                      onChange={(e) =>
+                        setForm((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                auth: {
+                                  ...prev.auth,
+                                  sub2apiEmbed: {
+                                    ...prev.auth.sub2apiEmbed,
+                                    baseURL: e.target.value,
+                                  },
+                                },
+                              }
+                            : prev,
+                        )
+                      }
+                    />
+                  </Field>
+                  <Field
+                    label="允许来源"
+                    description="可选。每行一个 Sub2API origin；留空表示不校验 src_host。"
+                  >
+                    <Textarea
+                      className="min-h-24"
+                      placeholder="https://sub2api.example.com"
+                      value={form.auth.sub2apiEmbed.allowedOrigins.join("\n")}
+                      onChange={(e) =>
+                        setForm((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                auth: {
+                                  ...prev.auth,
+                                  sub2apiEmbed: {
+                                    ...prev.auth.sub2apiEmbed,
+                                    allowedOrigins: parseLines(e.target.value),
+                                  },
+                                },
+                              }
+                            : prev,
+                        )
+                      }
+                    />
+                  </Field>
+                </div>
               </div>
             </SectionCard>
 

@@ -18,6 +18,19 @@ func TestLoadAppliesUpstreamDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadAppliesSub2APIEmbedDefaults(t *testing.T) {
+	cfg, err := LoadFile(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if cfg.Auth.Sub2APIEmbed.Enabled {
+		t.Fatalf("sub2api embed enabled by default")
+	}
+	if !cfg.Auth.Sub2APIEmbed.RequireAdmin {
+		t.Fatalf("sub2api embed should require admin by default")
+	}
+}
+
 func TestUpstreamConfigWithDefaultsKeepsCustomUserAgent(t *testing.T) {
 	cfg := UpstreamConfig{
 		TimeoutSeconds: 0,

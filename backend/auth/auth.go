@@ -59,6 +59,14 @@ func (s *Service) Login(username, password string) (string, time.Time, error) {
 		subtle.ConstantTimeCompare([]byte(password), []byte(s.password)) != 1 {
 		return "", time.Time{}, errors.New("invalid username or password")
 	}
+	return s.Issue()
+}
+
+// Issue 为已被外部可信流程认证的请求签发当前管理员 token。
+//
+// 目前 Ops 仍是单管理员模型，所以 subject 固定为本地管理员账号；这样 Verify 规则不需要放宽，
+// Sub2API 用户身份只作为换票准入条件，不改变 Ops 内部权限模型。
+func (s *Service) Issue() (string, time.Time, error) {
 	expiresAt := time.Now().Add(s.tokenTTL)
 	c := claims{Sub: s.username, Exp: expiresAt.Unix()}
 	tok, err := s.sign(c)
@@ -126,11 +134,13 @@ func (s *Service) TokenTTL() time.Duration { return s.tokenTTL }
 //   - "/healthz"
 //   - "/api/version"
 //   - "/api/auth/login"
+//   - "/api/auth/sub2api/exchange"
 func (s *Service) Middleware() gin.HandlerFunc {
 	whitelist := map[string]struct{}{
-		"/healthz":        {},
-		"/api/version":    {},
-		"/api/auth/login": {},
+		"/healthz":                   {},
+		"/api/version":               {},
+		"/api/auth/login":            {},
+		"/api/auth/sub2api/exchange": {},
 	}
 	return func(c *gin.Context) {
 		if _, ok := whitelist[c.FullPath()]; ok {

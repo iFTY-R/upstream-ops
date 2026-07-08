@@ -91,9 +91,10 @@ func (m *Manager) CurrentUpstream() config.UpstreamConfig {
 
 func (m *Manager) AuthMiddleware() gin.HandlerFunc {
 	whitelist := map[string]struct{}{
-		"/healthz":        {},
-		"/api/version":    {},
-		"/api/auth/login": {},
+		"/healthz":                   {},
+		"/api/version":               {},
+		"/api/auth/login":            {},
+		"/api/auth/sub2api/exchange": {},
 	}
 	return func(c *gin.Context) {
 		if _, ok := whitelist[c.FullPath()]; ok {

@@ -75,11 +75,23 @@ type SecurityConfig struct {
 // Enabled=true 时 Username/Password 是写死的管理员凭据，TokenSecret 用于签发 HMAC token。
 // 如果 TokenSecret 为空，会回退使用 Security.AppSecret，保证有合理默认。
 type AuthConfig struct {
-	Enabled         bool   `mapstructure:"enabled" yaml:"enabled" json:"enabled"`
-	Username        string `mapstructure:"username" yaml:"username" json:"username"`
-	Password        string `mapstructure:"password" yaml:"password" json:"password"`
-	TokenSecret     string `mapstructure:"tokenSecret" yaml:"tokenSecret" json:"tokenSecret"`
-	SessionTTLHours int    `mapstructure:"sessionTTLHours" yaml:"sessionTTLHours" json:"sessionTTLHours"`
+	Enabled         bool               `mapstructure:"enabled" yaml:"enabled" json:"enabled"`
+	Username        string             `mapstructure:"username" yaml:"username" json:"username"`
+	Password        string             `mapstructure:"password" yaml:"password" json:"password"`
+	TokenSecret     string             `mapstructure:"tokenSecret" yaml:"tokenSecret" json:"tokenSecret"`
+	SessionTTLHours int                `mapstructure:"sessionTTLHours" yaml:"sessionTTLHours" json:"sessionTTLHours"`
+	Sub2APIEmbed    Sub2APIEmbedConfig `mapstructure:"sub2apiEmbed" yaml:"sub2apiEmbed" json:"sub2apiEmbed"`
+}
+
+// Sub2APIEmbedConfig 控制从 Sub2API 自定义菜单 iframe 进入时的免登录换票。
+//
+// Sub2API 会把自己的登录 token 注入 URL；Ops 后端只在 exchange 接口内服务端校验该 token，
+// 校验成功后签发 Ops 自己的后台 token，避免前端长期持有或透传第三方系统 token。
+type Sub2APIEmbedConfig struct {
+	Enabled        bool     `mapstructure:"enabled" yaml:"enabled" json:"enabled"`
+	BaseURL        string   `mapstructure:"baseURL" yaml:"baseURL" json:"baseURL"`
+	AllowedOrigins []string `mapstructure:"allowedOrigins" yaml:"allowedOrigins" json:"allowedOrigins"`
+	RequireAdmin   bool     `mapstructure:"requireAdmin" yaml:"requireAdmin" json:"requireAdmin"`
 }
 
 type SchedulerConfig struct {
@@ -218,6 +230,9 @@ func load(path string, withEnv bool) (*Config, string, error) {
 		_ = v.BindEnv("auth.username", "ADMIN_USERNAME")
 		_ = v.BindEnv("auth.password", "ADMIN_PASSWORD")
 		_ = v.BindEnv("auth.tokenSecret", "AUTH_TOKEN_SECRET")
+		_ = v.BindEnv("auth.sub2apiEmbed.enabled", "AUTH_SUB2API_EMBED_ENABLED", "AUTH_SUB2APIEMBED_ENABLED")
+		_ = v.BindEnv("auth.sub2apiEmbed.baseURL", "AUTH_SUB2API_EMBED_BASEURL", "AUTH_SUB2APIEMBED_BASEURL")
+		_ = v.BindEnv("auth.sub2apiEmbed.requireAdmin", "AUTH_SUB2API_EMBED_REQUIRE_ADMIN", "AUTH_SUB2APIEMBED_REQUIREADMIN")
 		// Viper 坑：AutomaticEnv 只对已通过 SetDefault / BindEnv / 配置文件注册过的 key 生效；
 		// 数据库的 user/password 没有合理的默认值（拒绝写"change-me"作默认），
 		// 因此显式 BindEnv 以确保从环境变量读取。
@@ -334,6 +349,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.enabled", false)
 	v.SetDefault("auth.username", "admin")
 	v.SetDefault("auth.sessionTTLHours", 168) // 7 天
+	v.SetDefault("auth.sub2apiEmbed.enabled", false)
+	v.SetDefault("auth.sub2apiEmbed.baseURL", "")
+	v.SetDefault("auth.sub2apiEmbed.allowedOrigins", []string{})
+	v.SetDefault("auth.sub2apiEmbed.requireAdmin", true)
 
 	// 通知去抖：默认开合并、不过滤涨跌幅、balance_low 1h 内不重复、失败重试 3 次。
 	// 即"默认行为是合并刷屏 + 不重复 balance_low + 抗短时网络抖动"，不丢任何 rate_changed 事件。

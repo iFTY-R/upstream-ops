@@ -466,6 +466,14 @@ export interface SystemAuthConfig {
   password: string
   tokenSecret: string
   sessionTTLHours: number
+  sub2apiEmbed: Sub2APIEmbedConfig
+}
+
+export interface Sub2APIEmbedConfig {
+  enabled: boolean
+  baseURL: string
+  allowedOrigins: string[]
+  requireAdmin: boolean
 }
 
 export interface AppConfig {
