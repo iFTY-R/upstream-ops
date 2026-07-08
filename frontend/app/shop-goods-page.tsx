@@ -33,7 +33,7 @@ const sortLabels: Record<ShopGoodsSort, string> = {
 }
 
 function shopName(row: ShopGoodsWithTarget) {
-  return row.target_last_shop_name?.trim() || row.target_name || `店铺 #${row.target_id}`
+  return row.target_name?.trim() || row.target_last_shop_name?.trim() || `店铺 #${row.target_id}`
 }
 
 export default function ShopGoodsPage() {
@@ -152,7 +152,7 @@ export default function ShopGoodsPage() {
                 <SelectItem value="all">全部店铺</SelectItem>
                 {(targets.data ?? []).map((target) => (
                   <SelectItem key={target.id} value={String(target.id)}>
-                    {target.last_shop_name?.trim() || target.name}
+                    {target.name?.trim() || target.last_shop_name?.trim() || `店铺 #${target.id}`}
                   </SelectItem>
                 ))}
               </SelectContent>

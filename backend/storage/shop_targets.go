@@ -576,9 +576,6 @@ func applyShopGoodsSortQualified(q *gorm.DB, sort string, alias string, includeT
 		return alias + "." + name
 	}
 	q = q.Order(col("removed_at") + " ASC")
-	if includeTarget {
-		q = q.Order("t.sort_order ASC").Order("t.id ASC")
-	}
 	switch sort {
 	case "stock_asc":
 		return q.Order(col("stock_count") + " ASC").Order(col("category_name") + " ASC").Order(col("name") + " ASC").Order(col("goods_key") + " ASC")
@@ -591,6 +588,9 @@ func applyShopGoodsSortQualified(q *gorm.DB, sort string, alias string, includeT
 	case "last_seen_desc":
 		return q.Order(col("last_seen_at") + " DESC").Order(col("category_name") + " ASC").Order(col("name") + " ASC").Order(col("goods_key") + " ASC")
 	default:
+		if includeTarget {
+			q = q.Order("t.sort_order ASC").Order("t.id ASC")
+		}
 		return q.Order(col("category_name") + " ASC").Order(col("name") + " ASC").Order(col("goods_key") + " ASC")
 	}
 }

@@ -677,6 +677,9 @@ func TestShopGoodsListAllPageFilteredIncludesTargetAndFilters(t *testing.T) {
 	if all[0].TargetName == "" || all[0].TargetSiteURL == "" {
 		t.Fatalf("target metadata missing: %#v", all[0])
 	}
+	if all[0].GoodsKey != "b-low" || all[1].GoodsKey != "a-ok" || all[2].GoodsKey != "a-low" {
+		t.Fatalf("price_desc should sort across shops, got %q, %q, %q", all[0].GoodsKey, all[1].GoodsKey, all[2].GoodsKey)
+	}
 
 	oneShop, total, err := goods.ListAllPageFiltered(1, 20, ShopGoodsFilter{TargetID: first.ID})
 	if err != nil {

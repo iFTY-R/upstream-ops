@@ -267,7 +267,7 @@ function shopRulesMatchRow(rules: ShopWatchRule[], row: ShopGoodsSnapshot): bool
 
 function shopDisplayName(target: ShopTarget | null) {
   if (!target) return ""
-  return target.last_shop_name?.trim() || target.name
+  return target.name?.trim() || target.last_shop_name?.trim() || `店铺 #${target.id}`
 }
 
 export default function ShopsPage() {

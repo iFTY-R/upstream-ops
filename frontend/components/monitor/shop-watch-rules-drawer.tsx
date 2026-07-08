@@ -199,7 +199,7 @@ export function ShopWatchRulesDrawer({
                 {"店铺关注通知"}
               </SheetTitle>
               <SheetDescription className="mt-1">
-                {target ? `${target.last_shop_name || target.name} · 用规则决定哪些商品变化需要通知。` : "选择店铺后配置关注规则。"}
+                {target ? `${target.name?.trim() || target.last_shop_name?.trim() || `店铺 #${target.id}`} · 用规则决定哪些商品变化需要通知。` : "选择店铺后配置关注规则。"}
               </SheetDescription>
             </div>
             <div className="flex w-fit items-center gap-2 rounded-full border border-border bg-background/80 px-3 py-2 text-xs">
