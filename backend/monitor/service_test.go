@@ -339,6 +339,13 @@ func TestRefreshRatesEmitsRateAddedAndRemoved(t *testing.T) {
 	if err := svc.RefreshRates(context.Background(), ch); err != nil {
 		t.Fatalf("first refresh: %v", err)
 	}
+	initialChanges, err := rates.ListChanges(ch.ID, 10)
+	if err != nil {
+		t.Fatalf("list initial changes: %v", err)
+	}
+	if len(initialChanges) != 0 {
+		t.Fatalf("first refresh changes = %#v", initialChanges)
+	}
 	logs, err := notifies.ListLogs(10)
 	if err != nil {
 		t.Fatalf("list logs: %v", err)
@@ -386,6 +393,20 @@ func TestRefreshRatesEmitsRateAddedAndRemoved(t *testing.T) {
 	}
 	if !got["beta"] || !got["gamma"] || got["alpha"] {
 		t.Fatalf("rate snapshots = %#v", got)
+	}
+	changes, err := rates.ListChanges(ch.ID, 10)
+	if err != nil {
+		t.Fatalf("list changes: %v", err)
+	}
+	changeByGroup := make(map[string]storage.RateChangeLog, len(changes))
+	for _, item := range changes {
+		changeByGroup[item.ModelName] = item
+	}
+	if gamma := changeByGroup["gamma"]; gamma.ChangeType != "added" || gamma.NewRatio != 3 || gamma.OldRatio != nil {
+		t.Fatalf("gamma change = %#v", gamma)
+	}
+	if alpha := changeByGroup["alpha"]; alpha.ChangeType != "removed" || alpha.OldRatio == nil || *alpha.OldRatio != 1 {
+		t.Fatalf("alpha change = %#v", alpha)
 	}
 }
 

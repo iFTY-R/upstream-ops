@@ -62,6 +62,9 @@ func (r *Rates) AppendChange(log *RateChangeLog) error {
 	if log.ChangedAt.IsZero() {
 		log.ChangedAt = time.Now()
 	}
+	if log.ChangeType == "" {
+		log.ChangeType = "changed"
+	}
 	return r.db.Create(log).Error
 }
 

@@ -142,11 +142,12 @@ type RateSnapshot struct {
 
 func (RateSnapshot) TableName() string { return "rate_snapshots" }
 
-// RateChangeLog 倍率变化历史。每次扫描发现差异时写入一行。
+// RateChangeLog 倍率变化历史。每次扫描发现倍率数值或分组结构差异时写入一行。
 type RateChangeLog struct {
 	ID                 uint      `gorm:"primaryKey" json:"id"`
 	ChannelID          uint      `gorm:"not null;index" json:"channel_id"`
 	ModelName          string    `gorm:"size:256;not null;index" json:"model_name"`
+	ChangeType         string    `gorm:"size:32;not null;default:changed;index" json:"change_type"`
 	OldRatio           *float64  `json:"old_ratio,omitempty"`
 	NewRatio           float64   `gorm:"not null" json:"new_ratio"`
 	OldCompletionRatio *float64  `json:"old_completion_ratio,omitempty"`

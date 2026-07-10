@@ -343,6 +343,7 @@ export interface RateChangeLog {
   id: number
   channel_id: number
   model_name: string
+  change_type?: "changed" | "added" | "removed" | string
   old_ratio: number | null
   new_ratio: number
   old_completion_ratio?: number | null

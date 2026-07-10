@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { ArrowDownRight, ArrowUpRight } from "lucide-react"
+import { ArrowDownRight, ArrowUpRight, Plus, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -169,14 +169,39 @@ function MultiplierChangeRow({
   compact?: boolean
 }) {
   const ch = channelMap.get(item.channel_id)
+  const changeType = item.change_type || "changed"
   const delta = ratioDelta(item.old_ratio, item.new_ratio)
   const isUp = delta.direction === "up"
   const chType = ch?.type ?? ""
+  const style =
+    changeType === "added"
+      ? {
+          dot: "bg-brand",
+          value: "text-brand",
+          badge: "bg-brand/10 text-brand",
+          label: "新增",
+          icon: <Plus className="size-3" />,
+        }
+      : changeType === "removed"
+        ? {
+            dot: "bg-muted-foreground",
+            value: "text-muted-foreground",
+            badge: "bg-muted text-muted-foreground",
+            label: "删除",
+            icon: <Trash2 className="size-3" />,
+          }
+        : {
+            dot: isUp ? "bg-danger" : "bg-success",
+            value: isUp ? "text-danger" : "text-success",
+            badge: isUp ? "bg-danger/10 text-danger" : "bg-success/10 text-success",
+            label: delta.pct,
+            icon: isUp ? <ArrowUpRight className="size-3" /> : <ArrowDownRight className="size-3" />,
+          }
 
   return (
     <li className={cn("flex items-start gap-2.5 sm:gap-3", compact ? "px-4 py-3" : "px-4 py-3.5 sm:px-6")}>
       <div className="flex flex-col items-center gap-0.5 pt-1">
-        <span className={cn("size-2 rounded-full", isUp ? "bg-danger" : "bg-success")} />
+        <span className={cn("size-2 rounded-full", style.dot)} />
       </div>
       <div className="shrink-0 text-[11px] leading-relaxed text-muted-foreground sm:text-xs">
         <p>{relativeTime(item.changed_at)}</p>
@@ -203,11 +228,11 @@ function MultiplierChangeRow({
             <span className="text-muted-foreground">{"倍率"}</span>
             <p className="mt-0.5 tabular-nums">
               <span className="text-muted-foreground">
-                {formatRatio(item.old_ratio)}
+                {changeType === "added" ? "新增" : formatRatio(item.old_ratio)}
               </span>
               <span className="mx-1 text-muted-foreground">{"→"}</span>
-              <span className={cn("font-medium", isUp ? "text-danger" : "text-success")}>
-                {formatRatio(item.new_ratio)}
+              <span className={cn("font-medium", style.value)}>
+                {changeType === "removed" ? "删除" : formatRatio(item.new_ratio)}
               </span>
             </p>
           </div>
@@ -218,11 +243,11 @@ function MultiplierChangeRow({
         <span
           className={cn(
             "inline-flex items-center gap-0.5 rounded-md px-2 py-1 text-xs font-semibold",
-            isUp ? "bg-danger/10 text-danger" : "bg-success/10 text-success",
+            style.badge,
           )}
         >
-          {isUp ? <ArrowUpRight className="size-3" /> : <ArrowDownRight className="size-3" />}
-          {delta.pct}
+          {style.icon}
+          {style.label}
         </span>
       </div>
     </li>

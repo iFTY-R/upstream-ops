@@ -217,6 +217,14 @@ func (s *Service) RefreshRates(ctx context.Context, c *storage.Channel) error {
 		}
 		if prev == nil {
 			if !isFirstSync {
+				_ = s.rates.AppendChange(&storage.RateChangeLog{
+					ChannelID:          c.ID,
+					ModelName:          r.ModelName,
+					ChangeType:         "added",
+					NewRatio:           r.Ratio,
+					NewCompletionRatio: r.CompletionRatio,
+					ChangedAt:          now,
+				})
 				added = append(added, notify.RateChange{
 					GroupName: r.ModelName,
 					NewRatio:  r.Ratio,
@@ -234,6 +242,7 @@ func (s *Service) RefreshRates(ctx context.Context, c *storage.Channel) error {
 		_ = s.rates.AppendChange(&storage.RateChangeLog{
 			ChannelID:          c.ID,
 			ModelName:          r.ModelName,
+			ChangeType:         "changed",
 			OldRatio:           &oldRatio,
 			NewRatio:           r.Ratio,
 			OldCompletionRatio: &oldComp,
@@ -263,6 +272,18 @@ func (s *Service) RefreshRates(ctx context.Context, c *storage.Channel) error {
 			OldRatio:  snapshot.Ratio,
 			OldComp:   snapshot.CompletionRatio,
 			ChangedAt: now,
+		})
+		oldRatio := snapshot.Ratio
+		oldComp := snapshot.CompletionRatio
+		_ = s.rates.AppendChange(&storage.RateChangeLog{
+			ChannelID:          c.ID,
+			ModelName:          snapshot.ModelName,
+			ChangeType:         "removed",
+			OldRatio:           &oldRatio,
+			NewRatio:           0,
+			OldCompletionRatio: &oldComp,
+			NewCompletionRatio: 0,
+			ChangedAt:          now,
 		})
 	}
 	// 一次扫描的所有变化打包推送：去抖策略（合并 / 涨跌幅过滤）由 Dispatcher.Policy 决定。
