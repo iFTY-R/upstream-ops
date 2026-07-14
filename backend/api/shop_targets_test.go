@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -13,6 +14,27 @@ import (
 	"github.com/ifty-r/upstream-ops/backend/storage"
 	"gorm.io/gorm"
 )
+
+func TestFailShopUpstreamUsesFailedDependencyStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	failShopUpstream(c, errors.New("ldxp returned HTML"))
+
+	if w.Code != http.StatusFailedDependency {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusFailedDependency)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error != "店铺上游不可用：ldxp returned HTML" {
+		t.Fatalf("error = %q", body.Error)
+	}
+}
 
 func TestBuildShopTargetPreservesNotifyEnabledWhenOmitted(t *testing.T) {
 	current := &storage.ShopTarget{

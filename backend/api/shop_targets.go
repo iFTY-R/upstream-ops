@@ -397,7 +397,7 @@ func testShopTarget(c *gin.Context, d *Deps) {
 	}
 	result, err := d.ShopMonitor.Test(c.Request.Context(), *target)
 	if err != nil {
-		fail(c, http.StatusBadGateway, err)
+		failShopUpstream(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": result})
@@ -490,7 +490,7 @@ func shopTargetCategories(c *gin.Context, d *Deps) {
 	}
 	result, err := d.ShopMonitor.Test(c.Request.Context(), *target)
 	if err != nil {
-		fail(c, http.StatusBadGateway, err)
+		failShopUpstream(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": result.Categories})
@@ -583,7 +583,7 @@ func refreshShopTargetGoods(c *gin.Context, d *Deps) {
 	}
 	result, err := d.ShopMonitor.RefreshGoodsByKey(c.Request.Context(), id, goodsKey)
 	if err != nil {
-		fail(c, http.StatusBadGateway, err)
+		failShopUpstream(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": result})

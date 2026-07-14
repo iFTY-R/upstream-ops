@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -165,4 +166,10 @@ func registerFrontend(r *gin.Engine, dist fs.FS) {
 // fail 统一错误响应。
 func fail(c *gin.Context, status int, err error) {
 	c.JSON(status, gin.H{"error": err.Error()})
+}
+
+// 店铺接口依赖 LDXP 等外部服务。依赖失败不代表 Ops 网关故障，使用 424
+// 避免边缘代理把应用层的上游错误包装成 Cloudflare 502。
+func failShopUpstream(c *gin.Context, err error) {
+	fail(c, http.StatusFailedDependency, fmt.Errorf("店铺上游不可用：%w", err))
 }
