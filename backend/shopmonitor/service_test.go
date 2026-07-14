@@ -2,6 +2,7 @@ package shopmonitor
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -188,6 +189,66 @@ func TestSyncJobRunnerReusesActiveTargetJob(t *testing.T) {
 	t.Fatal("sync job did not complete")
 }
 
+func TestDeleteTargetWaitsForActiveSync(t *testing.T) {
+	platform := storage.ShopPlatform("delete-target-lock-test")
+	provider := &blockingShopProvider{started: make(chan struct{}), release: make(chan struct{})}
+	shopprovider.Register(platform, func() shopprovider.Provider { return provider })
+
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	target := createRefreshTarget(t, targets, platform)
+	monitor := NewService(targets, storage.NewShopWatchRules(db), goods, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+
+	syncDone := make(chan error, 1)
+	go func() {
+		_, err := monitor.SyncByID(context.Background(), target.ID)
+		syncDone <- err
+	}()
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("sync did not reach upstream call")
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- monitor.DeleteTarget(target.ID) }()
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("delete completed before sync released: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(provider.release)
+	if err := <-syncDone; err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := targets.FindByID(target.ID); err == nil {
+		t.Fatal("target still exists after delete")
+	}
+}
+
+func TestFetchGoodsReadsPastFiftyPages(t *testing.T) {
+	items := make([]shopprovider.Goods, 2501)
+	for i := range items {
+		items[i] = shopprovider.Goods{GoodsKey: fmt.Sprintf("goods-%d", i), Name: "item"}
+	}
+	service := NewService(nil, nil, nil, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	result, err := service.fetchGoods(context.Background(), pagedShopProvider{goods: items}, shopprovider.Target{}, &storage.ShopTarget{
+		ScopeMode:      storage.ShopScopeAll,
+		GoodsTypesJSON: `["card"]`,
+	})
+	if err != nil {
+		t.Fatalf("fetch goods: %v", err)
+	}
+	if len(result) != len(items) {
+		t.Fatalf("goods count = %d, want %d", len(result), len(items))
+	}
+}
+
 func createRefreshTarget(t *testing.T, targets *storage.ShopTargets, platform storage.ShopPlatform) *storage.ShopTarget {
 	t.Helper()
 	target := &storage.ShopTarget{
@@ -208,6 +269,22 @@ func createRefreshTarget(t *testing.T, targets *storage.ShopTargets, platform st
 
 type fakeShopProvider struct {
 	goods []shopprovider.Goods
+}
+
+type pagedShopProvider struct {
+	goods []shopprovider.Goods
+}
+
+func TestHasMoreShopGoodsPagesUsesTotalAndFailsClosedAtLimit(t *testing.T) {
+	if more, err := hasMoreShopGoodsPages(2, shopGoodsPageSize, 75, 25); err != nil || more {
+		t.Fatalf("final short page: more=%v err=%v, want no more", more, err)
+	}
+	if more, err := hasMoreShopGoodsPages(1, shopGoodsPageSize, 0, shopGoodsPageSize); err != nil || !more {
+		t.Fatalf("unknown total first page: more=%v err=%v, want more", more, err)
+	}
+	if more, err := hasMoreShopGoodsPages(maxShopGoodsPages, shopGoodsPageSize, 0, shopGoodsPageSize); err == nil || more {
+		t.Fatalf("page limit: more=%v err=%v, want an error", more, err)
+	}
 }
 
 type blockingShopProvider struct {
@@ -251,5 +328,37 @@ func (p fakeShopProvider) Goods(context.Context, shopprovider.Target, shopprovid
 }
 
 func (p fakeShopProvider) Price(context.Context, shopprovider.Target, shopprovider.PriceRequest) (*shopprovider.PriceResult, error) {
+	return nil, nil
+}
+
+func (p pagedShopProvider) Info(context.Context, shopprovider.Target) (*shopprovider.ShopInfo, error) {
+	return &shopprovider.ShopInfo{}, nil
+}
+
+func (p pagedShopProvider) Categories(context.Context, shopprovider.Target, shopprovider.CategoryRequest) ([]shopprovider.Category, error) {
+	return nil, nil
+}
+
+func (p pagedShopProvider) Goods(_ context.Context, _ shopprovider.Target, req shopprovider.GoodsRequest) (*shopprovider.GoodsPage, error) {
+	page := req.Page
+	if page <= 0 {
+		page = 1
+	}
+	pageSize := req.PageSize
+	if pageSize <= 0 {
+		pageSize = shopGoodsPageSize
+	}
+	start := (page - 1) * pageSize
+	if start >= len(p.goods) {
+		return &shopprovider.GoodsPage{Total: len(p.goods)}, nil
+	}
+	end := start + pageSize
+	if end > len(p.goods) {
+		end = len(p.goods)
+	}
+	return &shopprovider.GoodsPage{Total: len(p.goods), List: p.goods[start:end]}, nil
+}
+
+func (p pagedShopProvider) Price(context.Context, shopprovider.Target, shopprovider.PriceRequest) (*shopprovider.PriceResult, error) {
 	return nil, nil
 }

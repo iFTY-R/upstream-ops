@@ -30,6 +30,14 @@ func (r *ShopTargets) Update(target *ShopTarget) error {
 	return r.db.Save(target).Error
 }
 
+// Transaction runs a multi-repository shop operation atomically.
+// Both repositories share the same transaction so target and rule updates cannot partially commit.
+func (r *ShopTargets) Transaction(fn func(targets *ShopTargets, rules *ShopWatchRules) error) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return fn(NewShopTargets(tx), NewShopWatchRules(tx))
+	})
+}
+
 func (r *ShopTargets) UpdateSortOrders(orders map[uint]int) error {
 	if len(orders) == 0 {
 		return nil

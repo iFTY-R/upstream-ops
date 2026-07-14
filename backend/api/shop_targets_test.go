@@ -42,6 +42,40 @@ func TestBuildShopTargetPreservesNotifyEnabledWhenOmitted(t *testing.T) {
 	}
 }
 
+func TestBuildShopTargetPreservesOptionalFlagsWhenOmitted(t *testing.T) {
+	current := &storage.ShopTarget{
+		Name:                "shop",
+		Platform:            storage.ShopPlatformLDXP,
+		SiteURL:             "https://pay.ldxp.cn/shop/TOKEN",
+		BaseURL:             "https://pay.ldxp.cn",
+		Token:               "TOKEN",
+		MonitorEnabled:      false,
+		PriceChangeEnabled:  false,
+		StockChangeEnabled:  false,
+		LowStockEnabled:     false,
+		RestockEnabled:      false,
+		NewGoodsEnabled:     false,
+		RemovedGoodsEnabled: false,
+		ProxyEnabled:        true,
+	}
+	next, err := buildShopTarget(shopTargetInput{
+		Name:     current.Name,
+		Platform: current.Platform,
+		SiteURL:  current.SiteURL,
+		BaseURL:  current.BaseURL,
+		Token:    current.Token,
+	}, current)
+	if err != nil {
+		t.Fatalf("build target: %v", err)
+	}
+	if next.MonitorEnabled || next.PriceChangeEnabled || next.StockChangeEnabled || next.LowStockEnabled || next.RestockEnabled || next.NewGoodsEnabled || next.RemovedGoodsEnabled {
+		t.Fatalf("optional flags were re-enabled: %#v", next)
+	}
+	if !next.ProxyEnabled {
+		t.Fatalf("proxy_enabled = false, want preserved true")
+	}
+}
+
 func TestBuildShopTargetDefaultsNotifyEnabledForCreate(t *testing.T) {
 	next, err := buildShopTarget(shopTargetInput{
 		Name:     "shop",

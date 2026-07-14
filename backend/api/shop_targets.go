@@ -66,7 +66,7 @@ type shopTargetInput struct {
 	RestockEnabled      *bool                 `json:"restock_enabled"`
 	NewGoodsEnabled     *bool                 `json:"new_goods_enabled"`
 	RemovedGoodsEnabled *bool                 `json:"removed_goods_enabled"`
-	ProxyEnabled        bool                  `json:"proxy_enabled"`
+	ProxyEnabled        *bool                 `json:"proxy_enabled"`
 	SortOrder           int                   `json:"sort_order"`
 	GoodsSort           string                `json:"goods_sort"`
 }
@@ -192,53 +192,53 @@ func bulkConfigureShopNotifications(c *gin.Context, d *Deps) {
 			return
 		}
 	}
-	targets := make([]*storage.ShopTarget, 0, len(targetIDs))
-	for _, targetID := range targetIDs {
-		target, err := d.ShopTargets.FindByID(targetID)
-		if err != nil {
-			fail(c, http.StatusNotFound, fmt.Errorf("店铺不存在：%d", targetID))
-			return
-		}
-		targets = append(targets, target)
-	}
-
 	result := shopBulkNotificationResult{}
-	for _, target := range targets {
-		if in.NotifyEnabled != nil && target.NotifyEnabled != *in.NotifyEnabled {
-			target.NotifyEnabled = *in.NotifyEnabled
-			if err := d.ShopTargets.Update(target); err != nil {
-				fail(c, http.StatusInternalServerError, err)
-				return
+	if err := d.ShopTargets.Transaction(func(targets *storage.ShopTargets, rules *storage.ShopWatchRules) error {
+		for _, targetID := range targetIDs {
+			target, err := targets.FindByID(targetID)
+			if err != nil {
+				return fmt.Errorf("店铺不存在：%d: %w", targetID, err)
 			}
-			result.UpdatedTargets++
-		}
-		if in.UpsertRule {
+			if in.NotifyEnabled != nil && target.NotifyEnabled != *in.NotifyEnabled {
+				target.NotifyEnabled = *in.NotifyEnabled
+				if err := targets.Update(target); err != nil {
+					return err
+				}
+				result.UpdatedTargets++
+			}
+			if !in.UpsertRule {
+				continue
+			}
 			rule, err := buildShopWatchRule(target.ID, in.Rule, nil)
 			if err != nil {
-				fail(c, http.StatusBadRequest, err)
-				return
+				return err
 			}
-			current, err := d.ShopWatchRules.FindByTargetAndName(target.ID, rule.Name)
+			current, err := rules.FindByTargetAndName(target.ID, rule.Name)
 			if err != nil {
-				fail(c, http.StatusInternalServerError, err)
-				return
+				return err
 			}
 			if current != nil && in.ReplaceSameName {
 				rule.ID = current.ID
 				rule.CreatedAt = current.CreatedAt
-				if err := d.ShopWatchRules.Update(rule); err != nil {
-					fail(c, http.StatusInternalServerError, err)
-					return
+				if err := rules.Update(rule); err != nil {
+					return err
 				}
 				result.UpdatedRules++
 			} else if current == nil {
-				if err := d.ShopWatchRules.Create(rule); err != nil {
-					fail(c, http.StatusInternalServerError, err)
-					return
+				if err := rules.Create(rule); err != nil {
+					return err
 				}
 				result.CreatedRules++
 			}
 		}
+		return nil
+	}); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			fail(c, http.StatusNotFound, err)
+			return
+		}
+		fail(c, http.StatusInternalServerError, err)
+		return
 	}
 	list, err := d.ShopTargets.List()
 	if err != nil {
@@ -333,7 +333,12 @@ func deleteShopTarget(c *gin.Context, d *Deps) {
 	if !ok {
 		return
 	}
-	if err := d.ShopTargets.Delete(id); err != nil {
+	if d.ShopMonitor != nil {
+		if err := d.ShopMonitor.DeleteTarget(id); err != nil {
+			fail(c, http.StatusInternalServerError, err)
+			return
+		}
+	} else if err := d.ShopTargets.Delete(id); err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -651,8 +656,28 @@ func buildShopTarget(in shopTargetInput, current *storage.ShopTarget) (*storage.
 	if target.BaseURL == "" || target.Token == "" {
 		return nil, fmt.Errorf("base_url and token are required")
 	}
-	target.MonitorEnabled = boolDefault(in.MonitorEnabled, true)
-	target.NotifyEnabled = boolDefault(in.NotifyEnabled, target.NotifyEnabled)
+	monitorEnabled := true
+	notifyEnabled := false
+	priceChangeEnabled := true
+	stockChangeEnabled := true
+	lowStockEnabled := true
+	restockEnabled := true
+	newGoodsEnabled := true
+	removedGoodsEnabled := true
+	proxyEnabled := false
+	if current != nil {
+		monitorEnabled = current.MonitorEnabled
+		notifyEnabled = current.NotifyEnabled
+		priceChangeEnabled = current.PriceChangeEnabled
+		stockChangeEnabled = current.StockChangeEnabled
+		lowStockEnabled = current.LowStockEnabled
+		restockEnabled = current.RestockEnabled
+		newGoodsEnabled = current.NewGoodsEnabled
+		removedGoodsEnabled = current.RemovedGoodsEnabled
+		proxyEnabled = current.ProxyEnabled
+	}
+	target.MonitorEnabled = boolDefault(in.MonitorEnabled, monitorEnabled)
+	target.NotifyEnabled = boolDefault(in.NotifyEnabled, notifyEnabled)
 	target.ScopeMode = in.ScopeMode
 	if target.ScopeMode == "" {
 		target.ScopeMode = storage.ShopScopeAll
@@ -666,13 +691,13 @@ func buildShopTarget(in shopTargetInput, current *storage.ShopTarget) (*storage.
 	target.KeywordsJSON = mustJSON(cleanStrings(in.Keywords))
 	target.GoodsKeysJSON = mustJSON(cleanStrings(in.GoodsKeys))
 	target.StockThreshold = in.StockThreshold
-	target.PriceChangeEnabled = boolDefault(in.PriceChangeEnabled, true)
-	target.StockChangeEnabled = boolDefault(in.StockChangeEnabled, true)
-	target.LowStockEnabled = boolDefault(in.LowStockEnabled, true)
-	target.RestockEnabled = boolDefault(in.RestockEnabled, true)
-	target.NewGoodsEnabled = boolDefault(in.NewGoodsEnabled, true)
-	target.RemovedGoodsEnabled = boolDefault(in.RemovedGoodsEnabled, true)
-	target.ProxyEnabled = in.ProxyEnabled
+	target.PriceChangeEnabled = boolDefault(in.PriceChangeEnabled, priceChangeEnabled)
+	target.StockChangeEnabled = boolDefault(in.StockChangeEnabled, stockChangeEnabled)
+	target.LowStockEnabled = boolDefault(in.LowStockEnabled, lowStockEnabled)
+	target.RestockEnabled = boolDefault(in.RestockEnabled, restockEnabled)
+	target.NewGoodsEnabled = boolDefault(in.NewGoodsEnabled, newGoodsEnabled)
+	target.RemovedGoodsEnabled = boolDefault(in.RemovedGoodsEnabled, removedGoodsEnabled)
+	target.ProxyEnabled = boolDefault(in.ProxyEnabled, proxyEnabled)
 	target.SortOrder = in.SortOrder
 	target.GoodsSort = normalizeShopGoodsSort(in.GoodsSort)
 	if current != nil && strings.TrimSpace(in.GoodsSort) == "" {

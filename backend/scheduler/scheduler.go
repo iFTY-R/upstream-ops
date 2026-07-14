@@ -148,7 +148,11 @@ func (s *Scheduler) runShops() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	s.shopMonitor.SyncAll(ctx)
+	concurrency := s.cfg.Concurrency
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	s.shopMonitor.SyncAllWithConcurrency(ctx, concurrency)
 }
 
 func (s *Scheduler) hasRetention() bool {

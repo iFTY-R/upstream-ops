@@ -29,6 +29,11 @@ type Service struct {
 	upstream   config.UpstreamConfig
 }
 
+const (
+	shopGoodsPageSize = 50
+	maxShopGoodsPages = 1000
+)
+
 func NewService(
 	targets *storage.ShopTargets,
 	watchRules *storage.ShopWatchRules,
@@ -139,6 +144,10 @@ func (s *Service) RefreshGoodsByKey(ctx context.Context, targetID uint, goodsKey
 	}
 	unlock := s.lockTarget(target.ID)
 	defer unlock()
+	target, err = s.targets.FindByID(targetID)
+	if err != nil {
+		return nil, err
+	}
 	provider, starget, err := s.providerFor(target)
 	if err != nil {
 		return nil, err
@@ -189,6 +198,12 @@ func (s *Service) RefreshGoodsByKey(ctx context.Context, targetID uint, goodsKey
 }
 
 func (s *Service) SyncAll(ctx context.Context) *SyncAllResult {
+	return s.SyncAllWithConcurrency(ctx, 1)
+}
+
+// SyncAllWithConcurrency scans independent shops with bounded parallelism.
+// Results retain the configured target order so callers can display a stable summary.
+func (s *Service) SyncAllWithConcurrency(ctx context.Context, concurrency int) *SyncAllResult {
 	out := &SyncAllResult{}
 	list, err := s.targets.ListMonitorEnabled()
 	if err != nil {
@@ -200,21 +215,48 @@ func (s *Service) SyncAll(ctx context.Context) *SyncAllResult {
 		return out
 	}
 	out.Total = len(list)
-	out.Targets = make([]SyncAllTargetResult, 0, len(list))
-	for i := range list {
-		target := list[i]
-		result, err := s.Sync(ctx, &target)
-		item := SyncAllTargetResult{TargetID: target.ID, Name: target.Name, Result: result}
-		if err != nil {
-			item.Error = err.Error()
-			out.Failed++
-			if s.log != nil {
-				s.log.Warn("shop sync failed", "target", target.Name, "err", err)
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	if concurrency > len(list) {
+		concurrency = len(list)
+	}
+	if concurrency == 0 {
+		return out
+	}
+
+	out.Targets = make([]SyncAllTargetResult, len(list))
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	for worker := 0; worker < concurrency; worker++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				target := list[index]
+				result, syncErr := s.Sync(ctx, &target)
+				item := SyncAllTargetResult{TargetID: target.ID, Name: target.Name, Result: result}
+				if syncErr != nil {
+					item.Error = syncErr.Error()
+					if s.log != nil {
+						s.log.Warn("shop sync failed", "target", target.Name, "err", syncErr)
+					}
+				}
+				out.Targets[index] = item
 			}
-		} else {
+		}()
+	}
+	for index := range list {
+		jobs <- index
+	}
+	close(jobs)
+	workers.Wait()
+	for _, item := range out.Targets {
+		if item.Error == "" {
 			out.Success++
+		} else {
+			out.Failed++
 		}
-		out.Targets = append(out.Targets, item)
 	}
 	return out
 }
@@ -227,6 +269,12 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 	}
 	unlock := s.lockTarget(target.ID)
 	defer unlock()
+	// The target may have been deleted while this caller waited for its lock.
+	currentTarget, err := s.targets.FindByID(target.ID)
+	if err != nil {
+		return result, err
+	}
+	target = currentTarget
 
 	provider, starget, err := s.providerFor(target)
 	if err != nil {
@@ -279,6 +327,17 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 		}
 	}
 	return result, nil
+}
+
+// DeleteTarget shares the per-target lock with sync and refresh operations.
+// This prevents a completed delete from being followed by stale background writes.
+func (s *Service) DeleteTarget(id uint) error {
+	if id == 0 {
+		return fmt.Errorf("shop target id is required")
+	}
+	unlock := s.lockTarget(id)
+	defer unlock()
+	return s.targets.Delete(id)
 }
 
 func (s *Service) lockTarget(targetID uint) func() {
@@ -346,7 +405,7 @@ func (s *Service) fetchGoods(ctx context.Context, provider shopprovider.Provider
 			page := 1
 			for {
 				req.Page = page
-				req.PageSize = 50
+				req.PageSize = shopGoodsPageSize
 				res, err := provider.Goods(ctx, starget, req)
 				if err != nil {
 					return nil, err
@@ -362,16 +421,14 @@ func (s *Service) fetchGoods(ctx context.Context, provider shopprovider.Provider
 					}
 					out[item.GoodsKey] = item
 				}
-				if len(res.List) == 0 {
-					break
+				hasMore, err := hasMoreShopGoodsPages(page, req.PageSize, res.Total, len(res.List))
+				if err != nil {
+					return nil, err
 				}
-				if len(res.List) < req.PageSize {
+				if !hasMore {
 					break
 				}
 				page++
-				if page > 50 {
-					break
-				}
 			}
 		}
 	}
@@ -445,9 +502,9 @@ func (s *Service) fetchSingleGoods(ctx context.Context, provider shopprovider.Pr
 	}
 	requests = append(requests, shopprovider.GoodsRequest{GoodsType: goodsType, CategoryID: 0})
 	for _, req := range requests {
-		for page := 1; page <= 5; page++ {
+		for page := 1; ; page++ {
 			req.Page = page
-			req.PageSize = 50
+			req.PageSize = shopGoodsPageSize
 			res, err := provider.Goods(ctx, starget, req)
 			if err != nil {
 				return nil, false, err
@@ -458,12 +515,29 @@ func (s *Service) fetchSingleGoods(ctx context.Context, provider shopprovider.Pr
 					return &item, true, nil
 				}
 			}
-			if len(res.List) < req.PageSize {
+			hasMore, err := hasMoreShopGoodsPages(page, req.PageSize, res.Total, len(res.List))
+			if err != nil {
+				return nil, false, err
+			}
+			if !hasMore {
 				break
 			}
 		}
 	}
 	return nil, false, nil
+}
+
+func hasMoreShopGoodsPages(page, pageSize, total, count int) (bool, error) {
+	if count == 0 || count < pageSize {
+		return false, nil
+	}
+	if total > 0 && page*pageSize >= total {
+		return false, nil
+	}
+	if page >= maxShopGoodsPages {
+		return false, fmt.Errorf("shop goods pagination exceeded %d pages", maxShopGoodsPages)
+	}
+	return true, nil
 }
 
 func (s *Service) diffAndSave(target *storage.ShopTarget, fetched map[string]shopprovider.Goods, now time.Time) ([]storage.ShopGoodsChangeLog, int, error) {
