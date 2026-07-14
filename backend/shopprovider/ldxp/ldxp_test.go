@@ -2,6 +2,7 @@ package ldxp
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -122,11 +123,14 @@ func TestClientRetriesACWSCV2Challenge(t *testing.T) {
 	}
 }
 
-func TestClientRetriesHTMLResponseAfterSessionWarmUp(t *testing.T) {
+func TestClientEstablishesSessionBeforeAPIRequest(t *testing.T) {
 	var infoCalls, warmUpCalls int
 	mux := http.NewServeMux()
 	mux.HandleFunc("/shop/TOKEN", func(w http.ResponseWriter, r *http.Request) {
 		warmUpCalls++
+		if r.Header.Get("Sec-Fetch-Mode") != "navigate" || r.Header.Get("Sec-Fetch-Dest") != "document" {
+			t.Fatalf("navigation headers are missing: %+v", r.Header)
+		}
 		http.SetCookie(w, &http.Cookie{Name: "shop_session", Value: "ready", Path: "/"})
 		_, _ = w.Write([]byte("<html>shop</html>"))
 	})
@@ -140,6 +144,9 @@ func TestClientRetriesHTMLResponseAfterSessionWarmUp(t *testing.T) {
 		}
 		if r.Referer() != "http://"+r.Host+"/shop/TOKEN" {
 			t.Fatalf("referer = %q", r.Referer())
+		}
+		if r.Header.Get("Sec-Fetch-Mode") != "cors" || r.Header.Get("Sec-Fetch-Site") != "same-origin" {
+			t.Fatalf("fetch headers are missing: %+v", r.Header)
 		}
 		if _, err := r.Cookie("shop_session"); err != nil {
 			w.Header().Set("Content-Type", "text/html")
@@ -160,8 +167,28 @@ func TestClientRetriesHTMLResponseAfterSessionWarmUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("info after session warm up: %v", err)
 	}
-	if info.Name != "会话恢复店铺" || infoCalls != 2 || warmUpCalls != 1 {
+	if info.Name != "会话恢复店铺" || infoCalls != 1 || warmUpCalls != 1 {
 		t.Fatalf("info = %+v, info calls = %d, warm-up calls = %d", info, infoCalls, warmUpCalls)
+	}
+}
+
+func TestClientUsesHTTP11ForTLSRequests(t *testing.T) {
+	var protocolMajor int
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		protocolMajor = r.ProtoMajor
+		writeEnvelope(t, w, map[string]any{"nickname": "HTTP/1.1 店铺"})
+	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
+
+	client := New()
+	client.http.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true}) // #nosec G402 -- test server certificate.
+	if _, err := client.Info(context.Background(), shopprovider.Target{BaseURL: server.URL, Token: "TOKEN"}); err != nil {
+		t.Fatalf("info: %v", err)
+	}
+	if protocolMajor != 1 {
+		t.Fatalf("protocol major = %d, want 1", protocolMajor)
 	}
 }
 

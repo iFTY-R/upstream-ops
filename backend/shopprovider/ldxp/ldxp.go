@@ -2,6 +2,7 @@ package ldxp
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -23,6 +25,9 @@ func init() {
 
 type Client struct {
 	http *resty.Client
+
+	sessionMu   sync.Mutex
+	warmedSites map[string]struct{}
 }
 
 const (
@@ -33,13 +38,20 @@ const (
 
 func New() *Client {
 	jar, _ := cookiejar.New(nil)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Keep the LDXP request shape aligned with the known-good HTTP/1.1 exchange.
+	// This compatibility setting is limited to LDXP and never affects Ops itself.
+	transport.ForceAttemptHTTP2 = false
+	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 	return &Client{
 		http: resty.New().
+			SetTransport(transport).
 			SetTimeout(30*time.Second).
 			SetHeader("Accept", "application/json").
 			SetHeader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8").
 			SetHeader("User-Agent", browserUserAgent).
 			SetCookieJar(jar),
+		warmedSites: make(map[string]struct{}),
 	}
 }
 
@@ -206,6 +218,7 @@ func (c *Client) post(ctx context.Context, target shopprovider.Target, path stri
 		base = strings.TrimRight(target.SiteURL, "/")
 	}
 	endpoint := base + path
+	c.prepareSession(ctx, target.SiteURL)
 	resp, err := c.postWithChallenge(ctx, endpoint, target.SiteURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("ldxp %s http: %w", path, err)
@@ -240,6 +253,25 @@ func (c *Client) post(ctx context.Context, target shopprovider.Target, path stri
 	return wrapped.Data, nil
 }
 
+// prepareSession visits the public shop page before its API. ESA sets session
+// cookies on page navigation, and direct API requests can be flagged even when
+// they use the same server egress address.
+func (c *Client) prepareSession(ctx context.Context, siteURL string) {
+	siteURL = strings.TrimSpace(siteURL)
+	if siteURL == "" {
+		return
+	}
+	c.sessionMu.Lock()
+	_, warmed := c.warmedSites[siteURL]
+	c.sessionMu.Unlock()
+	if warmed || c.warmUp(ctx, siteURL) != nil {
+		return
+	}
+	c.sessionMu.Lock()
+	c.warmedSites[siteURL] = struct{}{}
+	c.sessionMu.Unlock()
+}
+
 func (c *Client) postWithChallenge(ctx context.Context, endpoint, siteURL string, body any) (*resty.Response, error) {
 	resp, err := c.postOnce(ctx, endpoint, siteURL, body, "")
 	if err != nil {
@@ -253,7 +285,6 @@ func (c *Client) postWithChallenge(ctx context.Context, endpoint, siteURL string
 }
 
 // warmUp refreshes cookies that ESA and the shop session issue on the public page.
-// It is only called after an API request already returned HTML to avoid extra traffic.
 func (c *Client) warmUp(ctx context.Context, siteURL string) error {
 	if strings.TrimSpace(siteURL) == "" {
 		return nil
@@ -274,6 +305,9 @@ func (c *Client) postOnce(ctx context.Context, endpoint, siteURL string, body an
 		SetContext(ctx).
 		SetHeader("Content-Type", "application/json;charset=UTF-8").
 		SetHeader("Accept", "application/json, text/plain, */*").
+		SetHeader("Sec-Fetch-Dest", "empty").
+		SetHeader("Sec-Fetch-Mode", "cors").
+		SetHeader("Sec-Fetch-Site", "same-origin").
 		SetHeader("Referer", siteURL).
 		SetHeader("Origin", requestOrigin(endpoint)).
 		SetBody(body)
@@ -286,7 +320,12 @@ func (c *Client) postOnce(ctx context.Context, endpoint, siteURL string, body an
 func (c *Client) getOnce(ctx context.Context, endpoint, cookie string) (*resty.Response, error) {
 	req := c.http.R().
 		SetContext(ctx).
-		SetHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+		SetHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8").
+		SetHeader("Sec-Fetch-Dest", "document").
+		SetHeader("Sec-Fetch-Mode", "navigate").
+		SetHeader("Sec-Fetch-Site", "none").
+		SetHeader("Sec-Fetch-User", "?1").
+		SetHeader("Upgrade-Insecure-Requests", "1")
 	if cookie != "" {
 		req.SetHeader("Cookie", cookie)
 	}
