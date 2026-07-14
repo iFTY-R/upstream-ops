@@ -89,38 +89,46 @@ function fetchShared<T>(path: string, key: string): Promise<T> {
 /**
  * useApi 通用数据获取 hook（stale-while-revalidate）。
  * - 首次加载：loading = true，组件显示加载占位
- * - 后续刷新（refresh tick / refetch）：保留旧 data 继续展示，loading 不切回 true，后台静默拉新
+ * - 同一 URL 的后续刷新（refresh tick / refetch）：保留旧 data 继续展示，loading 不切回 true，后台静默拉新
+ * - URL 变化代表资源身份变化：隐藏旧数据，避免跨店铺或跨筛选条件执行错误操作
  * - 同 URL + 同 tick 的并发调用共享一次请求
  */
 function useApi<T>(path: string | null, watchRefresh = true): QueryState<T> {
   const [data, setData] = useState<T | null>(null)
+  const [dataPath, setDataPath] = useState<string | null>(null)
   const [loading, setLoading] = useState<boolean>(path !== null)
   const [error, setError] = useState<string | null>(null)
+  const [errorPath, setErrorPath] = useState<string | null>(null)
   const [bump, setBump] = useState(0)
   const refreshTick = useRefreshTick()
   const globalTick = watchRefresh ? refreshTick : 0
 
-  // 已经拿到过数据吗？用 ref 防止 setLoading 写回触发额外 effect。
-  const hasDataRef = useRef(false)
+  // 只把和当前 URL 一致的数据暴露给调用方；后台旧请求完成后也不会污染新资源。
+  const dataPathRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (path === null) {
       setLoading(false)
+      setError(null)
+      setErrorPath(null)
       return
     }
     let cancelled = false
-    // 关键：只有第一次（还没拿到过数据）才展示 loading；后续 polling / refetch 静默进行，
-    // 避免组件因 loading=true 短暂消失再回来造成"闪屏"。
-    if (!hasDataRef.current) setLoading(true)
+    const hasCurrentData = dataPathRef.current === path
+    // 仅同一资源的轮询静默刷新；路径变化时必须进入加载态，不能复用其它资源的数据。
+    if (!hasCurrentData) setLoading(true)
     setError(null)
+    setErrorPath(null)
     fetchShared<T>(path, cacheKey(path, globalTick, bump))
       .then((d) => {
         if (cancelled) return
-        hasDataRef.current = true
+        dataPathRef.current = path
+        setDataPath(path)
         setData(d)
       })
       .catch((e: Error) => {
         if (cancelled) return
+        setErrorPath(path)
         setError(e.message)
       })
       .finally(() => {
@@ -133,12 +141,13 @@ function useApi<T>(path: string | null, watchRefresh = true): QueryState<T> {
   }, [path, bump, globalTick])
 
   return {
-    data,
+    data: dataPath === path ? data : null,
     loading,
-    error,
+    error: errorPath === path ? error : null,
     refetch: () => setBump((b) => b + 1),
     setData: (nextData) => {
-      hasDataRef.current = true
+      dataPathRef.current = path
+      setDataPath(path)
       setData(nextData)
     },
   }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Bell, Edit3, Loader2, Plus, Save, Search, Star, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
@@ -93,6 +93,20 @@ export function ShopWatchRulesDrawer({
   const [preview, setPreview] = useState<ShopWatchRulePreview | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [notifySaving, setNotifySaving] = useState(false)
+  const activeTargetIDRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (!open) {
+      activeTargetIDRef.current = null
+      return
+    }
+    if (activeTargetIDRef.current === target?.id) return
+    activeTargetIDRef.current = target?.id ?? null
+    setEditing(null)
+    setForm(emptyRuleForm)
+    setPreview(null)
+    setPreviewLoading(false)
+  }, [open, target?.id])
 
   useEffect(() => {
     if (!open) return
@@ -109,18 +123,35 @@ export function ShopWatchRulesDrawer({
   }, [open, seed?.nonce])
 
   useEffect(() => {
-    if (!open || !target) return
+    if (!open || !target) {
+      setPreview(null)
+      setPreviewLoading(false)
+      return
+    }
+    const controller = new AbortController()
+    let active = true
     const timer = window.setTimeout(() => {
       setPreviewLoading(true)
       apiFetch<ShopWatchRulePreview>(`/shop-targets/${target.id}/watch-rules/preview`, {
         method: "POST",
         body: JSON.stringify(formToInput(form)),
+        signal: controller.signal,
       })
-        .then(setPreview)
-        .catch(() => setPreview(null))
-        .finally(() => setPreviewLoading(false))
+        .then((nextPreview) => {
+          if (active) setPreview(nextPreview)
+        })
+        .catch(() => {
+          if (active && !controller.signal.aborted) setPreview(null)
+        })
+        .finally(() => {
+          if (active) setPreviewLoading(false)
+        })
     }, 250)
-    return () => window.clearTimeout(timer)
+    return () => {
+      active = false
+      window.clearTimeout(timer)
+      controller.abort()
+    }
   }, [form, open, target?.id])
 
   const activeRules = rules.filter((rule) => rule.enabled)

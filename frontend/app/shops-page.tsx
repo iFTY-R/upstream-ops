@@ -297,6 +297,7 @@ export default function ShopsPage() {
   const [bulkForm, setBulkForm] = useState<BulkNotificationForm>(defaultBulkNotificationForm)
   const [syncJobs, setSyncJobs] = useState<Record<number, ShopSyncJob>>({})
   const goodsRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({})
+  const pendingGoodsLookupRef = useRef<{ targetID: number; goodsKey: string } | null>(null)
   const goodsFilters = useMemo(
     () => ({
       category_id: selectedCategoryID ?? undefined,
@@ -381,6 +382,8 @@ export default function ShopsPage() {
   }, [selectedID, targets.data])
 
   useEffect(() => {
+    const pendingLookup = pendingGoodsLookupRef.current
+    const preserveLookup = pendingLookup?.targetID === selectedID
     setGoodsPage(1)
     setChangesPage(1)
     setLogsPage(1)
@@ -388,7 +391,8 @@ export default function ShopsPage() {
     setGoodsStatus("all")
     setInStockOnly(false)
     setGoodsSort(selected?.goods_sort || "category")
-    setGoodsKeyword("")
+    setGoodsKeyword(preserveLookup ? pendingLookup.goodsKey : "")
+    if (preserveLookup) pendingGoodsLookupRef.current = null
   }, [selectedID, selected?.goods_sort])
 
   useEffect(() => {
@@ -727,12 +731,14 @@ export default function ShopsPage() {
       return
     }
     if (row.target_id && row.target_id !== selectedID) {
+      pendingGoodsLookupRef.current = { targetID: row.target_id, goodsKey: key }
       setSelectedID(row.target_id)
+    } else {
+      setGoodsKeyword(key)
     }
     setSelectedCategoryID(null)
     setGoodsStatus("all")
     setInStockOnly(false)
-    setGoodsKeyword(key)
     setGoodsPage(1)
     setHighlightedGoodsKey(key)
     toast.info(`正在定位商品：${row.goods_name || key}`)
