@@ -223,12 +223,17 @@ APP_SECRET=replace-with-a-random-string-at-least-32-bytes
 
 `APP_SECRET` is used to encrypt sensitive fields with AES-GCM, including upstream passwords, tokens, cookies, notification channel secrets, and captcha provider API keys. If you change it later, existing encrypted data cannot be decrypted.
 
-For public access, enable admin login:
+Compose defaults to admin login enabled. Before the first start, set a strong admin password:
 
 ```env
-AUTH_ENABLED=true
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=replace-with-a-strong-password
+```
+
+For trusted internal-only deployments, disable it explicitly:
+
+```env
+AUTH_ENABLED=false
 ```
 
 Docker pulls `ghcr.io/ifty-r/upstream-ops:${IMAGE_TAG:-latest}` by default. Configuration and data are stored in the host `data/` directory.
@@ -326,16 +331,16 @@ DATABASE_NAME=upstreamops
 
 ```env
 APP_SECRET=please-change-me-to-a-long-random-secret-32bytes-min
-AUTH_ENABLED=false
+AUTH_ENABLED=true
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=
 AUTH_TOKEN_SECRET=
 ```
 
 - `APP_SECRET`: required master secret.
-- `AUTH_ENABLED`: enables admin login.
+- `AUTH_ENABLED`: admin login switch. Compose defaults to `true`; set `false` explicitly only for trusted internal deployments.
 - `ADMIN_USERNAME`: admin username.
-- `ADMIN_PASSWORD`: admin password.
+- `ADMIN_PASSWORD`: admin password. Required whenever `AUTH_ENABLED=true`.
 - `AUTH_TOKEN_SECRET`: token signing secret. Falls back to `APP_SECRET` when empty.
 
 ## Local Development

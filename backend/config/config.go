@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/ifty-r/upstream-ops/backend/storage"
@@ -67,10 +68,12 @@ type SecurityConfig struct {
 	AppSecret string `mapstructure:"appSecret" yaml:"appSecret" json:"appSecret"`
 }
 
+const DefaultAuthUsername = "admin"
+
 // AuthConfig 后台单用户登录配置。
 //
-// Enabled = false（默认）时整套鉴权被关掉：/api/* 全部免 token，前端检测后跳过登录页。
-// 适合纯内网 / 反代后面的部署。需要公网暴露时必须显式 Enabled=true 并设强密码。
+// Enabled = false 时整套鉴权被关掉：/api/* 全部免 token，前端检测后跳过登录页。
+// 仅适合可信内网或已由反代鉴权保护的部署；默认开启鉴权以避免公共控制面裸露。
 //
 // Enabled=true 时 Username/Password 是写死的管理员凭据，TokenSecret 用于签发 HMAC token。
 // 如果 TokenSecret 为空，会回退使用 Security.AppSecret，保证有合理默认。
@@ -205,6 +208,117 @@ func LoadFile(path string) (*Config, error) {
 	return cfg, err
 }
 
+// BootstrapEnvAuthority 描述哪些启动期敏感字段当前由环境变量控制。
+//
+// 这些字段在启动时可由环境变量覆盖配置文件；运行时"应用配置"时也应继续遵守该优先级，
+// 并且不应把环境变量值反写回配置文件。
+type BootstrapEnvAuthority struct {
+	AppSecret       bool
+	AuthEnabled     bool
+	AuthUsername    bool
+	AuthPassword    bool
+	AuthTokenSecret bool
+}
+
+func DetectBootstrapEnvAuthority() BootstrapEnvAuthority {
+	_, appSecret := os.LookupEnv("APP_SECRET")
+	_, authEnabled := os.LookupEnv("AUTH_ENABLED")
+	_, authUsername := os.LookupEnv("ADMIN_USERNAME")
+	_, authPassword := os.LookupEnv("ADMIN_PASSWORD")
+	_, authTokenSecret := os.LookupEnv("AUTH_TOKEN_SECRET")
+	return BootstrapEnvAuthority{
+		AppSecret:       appSecret,
+		AuthEnabled:     authEnabled,
+		AuthUsername:    authUsername,
+		AuthPassword:    authPassword,
+		AuthTokenSecret: authTokenSecret,
+	}
+}
+
+// LoadRuntimeFile 读取配置文件，并仅为启动期敏感字段叠加环境变量覆盖。
+//
+// 运行中的"应用配置"应以文件内容为主，但 APP_SECRET / AUTH_* 这类启动期入口
+// 仍然必须遵守环境变量优先级，避免出现 UI 展示/热应用与实际启动配置不一致。
+func LoadRuntimeFile(path string) (*Config, error) {
+	cfg, err := LoadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := DetectBootstrapEnvAuthority().ApplyTo(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// PrepareForInitialSave 生成首次落盘的配置副本。
+//
+// 当服务通过环境变量启动且 config.yaml 尚不存在时，只写入可安全持久化的值；
+// 启动期凭据/secret 继续由环境变量持有，避免把 bootstrap secret 反写到磁盘。
+func PrepareForInitialSave(cfg *Config) *Config {
+	if cfg == nil {
+		return nil
+	}
+	clone := *cfg
+	DetectBootstrapEnvAuthority().ScrubForInitialSave(&clone)
+	return &clone
+}
+
+func (a BootstrapEnvAuthority) ApplyTo(cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+	if a.AppSecret {
+		cfg.Security.AppSecret = os.Getenv("APP_SECRET")
+	}
+	if a.AuthEnabled {
+		value, err := lookupEnvBool("AUTH_ENABLED")
+		if err != nil {
+			return err
+		}
+		cfg.Auth.Enabled = value
+	}
+	if a.AuthUsername {
+		cfg.Auth.Username = os.Getenv("ADMIN_USERNAME")
+	}
+	if a.AuthPassword {
+		cfg.Auth.Password = os.Getenv("ADMIN_PASSWORD")
+	}
+	if a.AuthTokenSecret {
+		cfg.Auth.TokenSecret = os.Getenv("AUTH_TOKEN_SECRET")
+	}
+	return nil
+}
+
+func (a BootstrapEnvAuthority) ScrubForInitialSave(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	if a.AppSecret {
+		cfg.Security.AppSecret = ""
+	}
+	if a.AuthEnabled {
+		cfg.Auth.Enabled = false
+	}
+	if a.AuthUsername {
+		cfg.Auth.Username = DefaultAuthUsername
+	}
+	if a.AuthPassword {
+		cfg.Auth.Password = ""
+	}
+	if a.AuthTokenSecret {
+		cfg.Auth.TokenSecret = ""
+	}
+}
+
+func lookupEnvBool(name string) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("parse %s: %w", name, err)
+	}
+	return value, nil
+}
+
 func load(path string, withEnv bool) (*Config, string, error) {
 	v := viper.New()
 	v.SetConfigType("yaml")
@@ -280,7 +394,7 @@ func Save(path string, cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	if err := os.WriteFile(path, body, 0o644); err != nil {
+	if err := os.WriteFile(path, body, 0o600); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 	return nil
@@ -346,8 +460,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("scheduler.retention.notificationLogsDays", 90)
 	v.SetDefault("scheduler.retention.announcementsDays", 90)
 
-	v.SetDefault("auth.enabled", false)
-	v.SetDefault("auth.username", "admin")
+	v.SetDefault("auth.enabled", true)
+	v.SetDefault("auth.username", DefaultAuthUsername)
 	v.SetDefault("auth.sessionTTLHours", 168) // 7 天
 	v.SetDefault("auth.sub2apiEmbed.enabled", false)
 	v.SetDefault("auth.sub2apiEmbed.baseURL", "")

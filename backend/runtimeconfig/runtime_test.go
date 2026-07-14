@@ -76,3 +76,63 @@ func TestApplyFromFileUpdatesUpstreamConfig(t *testing.T) {
 		t.Fatalf("user agent = %q", conn.cfg.UserAgent)
 	}
 }
+
+func TestApplyFromFileUsesBootstrapEnvAuthOverrides(t *testing.T) {
+	t.Setenv("AUTH_ENABLED", "true")
+	t.Setenv("ADMIN_USERNAME", "env-admin")
+	t.Setenv("ADMIN_PASSWORD", "env-password")
+	t.Setenv("AUTH_TOKEN_SECRET", "env-token-secret")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := &config.Config{
+		Auth: config.AuthConfig{
+			Enabled:         false,
+			Username:        "file-admin",
+			Password:        "file-password",
+			TokenSecret:     "file-token-secret",
+			SessionTTLHours: 12,
+		},
+		Scheduler: config.SchedulerConfig{
+			BalanceCron: "",
+			RateCron:    "",
+			Retention:   config.RetentionConfig{Cron: ""},
+		},
+	}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := New(
+		path,
+		"fallback-app-secret",
+		log,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		config.ProxyConfig{},
+		config.UpstreamConfig{},
+		func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
+			return scheduler.New(scfg, nil, nil, nil, nil, nil, nil, nil, nil, nil, pcfg, log)
+		},
+	)
+
+	if _, err := mgr.ApplyFromFile(); err != nil {
+		t.Fatalf("ApplyFromFile: %v", err)
+	}
+	authSvc := mgr.CurrentAuth()
+	if authSvc == nil {
+		t.Fatalf("auth service should be enabled by env override")
+	}
+	if authSvc.Username() != "env-admin" {
+		t.Fatalf("username = %q", authSvc.Username())
+	}
+	if authSvc.TokenTTL() != 12*time.Hour {
+		t.Fatalf("token ttl = %s", authSvc.TokenTTL())
+	}
+	if _, _, err := authSvc.Login("env-admin", "env-password"); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+}

@@ -236,12 +236,17 @@ APP_SECRET=请替换为 32 字节以上随机字符串
 
 `APP_SECRET` 用于 AES-GCM 加密敏感字段，包括上游密码、Token、Cookie、通知渠道密钥、验证码平台 API Key 等。修改后既有加密数据将无法解密，请务必妥善保存。
 
-公网访问建议开启后台登录：
+Compose 默认开启后台登录。首次启动前请先设置强密码：
 
 ```env
-AUTH_ENABLED=true
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=请替换为强密码
+```
+
+如果是可信内网 / 已有外层鉴权的部署，请显式关闭：
+
+```env
+AUTH_ENABLED=false
 ```
 
 Docker 默认拉取 `ghcr.io/ifty-r/upstream-ops:${IMAGE_TAG:-latest}`，不会在本机编译镜像。配置和数据都会写入宿主机项目目录下的 `data/`。
@@ -339,16 +344,16 @@ DATABASE_NAME=upstreamops
 
 ```env
 APP_SECRET=please-change-me-to-a-long-random-secret-32bytes-min
-AUTH_ENABLED=false
+AUTH_ENABLED=true
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=
 AUTH_TOKEN_SECRET=
 ```
 
 - `APP_SECRET`：主密钥，必填。
-- `AUTH_ENABLED`：是否启用后台登录。
+- `AUTH_ENABLED`：是否启用后台登录。Compose 默认值为 `true`；只有可信内网部署才建议显式设为 `false`。
 - `ADMIN_USERNAME`：后台管理员账号。
-- `ADMIN_PASSWORD`：后台管理员密码。
+- `ADMIN_PASSWORD`：后台管理员密码。`AUTH_ENABLED=true` 时必填。
 - `AUTH_TOKEN_SECRET`：登录 Token 签名密钥；留空时使用 `APP_SECRET`。
 
 ## 本地开发

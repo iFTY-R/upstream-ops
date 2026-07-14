@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -63,5 +64,154 @@ func TestSaveSettingsKeepsAppVersion(t *testing.T) {
 	}
 	if got.Upstream.TimeoutSeconds != 45 || got.Upstream.UserAgent != "custom-agent" {
 		t.Fatalf("upstream = %#v", got.Upstream)
+	}
+}
+
+func TestGetSettingsConfigRedactsSecrets(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := &config.Config{
+		Auth: config.AuthConfig{
+			Enabled:         true,
+			Username:        "admin",
+			Password:        "super-secret",
+			TokenSecret:     "token-secret",
+			SessionTTLHours: 168,
+		},
+		Proxy: config.ProxyConfig{
+			Enabled:             true,
+			VersionCheckEnabled: true,
+			Protocol:            "http",
+			Host:                "127.0.0.1",
+			Port:                1080,
+			Username:            "proxy-user",
+			Password:            "proxy-secret",
+		},
+	}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	r := gin.New()
+	api := r.Group("/api")
+	registerSettings(api, &Deps{
+		Runtime: runtimeconfig.New(path, "", nil, nil, nil, nil, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{}, nil),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/settings/config", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "super-secret") || strings.Contains(rec.Body.String(), "token-secret") || strings.Contains(rec.Body.String(), "proxy-secret") {
+		t.Fatalf("response leaked secret: %s", rec.Body.String())
+	}
+
+	var resp struct {
+		Data struct {
+			Config struct {
+				Auth struct {
+					Password    string `json:"password"`
+					TokenSecret string `json:"tokenSecret"`
+				} `json:"auth"`
+				Proxy struct {
+					Password string `json:"password"`
+				} `json:"proxy"`
+			} `json:"config"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp.Data.Config.Auth.Password != redactedSecret {
+		t.Fatalf("auth password = %q", resp.Data.Config.Auth.Password)
+	}
+	if resp.Data.Config.Auth.TokenSecret != redactedSecret {
+		t.Fatalf("auth token secret = %q", resp.Data.Config.Auth.TokenSecret)
+	}
+	if resp.Data.Config.Proxy.Password != redactedSecret {
+		t.Fatalf("proxy password = %q", resp.Data.Config.Proxy.Password)
+	}
+}
+
+func TestSaveSettingsPreservesEnvManagedBootstrapAndRedactedSecrets(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("AUTH_ENABLED", "true")
+	t.Setenv("ADMIN_USERNAME", "env-admin")
+	t.Setenv("ADMIN_PASSWORD", "env-password")
+	t.Setenv("AUTH_TOKEN_SECRET", "env-token-secret")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := &config.Config{
+		App: config.AppConfig{
+			Title:              "Old",
+			NotificationPrefix: "[Old] ",
+		},
+		Auth: config.AuthConfig{
+			Enabled:         false,
+			Username:        "file-admin",
+			Password:        "file-password",
+			TokenSecret:     "file-token-secret",
+			SessionTTLHours: 168,
+		},
+		Proxy: config.ProxyConfig{
+			Enabled:             true,
+			VersionCheckEnabled: true,
+			Protocol:            "http",
+			Host:                "127.0.0.1",
+			Port:                1080,
+			Username:            "proxy-user",
+			Password:            "file-proxy-password",
+		},
+	}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	r := gin.New()
+	api := r.Group("/api")
+	registerSettings(api, &Deps{
+		Runtime: runtimeconfig.New(path, "", nil, nil, nil, nil, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{}, nil),
+	})
+
+	body := `{
+		"app":{"title":"New","notificationPrefix":"[New] "},
+		"auth":{"enabled":true,"username":"ui-admin","password":"` + redactedSecret + `","tokenSecret":"` + redactedSecret + `","sessionTTLHours":24,"sub2apiEmbed":{"enabled":false,"baseURL":"","allowedOrigins":[],"requireAdmin":true}},
+		"scheduler":{"balanceCron":"37 */15 * * * *","rateCron":"13 */30 * * * *","concurrency":4,"retention":{"cron":"0 17 3 * * *","monitorLogsDays":30,"balanceSnapshotsDays":90,"notificationLogsDays":90,"announcementsDays":90}},
+		"notifications":{"batchRateChanges":true,"minChangePct":0,"balanceLowCooldownMinutes":60,"subscriptionDailyRemainingThresholdPct":0,"subscriptionWeeklyRemainingThresholdPct":0,"subscriptionMonthlyRemainingThresholdPct":0,"subscriptionExpiryThresholdHours":0,"subscriptionAlertCooldownMinutes":1440,"sendMaxAttempts":3},
+		"proxy":{"enabled":true,"versionCheckEnabled":true,"protocol":"socks5","host":"127.0.0.1","port":1080,"username":"proxy-user","password":"` + redactedSecret + `"},
+		"upstream":{"timeoutSeconds":45,"userAgent":"custom-agent"}
+	}`
+	req := httptest.NewRequest(http.MethodPut, "/api/settings/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	got, err := config.LoadFile(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if got.Auth.Enabled {
+		t.Fatalf("auth enabled should preserve file value under env authority")
+	}
+	if got.Auth.Username != "file-admin" {
+		t.Fatalf("username = %q", got.Auth.Username)
+	}
+	if got.Auth.Password != "file-password" {
+		t.Fatalf("password = %q", got.Auth.Password)
+	}
+	if got.Auth.TokenSecret != "file-token-secret" {
+		t.Fatalf("token secret = %q", got.Auth.TokenSecret)
+	}
+	if got.Auth.SessionTTLHours != 24 {
+		t.Fatalf("session ttl = %d", got.Auth.SessionTTLHours)
+	}
+	if got.Proxy.Password != "file-proxy-password" {
+		t.Fatalf("proxy password = %q", got.Proxy.Password)
 	}
 }

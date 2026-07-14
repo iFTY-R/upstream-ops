@@ -50,7 +50,7 @@ func main() {
 	log.Info("starting UpstreamOps", "port", cfg.Server.Port, "mode", cfg.Server.Mode)
 
 	if _, err := os.Stat(resolvedConfigPath); errors.Is(err, os.ErrNotExist) {
-		if err := config.Save(resolvedConfigPath, cfg); err != nil {
+		if err := config.Save(resolvedConfigPath, config.PrepareForInitialSave(cfg)); err != nil {
 			log.Error("create config failed", "path", resolvedConfigPath, "err", err)
 			os.Exit(1)
 		}
@@ -63,8 +63,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Auth：默认禁用（AUTH_ENABLED=false），所有 /api/* 免 token；
-	// 显式开启时账号/密码必填，token secret 缺省回退到 AppSecret。
+	// Auth：显式关闭（AUTH_ENABLED=false 或配置文件 auth.enabled=false）时
+	// 所有 /api/* 免 token；开启时账号/密码必填，token secret 缺省回退到 AppSecret。
 	var authSvc *auth.Service
 	if cfg.Auth.Enabled {
 		tokenSecret := cfg.Auth.TokenSecret
