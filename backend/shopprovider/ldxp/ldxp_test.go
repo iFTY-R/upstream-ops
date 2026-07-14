@@ -2,6 +2,7 @@ package ldxp
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -119,6 +120,33 @@ func TestClientRetriesACWSCV2Challenge(t *testing.T) {
 	}
 	if info.Name != "挑战后店铺" {
 		t.Fatalf("info = %+v", info)
+	}
+}
+
+func TestClientUsesHTTP1OnlyTransport(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/shopApi/Shop/info", func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor != 1 {
+			t.Fatalf("protocol = %s, want HTTP/1.1", r.Proto)
+		}
+		writeEnvelope(t, w, map[string]any{"nickname": "HTTP1 店铺"})
+	})
+	server := httptest.NewUnstartedServer(mux)
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
+
+	client := New()
+	transport, ok := client.http.GetClient().Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type = %T", client.http.GetClient().Transport)
+	}
+	if transport.ForceAttemptHTTP2 {
+		t.Fatal("ldxp client must keep HTTP/2 disabled for ESA compatibility")
+	}
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // local test server certificate
+	if _, err := client.Info(context.Background(), shopprovider.Target{BaseURL: server.URL, Token: "TOKEN"}); err != nil {
+		t.Fatalf("info over HTTP/1.1: %v", err)
 	}
 }
 

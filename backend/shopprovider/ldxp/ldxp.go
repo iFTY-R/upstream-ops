@@ -33,9 +33,14 @@ const (
 
 func New() *Client {
 	jar, _ := cookiejar.New(nil)
+	// The LDXP ESA edge accepts HTTP/1.1 requests that it rejects with Go's
+	// default HTTP/2 fingerprint, so keep this provider on HTTP/1.1 only.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ForceAttemptHTTP2 = false
 	return &Client{
 		http: resty.New().
 			SetTimeout(30*time.Second).
+			SetTransport(transport).
 			SetHeader("Accept", "application/json").
 			SetHeader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8").
 			SetHeader("User-Agent", browserUserAgent).
