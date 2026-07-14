@@ -47,6 +47,8 @@ import type {
   ShopScopeMode,
   ShopSnapshotCategory,
   ShopSyncAllResult,
+  ShopSyncJob,
+  ShopSyncJobStartResult,
   ShopSyncResult,
   ShopTarget,
   ShopTestResult,
@@ -291,6 +293,7 @@ export default function ShopsPage() {
   const [watchSeed, setWatchSeed] = useState<ShopWatchSeed | null>(null)
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkForm, setBulkForm] = useState<BulkNotificationForm>(defaultBulkNotificationForm)
+  const [syncJobs, setSyncJobs] = useState<Record<number, ShopSyncJob>>({})
   const goodsRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({})
   const goodsFilters = useMemo(
     () => ({
@@ -307,6 +310,66 @@ export default function ShopsPage() {
   const changes = useShopChangeLogs(selectedID, changesPage, 20)
   const monitorLogs = useShopMonitorLogs(selectedID, logsPage, 20)
   const selected = targets.data?.find((t) => t.id === selectedID) ?? null
+  const activeSyncJobs = useMemo(
+    () => Object.values(syncJobs).filter((job) => job.status === "queued" || job.status === "running"),
+    [syncJobs],
+  )
+  const activeSyncJobKey = activeSyncJobs.map((job) => `${job.id}:${job.status}`).join(",")
+
+  function refreshShopData() {
+    targets.refetch()
+    goods.refetch()
+    snapshotCategories.refetch()
+    changes.refetch()
+    monitorLogs.refetch()
+    refresh()
+  }
+
+  useEffect(() => {
+    if (selectedID == null || syncJobs[selectedID]?.status === "queued" || syncJobs[selectedID]?.status === "running") return
+    let cancelled = false
+    void apiFetch<ShopSyncJob>(`/shop-targets/${selectedID}/sync-jobs/latest`)
+      .then((job) => {
+        if (!cancelled && (job.status === "queued" || job.status === "running")) {
+          setSyncJobs((current) => ({ ...current, [job.target_id]: job }))
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [selectedID, syncJobs])
+
+  useEffect(() => {
+    if (activeSyncJobs.length === 0) return
+    let cancelled = false
+    const poll = async () => {
+      const updates = await Promise.all(activeSyncJobs.map(async (job) => {
+        try {
+          return await apiFetch<ShopSyncJob>(`/shop-targets/${job.target_id}/sync-jobs/${job.id}`)
+        } catch {
+          return null
+        }
+      }))
+      if (cancelled) return
+      for (const job of updates) {
+        if (!job) continue
+        setSyncJobs((current) => ({ ...current, [job.target_id]: job }))
+        if (job.status === "succeeded") {
+          toast.success(`同步完成：${job.goods_count} 个商品，${job.changed_count} 个变化`)
+          refreshShopData()
+        } else if (job.status === "failed" || job.status === "timed_out") {
+          toast.error(job.error_message || "同步失败")
+        }
+      }
+    }
+    void poll()
+    const timer = window.setInterval(() => void poll(), 2000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [activeSyncJobKey])
 
   useEffect(() => {
     if (selectedID != null) return
@@ -541,16 +604,11 @@ export default function ShopsPage() {
   }
 
   async function syncTarget(target: ShopTarget) {
-    setBusy(`sync:${target.id}`)
-    try {
-      const result = await apiFetch<ShopSyncResult>(`/shop-targets/${target.id}/sync`, { method: "POST" })
-      toast.success(`同步完成：${result.goods_count} 个商品，${result.changed_count} 个变化`)
-      targets.refetch()
-      goods.refetch()
-      snapshotCategories.refetch()
-      changes.refetch()
-      monitorLogs.refetch()
-      refresh()
+	setBusy(`sync:${target.id}`)
+	try {
+		const result = await apiFetch<ShopSyncJobStartResult>(`/shop-targets/${target.id}/sync`, { method: "POST" })
+		setSyncJobs((current) => ({ ...current, [target.id]: result.job }))
+		toast.message(result.reused ? "同步任务仍在运行" : "已开始同步店铺")
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "同步失败")
     } finally {
@@ -727,11 +785,12 @@ export default function ShopsPage() {
       <div className="grid min-w-0 gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
         <div className="min-w-0 space-y-3">
           {(targets.data ?? []).map((target, index, list) => (
-            <ShopCard
-              key={target.id}
-              target={target}
-              active={target.id === selectedID}
-              busy={busy}
+              <ShopCard
+                key={target.id}
+                target={target}
+                active={target.id === selectedID}
+                busy={busy}
+				syncJob={syncJobs[target.id]}
               canMoveUp={index > 0}
               canMoveDown={index < list.length - 1}
               onSelect={() => setSelectedID(target.id)}
@@ -1055,6 +1114,7 @@ function ShopCard(props: {
   target: ShopTarget
   active: boolean
   busy: string | null
+  syncJob?: ShopSyncJob
   canMoveUp: boolean
   canMoveDown: boolean
   onSelect: () => void
@@ -1069,6 +1129,7 @@ function ShopCard(props: {
 }) {
   const { target, active, busy } = props
   const displayName = shopDisplayName(target)
+	const syncing = props.syncJob?.status === "queued" || props.syncJob?.status === "running"
   return (
     <Card className={cn("cursor-pointer p-3 transition hover:border-foreground/30", active && "border-foreground shadow-sm")} onClick={props.onSelect}>
       <div className="flex items-start justify-between gap-3">
@@ -1079,9 +1140,12 @@ function ShopCard(props: {
           </div>
           <p className="mt-1 truncate text-xs text-muted-foreground">{target.site_url}</p>
         </div>
-        <span className={cn("rounded-full px-2 py-0.5 text-[10px]", target.monitor_enabled ? "bg-success/10 text-success" : "bg-muted text-muted-foreground")}>
-          {target.monitor_enabled ? "启用" : "暂停"}
-        </span>
+        <div className="flex items-center gap-1">
+          {syncing ? <span className="rounded-full bg-warning/10 px-2 py-0.5 text-[10px] text-warning">同步中</span> : null}
+          <span className={cn("rounded-full px-2 py-0.5 text-[10px]", target.monitor_enabled ? "bg-success/10 text-success" : "bg-muted text-muted-foreground")}>
+            {target.monitor_enabled ? "启用" : "暂停"}
+          </span>
+        </div>
       </div>
       <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
         <Mini label="商品" value={target.last_goods_count} />
@@ -1113,8 +1177,8 @@ function ShopCard(props: {
           <Button variant="outline" size="icon" className="size-7" onClick={props.onMoveDown} disabled={!props.canMoveDown || busy === "reorder-shops"}>
             <ArrowDown className="size-3.5" />
           </Button>
-          <Button variant="outline" size="icon" className="size-7" onClick={props.onSync} disabled={busy === `sync:${target.id}`}>
-            {busy === `sync:${target.id}` ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+          <Button variant="outline" size="icon" className="size-7" onClick={props.onSync} disabled={busy === `sync:${target.id}` || syncing}>
+            {busy === `sync:${target.id}` || syncing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
           </Button>
           <Button variant="outline" size="icon" className={cn("size-7", target.notify_enabled && "border-emerald-500/40 text-emerald-700")} onClick={props.onWatchRules}>
             <Bell className="size-3.5" />

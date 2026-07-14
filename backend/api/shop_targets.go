@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/ifty-r/upstream-ops/backend/shopprovider"
 	"github.com/ifty-r/upstream-ops/backend/storage"
+	"gorm.io/gorm"
 )
 
 func registerShopTargets(g *gin.RouterGroup, d *Deps) {
@@ -33,6 +35,8 @@ func registerShopTargets(g *gin.RouterGroup, d *Deps) {
 	gp.DELETE("/:id/watch-rules/:rule_id", func(c *gin.Context) { deleteShopWatchRule(c, d) })
 	gp.POST("/:id/test", func(c *gin.Context) { testShopTarget(c, d) })
 	gp.POST("/:id/sync", func(c *gin.Context) { syncShopTarget(c, d) })
+	gp.GET("/:id/sync-jobs/latest", func(c *gin.Context) { getLatestShopSyncJob(c, d) })
+	gp.GET("/:id/sync-jobs/:job_id", func(c *gin.Context) { getShopSyncJob(c, d) })
 	gp.GET("/:id/categories", func(c *gin.Context) { shopTargetCategories(c, d) })
 	gp.GET("/:id/snapshot-categories", func(c *gin.Context) { shopTargetSnapshotCategories(c, d) })
 	gp.GET("/:id/goods", func(c *gin.Context) { shopTargetGoods(c, d) })
@@ -395,19 +399,67 @@ func testShopTarget(c *gin.Context, d *Deps) {
 }
 
 func syncShopTarget(c *gin.Context, d *Deps) {
-	if !shopMonitorReady(c, d) {
+	if !shopSyncRunnerReady(c, d) {
 		return
 	}
 	id, ok := parseUintParam(c, "id")
 	if !ok {
 		return
 	}
-	result, err := d.ShopMonitor.SyncByID(c.Request.Context(), id)
+	job, reused, err := d.ShopSyncRunner.Start(id)
 	if err != nil {
-		fail(c, http.StatusBadGateway, err)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			fail(c, http.StatusNotFound, err)
+			return
+		}
+		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": result})
+	c.JSON(http.StatusAccepted, gin.H{"data": gin.H{"job": job, "reused": reused}})
+}
+
+func getShopSyncJob(c *gin.Context, d *Deps) {
+	if !shopSyncRunnerReady(c, d) {
+		return
+	}
+	targetID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	jobID, ok := parseUintParam(c, "job_id")
+	if !ok {
+		return
+	}
+	job, err := d.ShopSyncRunner.Get(targetID, jobID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			fail(c, http.StatusNotFound, err)
+			return
+		}
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": job})
+}
+
+func getLatestShopSyncJob(c *gin.Context, d *Deps) {
+	if !shopSyncRunnerReady(c, d) {
+		return
+	}
+	targetID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	job, err := d.ShopSyncRunner.Latest(targetID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			fail(c, http.StatusNotFound, err)
+			return
+		}
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": job})
 }
 
 func syncAllShopTargets(c *gin.Context, d *Deps) {
@@ -781,6 +833,17 @@ func shopMonitorReady(c *gin.Context, d *Deps) bool {
 	}
 	if d.ShopMonitor == nil {
 		fail(c, http.StatusInternalServerError, fmt.Errorf("shop monitor service is not configured"))
+		return false
+	}
+	return true
+}
+
+func shopSyncRunnerReady(c *gin.Context, d *Deps) bool {
+	if !shopReposReady(c, d) {
+		return false
+	}
+	if d.ShopSyncRunner == nil {
+		fail(c, http.StatusInternalServerError, fmt.Errorf("shop sync job runner is not configured"))
 		return false
 	}
 	return true

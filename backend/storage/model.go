@@ -442,6 +442,35 @@ type ShopMonitorLog struct {
 
 func (ShopMonitorLog) TableName() string { return "shop_monitor_logs" }
 
+type ShopSyncJobStatus string
+
+const (
+	ShopSyncJobQueued    ShopSyncJobStatus = "queued"
+	ShopSyncJobRunning   ShopSyncJobStatus = "running"
+	ShopSyncJobSucceeded ShopSyncJobStatus = "succeeded"
+	ShopSyncJobFailed    ShopSyncJobStatus = "failed"
+	ShopSyncJobTimedOut  ShopSyncJobStatus = "timed_out"
+)
+
+// ShopSyncJob keeps manual shop synchronization independent from the request
+// that started it, so reverse-proxy timeouts cannot interrupt the work.
+type ShopSyncJob struct {
+	ID           uint              `gorm:"primaryKey" json:"id"`
+	TargetID     uint              `gorm:"not null;index" json:"target_id"`
+	Status       ShopSyncJobStatus `gorm:"size:32;not null;index" json:"status"`
+	ErrorMessage string            `gorm:"type:text" json:"error_message,omitempty"`
+	GoodsCount   int               `json:"goods_count"`
+	ChangedCount int               `json:"changed_count"`
+	EventsJSON   string            `gorm:"type:text" json:"events_json,omitempty"`
+	StartedAt    *time.Time        `json:"started_at,omitempty"`
+	FinishedAt   *time.Time        `json:"finished_at,omitempty"`
+	DurationMS   int64             `json:"duration_ms"`
+	CreatedAt    time.Time         `json:"created_at"`
+	UpdatedAt    time.Time         `json:"updated_at"`
+}
+
+func (ShopSyncJob) TableName() string { return "shop_sync_jobs" }
+
 type AutoGroupPolicy struct {
 	ID                            uint       `gorm:"primaryKey" json:"id"`
 	ChannelID                     uint       `gorm:"not null;uniqueIndex:idx_auto_group_policy_channel_target;index" json:"channel_id"`

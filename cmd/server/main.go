@@ -127,6 +127,8 @@ func main() {
 	dispatcher.UpdateProxyConfig(cfg.Proxy)
 	monitorSvc := monitor.NewService(channels, announcements, rates, monLogs, upstreamCapSvc, dispatcher, log)
 	shopMonitorSvc := shopmonitor.NewService(shopTargets, shopWatchRules, shopGoods, dispatcher, log, cfg.Proxy, cfg.Upstream)
+	shopSyncJobs := storage.NewShopSyncJobs(db)
+	shopSyncRunner := shopmonitor.NewSyncJobRunner(shopMonitorSvc, shopSyncJobs, log)
 	autoGroupSvc := autogroup.NewService(autoGroups, channels, rates, upstreamCapSvc, dispatcher, log)
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
@@ -185,6 +187,7 @@ func main() {
 		ShopTargets:    shopTargets,
 		ShopWatchRules: shopWatchRules,
 		ShopGoods:      shopGoods,
+		ShopSyncRunner: shopSyncRunner,
 		AutoGroups:     autoGroups,
 		Announcements:  announcements,
 		Rates:          rates,

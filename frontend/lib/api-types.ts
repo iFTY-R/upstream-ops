@@ -306,10 +306,32 @@ export interface ShopSyncAllTargetResult {
 }
 
 export interface ShopSyncAllResult {
-  total: number
-  success: number
-  failed: number
-  targets: ShopSyncAllTargetResult[]
+	total: number
+	success: number
+	failed: number
+	targets: ShopSyncAllTargetResult[]
+}
+
+export type ShopSyncJobStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out"
+
+export interface ShopSyncJob {
+	id: number
+	target_id: number
+	status: ShopSyncJobStatus
+	error_message?: string
+	goods_count: number
+	changed_count: number
+	events_json?: string
+	started_at?: string | null
+	finished_at?: string | null
+	duration_ms: number
+	created_at: string
+	updated_at: string
+}
+
+export interface ShopSyncJobStartResult {
+	job: ShopSyncJob
+	reused: boolean
 }
 
 export interface CaptchaConfig {

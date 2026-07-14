@@ -54,6 +54,7 @@ func (r *ShopTargets) Delete(id uint) error {
 			&ShopGoodsSnapshot{},
 			&ShopGoodsChangeLog{},
 			&ShopMonitorLog{},
+			&ShopSyncJob{},
 		} {
 			if err := tx.Where("target_id = ?", id).Delete(model).Error; err != nil {
 				return err
@@ -677,4 +678,75 @@ func (r *ShopGoods) ListMonitorLogsPage(targetID uint, page, pageSize int) ([]Sh
 		return nil, 0, err
 	}
 	return list, total, nil
+}
+
+type ShopSyncJobs struct{ db *gorm.DB }
+
+func NewShopSyncJobs(db *gorm.DB) *ShopSyncJobs { return &ShopSyncJobs{db: db} }
+
+func (r *ShopSyncJobs) Create(job *ShopSyncJob) error {
+	return r.db.Create(job).Error
+}
+
+func (r *ShopSyncJobs) FindByTargetAndID(targetID, id uint) (*ShopSyncJob, error) {
+	var job ShopSyncJob
+	if err := r.db.Where("target_id = ? AND id = ?", targetID, id).First(&job).Error; err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+func (r *ShopSyncJobs) FindLatestByTarget(targetID uint) (*ShopSyncJob, error) {
+	var job ShopSyncJob
+	if err := r.db.Where("target_id = ?", targetID).Order("id DESC").First(&job).Error; err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+func (r *ShopSyncJobs) FindActiveByTarget(targetID uint) (*ShopSyncJob, error) {
+	var job ShopSyncJob
+	err := r.db.Where("target_id = ? AND status IN ?", targetID, []ShopSyncJobStatus{ShopSyncJobQueued, ShopSyncJobRunning}).
+		Order("id DESC").
+		First(&job).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+func (r *ShopSyncJobs) MarkRunning(id uint, startedAt time.Time) error {
+	return r.db.Model(&ShopSyncJob{}).Where("id = ?", id).Updates(map[string]any{
+		"status":     ShopSyncJobRunning,
+		"started_at": startedAt,
+	}).Error
+}
+
+func (r *ShopSyncJobs) Complete(id uint, status ShopSyncJobStatus, goodsCount, changedCount int, events map[string]int, errorMessage string, startedAt, finishedAt time.Time) error {
+	updates := map[string]any{
+		"status":        status,
+		"error_message": errorMessage,
+		"finished_at":   finishedAt,
+		"duration_ms":   finishedAt.Sub(startedAt).Milliseconds(),
+	}
+	updates["goods_count"] = goodsCount
+	updates["changed_count"] = changedCount
+	if encoded, err := json.Marshal(events); err == nil {
+		updates["events_json"] = string(encoded)
+	}
+	return r.db.Model(&ShopSyncJob{}).Where("id = ?", id).Updates(updates).Error
+}
+
+func (r *ShopSyncJobs) MarkInterrupted() error {
+	now := time.Now()
+	return r.db.Model(&ShopSyncJob{}).
+		Where("status IN ?", []ShopSyncJobStatus{ShopSyncJobQueued, ShopSyncJobRunning}).
+		Updates(map[string]any{
+			"status":        ShopSyncJobFailed,
+			"error_message": "服务重启前同步未完成",
+			"finished_at":   now,
+		}).Error
 }

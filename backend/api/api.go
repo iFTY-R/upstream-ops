@@ -50,6 +50,12 @@ type upstreamSubscriptionService interface {
 	upstreamcap.SubscriptionCapability
 }
 
+type shopSyncJobRunner interface {
+	Start(targetID uint) (*storage.ShopSyncJob, bool, error)
+	Get(targetID, jobID uint) (*storage.ShopSyncJob, error)
+	Latest(targetID uint) (*storage.ShopSyncJob, error)
+}
+
 type upstreamAPIKeyService interface {
 	upstreamcap.APIKeyCapability
 	upstreamcap.GroupCapability
@@ -67,6 +73,7 @@ type Deps struct {
 	ShopTargets    *storage.ShopTargets
 	ShopWatchRules *storage.ShopWatchRules
 	ShopGoods      *storage.ShopGoods
+	ShopSyncRunner shopSyncJobRunner
 	AutoGroups     *storage.AutoGroups
 	Announcements  *storage.UpstreamAnnouncements
 	Rates          *storage.Rates

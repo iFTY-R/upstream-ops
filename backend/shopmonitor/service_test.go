@@ -3,6 +3,7 @@ package shopmonitor
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -146,6 +147,47 @@ func TestRefreshGoodsByKeyMarksMissingSnapshotRemoved(t *testing.T) {
 	}
 }
 
+func TestSyncJobRunnerReusesActiveTargetJob(t *testing.T) {
+	platform := storage.ShopPlatform("sync-job-runner-test")
+	provider := &blockingShopProvider{started: make(chan struct{}), release: make(chan struct{})}
+	shopprovider.Register(platform, func() shopprovider.Provider { return provider })
+
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	target := createRefreshTarget(t, targets, platform)
+	monitor := NewService(targets, storage.NewShopWatchRules(db), goods, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	runner := NewSyncJobRunner(monitor, storage.NewShopSyncJobs(db), nil)
+
+	first, reused, err := runner.Start(target.ID)
+	if err != nil || reused {
+		t.Fatalf("start first job: job=%#v reused=%v err=%v", first, reused, err)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("sync job did not start")
+	}
+	second, reused, err := runner.Start(target.ID)
+	if err != nil || !reused || second.ID != first.ID {
+		t.Fatalf("start duplicate job: first=%#v second=%#v reused=%v err=%v", first, second, reused, err)
+	}
+	close(provider.release)
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		job, err := runner.Get(target.ID, first.ID)
+		if err != nil {
+			t.Fatalf("get job: %v", err)
+		}
+		if job.Status == storage.ShopSyncJobSucceeded {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("sync job did not complete")
+}
+
 func createRefreshTarget(t *testing.T, targets *storage.ShopTargets, platform storage.ShopPlatform) *storage.ShopTarget {
 	t.Helper()
 	target := &storage.ShopTarget{
@@ -166,6 +208,34 @@ func createRefreshTarget(t *testing.T, targets *storage.ShopTargets, platform st
 
 type fakeShopProvider struct {
 	goods []shopprovider.Goods
+}
+
+type blockingShopProvider struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (p *blockingShopProvider) Info(ctx context.Context, _ shopprovider.Target) (*shopprovider.ShopInfo, error) {
+	p.once.Do(func() { close(p.started) })
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.release:
+		return &shopprovider.ShopInfo{Name: "background"}, nil
+	}
+}
+
+func (p *blockingShopProvider) Categories(context.Context, shopprovider.Target, shopprovider.CategoryRequest) ([]shopprovider.Category, error) {
+	return nil, nil
+}
+
+func (p *blockingShopProvider) Goods(context.Context, shopprovider.Target, shopprovider.GoodsRequest) (*shopprovider.GoodsPage, error) {
+	return &shopprovider.GoodsPage{}, nil
+}
+
+func (p *blockingShopProvider) Price(context.Context, shopprovider.Target, shopprovider.PriceRequest) (*shopprovider.PriceResult, error) {
+	return &shopprovider.PriceResult{}, nil
 }
 
 func (p fakeShopProvider) Info(context.Context, shopprovider.Target) (*shopprovider.ShopInfo, error) {

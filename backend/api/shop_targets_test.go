@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/ifty-r/upstream-ops/backend/storage"
+	"gorm.io/gorm"
 )
 
 func TestBuildShopTargetPreservesNotifyEnabledWhenOmitted(t *testing.T) {
@@ -311,5 +312,77 @@ func TestListAllShopGoodsReturnsTargetMetadata(t *testing.T) {
 	item := resp.Data.Items[0]
 	if item.TargetID != target.ID || item.TargetName != target.Name || item.TargetSiteURL != target.SiteURL || !item.TargetNotifyEnabled {
 		t.Fatalf("target metadata mismatch: %#v", item)
+	}
+}
+
+type fakeShopSyncJobRunner struct {
+	job    *storage.ShopSyncJob
+	reused bool
+}
+
+func (r *fakeShopSyncJobRunner) Start(targetID uint) (*storage.ShopSyncJob, bool, error) {
+	job := *r.job
+	job.TargetID = targetID
+	r.job = &job
+	return &job, r.reused, nil
+}
+
+func (r *fakeShopSyncJobRunner) Get(targetID, jobID uint) (*storage.ShopSyncJob, error) {
+	if r.job != nil && r.job.TargetID == targetID && r.job.ID == jobID {
+		return r.job, nil
+	}
+	return nil, gorm.ErrRecordNotFound
+}
+
+func (r *fakeShopSyncJobRunner) Latest(targetID uint) (*storage.ShopSyncJob, error) {
+	if r.job != nil && r.job.TargetID == targetID {
+		return r.job, nil
+	}
+	return nil, gorm.ErrRecordNotFound
+}
+
+func TestShopSyncJobEndpointsStartAndReadJob(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	runner := &fakeShopSyncJobRunner{job: &storage.ShopSyncJob{ID: 12, Status: storage.ShopSyncJobQueued}}
+	router := gin.New()
+	registerShopTargets(router.Group("/api"), &Deps{
+		ShopTargets:    targets,
+		ShopGoods:      goods,
+		ShopSyncRunner: runner,
+	})
+
+	startReq := httptest.NewRequest(http.MethodPost, "/api/shop-targets/9/sync", nil)
+	startRec := httptest.NewRecorder()
+	router.ServeHTTP(startRec, startReq)
+	if startRec.Code != http.StatusAccepted {
+		t.Fatalf("start status = %d, body = %s", startRec.Code, startRec.Body.String())
+	}
+	var startResp struct {
+		Data struct {
+			Job    storage.ShopSyncJob `json:"job"`
+			Reused bool                `json:"reused"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(startRec.Body.Bytes(), &startResp); err != nil {
+		t.Fatalf("decode start response: %v", err)
+	}
+	if startResp.Data.Job.ID != 12 || startResp.Data.Job.TargetID != 9 || startResp.Data.Reused {
+		t.Fatalf("start response = %#v", startResp.Data)
+	}
+
+	readReq := httptest.NewRequest(http.MethodGet, "/api/shop-targets/9/sync-jobs/12", nil)
+	readRec := httptest.NewRecorder()
+	router.ServeHTTP(readRec, readReq)
+	if readRec.Code != http.StatusOK {
+		t.Fatalf("read status = %d, body = %s", readRec.Code, readRec.Body.String())
+	}
+	latestReq := httptest.NewRequest(http.MethodGet, "/api/shop-targets/9/sync-jobs/latest", nil)
+	latestRec := httptest.NewRecorder()
+	router.ServeHTTP(latestRec, latestReq)
+	if latestRec.Code != http.StatusOK {
+		t.Fatalf("latest status = %d, body = %s", latestRec.Code, latestRec.Body.String())
 	}
 }

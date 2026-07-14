@@ -83,6 +83,56 @@ func TestAggregateBalanceTrend(t *testing.T) {
 	}
 }
 
+func TestShopSyncJobsLifecycle(t *testing.T) {
+	db := openTestDB(t)
+	jobs := NewShopSyncJobs(db)
+	job := &ShopSyncJob{TargetID: 9, Status: ShopSyncJobQueued}
+	if err := jobs.Create(job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	active, err := jobs.FindActiveByTarget(9)
+	if err != nil {
+		t.Fatalf("find active job: %v", err)
+	}
+	if active == nil || active.ID != job.ID || active.Status != ShopSyncJobQueued {
+		t.Fatalf("active job = %#v", active)
+	}
+
+	startedAt := time.Now().Add(-2 * time.Second)
+	if err := jobs.MarkRunning(job.ID, startedAt); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	finishedAt := time.Now()
+	if err := jobs.Complete(job.ID, ShopSyncJobSucceeded, 3, 1, map[string]int{"stock_changed": 1}, "", startedAt, finishedAt); err != nil {
+		t.Fatalf("complete job: %v", err)
+	}
+	latest, err := jobs.FindLatestByTarget(9)
+	if err != nil {
+		t.Fatalf("find latest job: %v", err)
+	}
+	if latest.Status != ShopSyncJobSucceeded || latest.GoodsCount != 3 || latest.ChangedCount != 1 || latest.DurationMS <= 0 {
+		t.Fatalf("completed job = %#v", latest)
+	}
+	if active, err := jobs.FindActiveByTarget(9); err != nil || active != nil {
+		t.Fatalf("active after completion = %#v, err = %v", active, err)
+	}
+
+	interrupted := &ShopSyncJob{TargetID: 9, Status: ShopSyncJobRunning}
+	if err := jobs.Create(interrupted); err != nil {
+		t.Fatalf("create interrupted job: %v", err)
+	}
+	if err := jobs.MarkInterrupted(); err != nil {
+		t.Fatalf("mark interrupted: %v", err)
+	}
+	restored, err := jobs.FindByTargetAndID(9, interrupted.ID)
+	if err != nil {
+		t.Fatalf("find interrupted job: %v", err)
+	}
+	if restored.Status != ShopSyncJobFailed || restored.ErrorMessage != "服务重启前同步未完成" || restored.FinishedAt == nil {
+		t.Fatalf("restored job = %#v", restored)
+	}
+}
+
 func TestChannelProxyEnabledPersists(t *testing.T) {
 	db := openTestDB(t)
 	channels := NewChannels(db)
