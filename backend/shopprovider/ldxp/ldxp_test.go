@@ -2,7 +2,6 @@ package ldxp
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -144,7 +143,15 @@ func TestClientUsesHTTP1OnlyTransport(t *testing.T) {
 	if transport.ForceAttemptHTTP2 {
 		t.Fatal("ldxp client must keep HTTP/2 disabled for ESA compatibility")
 	}
-	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // local test server certificate
+	if transport.TLSNextProto == nil {
+		t.Fatal("ldxp client must disable the inherited HTTP/2 transport")
+	}
+	if got := transport.TLSClientConfig.NextProtos; len(got) != 1 || got[0] != "http/1.1" {
+		t.Fatalf("TLS ALPN protocols = %v, want [http/1.1]", got)
+	}
+	tlsConfig := transport.TLSClientConfig.Clone()
+	tlsConfig.InsecureSkipVerify = true //nolint:gosec // local test server certificate
+	transport.TLSClientConfig = tlsConfig
 	if _, err := client.Info(context.Background(), shopprovider.Target{BaseURL: server.URL, Token: "TOKEN"}); err != nil {
 		t.Fatalf("info over HTTP/1.1: %v", err)
 	}

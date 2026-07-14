@@ -2,6 +2,7 @@ package ldxp
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -34,9 +35,11 @@ const (
 func New() *Client {
 	jar, _ := cookiejar.New(nil)
 	// The LDXP ESA edge accepts HTTP/1.1 requests that it rejects with Go's
-	// default HTTP/2 fingerprint, so keep this provider on HTTP/1.1 only.
+	// default HTTP/2 fingerprint, so prevent TLS ALPN from negotiating HTTP/2.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ForceAttemptHTTP2 = false
+	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	transport.TLSClientConfig = &tls.Config{NextProtos: []string{"http/1.1"}}
 	return &Client{
 		http: resty.New().
 			SetTimeout(30*time.Second).
