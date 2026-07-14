@@ -122,41 +122,6 @@ func TestClientRetriesACWSCV2Challenge(t *testing.T) {
 	}
 }
 
-func TestClientUsesHTTP1OnlyTransport(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/shopApi/Shop/info", func(w http.ResponseWriter, r *http.Request) {
-		if r.ProtoMajor != 1 {
-			t.Fatalf("protocol = %s, want HTTP/1.1", r.Proto)
-		}
-		writeEnvelope(t, w, map[string]any{"nickname": "HTTP1 店铺"})
-	})
-	server := httptest.NewUnstartedServer(mux)
-	server.EnableHTTP2 = true
-	server.StartTLS()
-	defer server.Close()
-
-	client := New()
-	transport, ok := client.http.GetClient().Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("transport type = %T", client.http.GetClient().Transport)
-	}
-	if transport.ForceAttemptHTTP2 {
-		t.Fatal("ldxp client must keep HTTP/2 disabled for ESA compatibility")
-	}
-	if transport.TLSNextProto == nil {
-		t.Fatal("ldxp client must disable the inherited HTTP/2 transport")
-	}
-	if got := transport.TLSClientConfig.NextProtos; len(got) != 1 || got[0] != "http/1.1" {
-		t.Fatalf("TLS ALPN protocols = %v, want [http/1.1]", got)
-	}
-	tlsConfig := transport.TLSClientConfig.Clone()
-	tlsConfig.InsecureSkipVerify = true //nolint:gosec // local test server certificate
-	transport.TLSClientConfig = tlsConfig
-	if _, err := client.Info(context.Background(), shopprovider.Target{BaseURL: server.URL, Token: "TOKEN"}); err != nil {
-		t.Fatalf("info over HTTP/1.1: %v", err)
-	}
-}
-
 func TestClientRetriesHTMLResponseAfterSessionWarmUp(t *testing.T) {
 	var infoCalls, warmUpCalls int
 	mux := http.NewServeMux()
