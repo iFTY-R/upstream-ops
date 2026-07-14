@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,12 +25,21 @@ type Client struct {
 	http *resty.Client
 }
 
+const (
+	// ESA blocks the historical Ops identifier before the public shop API is reached.
+	legacyOpsUserAgent = "upstream-ops/0.1"
+	browserUserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+)
+
 func New() *Client {
+	jar, _ := cookiejar.New(nil)
 	return &Client{
 		http: resty.New().
 			SetTimeout(30*time.Second).
 			SetHeader("Accept", "application/json").
-			SetHeader("User-Agent", "upstream-ops/0.1"),
+			SetHeader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8").
+			SetHeader("User-Agent", browserUserAgent).
+			SetCookieJar(jar),
 	}
 }
 
@@ -41,8 +53,9 @@ func (c *Client) SetHTTPConfig(cfg shopprovider.HTTPConfig) {
 	if cfg.Timeout > 0 {
 		c.http.SetTimeout(cfg.Timeout)
 	}
-	if strings.TrimSpace(cfg.UserAgent) != "" {
-		c.http.SetHeader("User-Agent", cfg.UserAgent)
+	userAgent := strings.TrimSpace(cfg.UserAgent)
+	if userAgent != "" && userAgent != legacyOpsUserAgent {
+		c.http.SetHeader("User-Agent", userAgent)
 	}
 }
 
@@ -192,15 +205,19 @@ func (c *Client) post(ctx context.Context, target shopprovider.Target, path stri
 	if base == "" {
 		base = strings.TrimRight(target.SiteURL, "/")
 	}
-	resp, err := c.postOnce(ctx, base+path, body, "")
+	endpoint := base + path
+	resp, err := c.postWithChallenge(ctx, endpoint, target.SiteURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("ldxp %s http: %w", path, err)
 	}
-	if cookie, ok := acwSCV2Cookie(resp.Body()); ok {
-		resp, err = c.postOnce(ctx, base+path, body, cookie)
+	if isHTMLResponse(resp) && c.warmUp(ctx, target.SiteURL) == nil {
+		resp, err = c.postWithChallenge(ctx, endpoint, target.SiteURL, body)
 		if err != nil {
-			return nil, fmt.Errorf("ldxp %s acw retry http: %w", path, err)
+			return nil, fmt.Errorf("ldxp %s retry http: %w", path, err)
 		}
+	}
+	if isHTMLResponse(resp) {
+		return nil, ldxpHTMLResponseError(path, resp)
 	}
 	if resp.IsError() {
 		return nil, fmt.Errorf("ldxp %s: http %d: %s", path, resp.StatusCode(), string(resp.Body()))
@@ -223,16 +240,95 @@ func (c *Client) post(ctx context.Context, target shopprovider.Target, path stri
 	return wrapped.Data, nil
 }
 
-func (c *Client) postOnce(ctx context.Context, url string, body any, cookie string) (*resty.Response, error) {
+func (c *Client) postWithChallenge(ctx context.Context, endpoint, siteURL string, body any) (*resty.Response, error) {
+	resp, err := c.postOnce(ctx, endpoint, siteURL, body, "")
+	if err != nil {
+		return nil, err
+	}
+	if cookie, ok := acwSCV2Cookie(resp.Body()); ok {
+		c.rememberCookie(endpoint, cookie)
+		return c.postOnce(ctx, endpoint, siteURL, body, cookie)
+	}
+	return resp, nil
+}
+
+// warmUp refreshes cookies that ESA and the shop session issue on the public page.
+// It is only called after an API request already returned HTML to avoid extra traffic.
+func (c *Client) warmUp(ctx context.Context, siteURL string) error {
+	if strings.TrimSpace(siteURL) == "" {
+		return nil
+	}
+	resp, err := c.getOnce(ctx, siteURL, "")
+	if err != nil {
+		return err
+	}
+	if cookie, ok := acwSCV2Cookie(resp.Body()); ok {
+		c.rememberCookie(siteURL, cookie)
+		_, err = c.getOnce(ctx, siteURL, cookie)
+	}
+	return err
+}
+
+func (c *Client) postOnce(ctx context.Context, endpoint, siteURL string, body any, cookie string) (*resty.Response, error) {
 	req := c.http.R().
 		SetContext(ctx).
 		SetHeader("Content-Type", "application/json;charset=UTF-8").
-		SetHeader("Accept", "application/json").
+		SetHeader("Accept", "application/json, text/plain, */*").
+		SetHeader("Referer", siteURL).
+		SetHeader("Origin", requestOrigin(endpoint)).
 		SetBody(body)
 	if cookie != "" {
 		req.SetHeader("Cookie", cookie)
 	}
-	return req.Post(url)
+	return req.Post(endpoint)
+}
+
+func (c *Client) getOnce(ctx context.Context, endpoint, cookie string) (*resty.Response, error) {
+	req := c.http.R().
+		SetContext(ctx).
+		SetHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	if cookie != "" {
+		req.SetHeader("Cookie", cookie)
+	}
+	return req.Get(endpoint)
+}
+
+func (c *Client) rememberCookie(endpoint, raw string) {
+	name, value, ok := strings.Cut(raw, "=")
+	if !ok || strings.TrimSpace(name) == "" || strings.TrimSpace(value) == "" || c.http.GetClient().Jar == nil {
+		return
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return
+	}
+	c.http.GetClient().Jar.SetCookies(parsed, []*http.Cookie{{Name: name, Value: value, Path: "/"}})
+}
+
+func requestOrigin(endpoint string) string {
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
+
+func isHTMLResponse(resp *resty.Response) bool {
+	if resp == nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(string(resp.Body())), "<")
+}
+
+func ldxpHTMLResponseError(path string, resp *resty.Response) error {
+	body := strings.ToLower(string(resp.Body()))
+	reason := "likely a WAF, anti-bot challenge, or upstream error page"
+	if strings.Contains(body, "http_bot_simple") || strings.Contains(body, "denied by") {
+		reason = "ESA rejected the request as automated"
+	} else if strings.Contains(body, "acw_sc__v2") || strings.Contains(body, "arg1=") {
+		reason = "anti-bot challenge was not accepted"
+	}
+	return fmt.Errorf("ldxp %s: upstream returned HTML (http %d, content-type %q): %s", path, resp.StatusCode(), resp.Header().Get("Content-Type"), reason)
 }
 
 var acwArgRe = regexp.MustCompile(`arg1\s*=\s*['"]([0-9A-Fa-f]{40})['"]`)

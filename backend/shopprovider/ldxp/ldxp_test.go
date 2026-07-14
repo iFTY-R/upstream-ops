@@ -122,6 +122,68 @@ func TestClientRetriesACWSCV2Challenge(t *testing.T) {
 	}
 }
 
+func TestClientRetriesHTMLResponseAfterSessionWarmUp(t *testing.T) {
+	var infoCalls, warmUpCalls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/shop/TOKEN", func(w http.ResponseWriter, r *http.Request) {
+		warmUpCalls++
+		http.SetCookie(w, &http.Cookie{Name: "shop_session", Value: "ready", Path: "/"})
+		_, _ = w.Write([]byte("<html>shop</html>"))
+	})
+	mux.HandleFunc("/shopApi/Shop/info", func(w http.ResponseWriter, r *http.Request) {
+		infoCalls++
+		if r.Header.Get("User-Agent") == legacyOpsUserAgent {
+			t.Fatal("ldxp request should not use the legacy Ops user agent")
+		}
+		if r.Header.Get("Accept-Language") == "" || r.Header.Get("Origin") != "http://"+r.Host {
+			t.Fatalf("browser headers are missing: %+v", r.Header)
+		}
+		if r.Referer() != "http://"+r.Host+"/shop/TOKEN" {
+			t.Fatalf("referer = %q", r.Referer())
+		}
+		if _, err := r.Cookie("shop_session"); err != nil {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("<html><title>403 Forbidden</title><p>Denied by http_bot_simple</p></html>"))
+			return
+		}
+		writeEnvelope(t, w, map[string]any{"nickname": "会话恢复店铺", "goods_count": 1})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := New()
+	info, err := client.Info(context.Background(), shopprovider.Target{
+		BaseURL: server.URL,
+		SiteURL: server.URL + "/shop/TOKEN",
+		Token:   "TOKEN",
+	})
+	if err != nil {
+		t.Fatalf("info after session warm up: %v", err)
+	}
+	if info.Name != "会话恢复店铺" || infoCalls != 2 || warmUpCalls != 1 {
+		t.Fatalf("info = %+v, info calls = %d, warm-up calls = %d", info, infoCalls, warmUpCalls)
+	}
+}
+
+func TestClientReportsHTMLBlockPageClearly(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/shopApi/Shop/info", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><p>Denied by http_bot_simple</p></html>"))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	_, err := New().Info(context.Background(), shopprovider.Target{BaseURL: server.URL, Token: "TOKEN"})
+	if err == nil {
+		t.Fatal("expected HTML block page error")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "upstream returned HTML") || !strings.Contains(message, "http 200") || !strings.Contains(message, "ESA rejected the request as automated") {
+		t.Fatalf("error = %q", message)
+	}
+}
+
 func writeEnvelope(t *testing.T, w http.ResponseWriter, data any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
