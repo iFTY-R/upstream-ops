@@ -7,6 +7,7 @@ import { DataPagination } from "@/components/ui/data-pagination"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { apiFetch } from "@/lib/api"
 import { useAllShopGoods, useShopTargets } from "@/lib/queries"
 import { money, relativeTime } from "@/lib/format"
@@ -46,19 +47,22 @@ export default function ShopGoodsPage() {
   const [sort, setSort] = useState<ShopGoodsSort>("category")
   const [keyword, setKeyword] = useState("")
   const [categoryName, setCategoryName] = useState("")
+  const debouncedKeyword = useDebouncedValue(keyword)
+  const debouncedCategoryName = useDebouncedValue(categoryName)
   const [refreshingGoodsKey, setRefreshingGoodsKey] = useState<string | null>(null)
 
   const filters = useMemo(
     () => ({
       target_id: targetID ?? undefined,
-      category_name: categoryName.trim() || undefined,
+      category_name: debouncedCategoryName.trim() || undefined,
       status: inStockOnly ? "in_stock" as ShopGoodsStatus : status,
-      keyword,
+      keyword: debouncedKeyword,
       sort,
     }),
-    [categoryName, inStockOnly, keyword, sort, status, targetID],
+    [debouncedCategoryName, debouncedKeyword, inStockOnly, sort, status, targetID],
   )
-  const goods = useAllShopGoods(page, pageSize, filters)
+  const goodsSearchPending = keyword !== debouncedKeyword || categoryName !== debouncedCategoryName
+  const goods = useAllShopGoods(page, pageSize, filters, !goodsSearchPending)
   const rows = goods.data?.items ?? []
   const total = goods.data?.total ?? 0
   const pages = goods.data?.pages ?? 1
@@ -143,7 +147,7 @@ export default function ShopGoodsPage() {
           <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <Filter className="size-3.5" />
             <span>{"筛选和排序"}</span>
-            {goods.loading ? <span>{"加载中..."}</span> : null}
+            {goods.loading || goodsSearchPending ? <span>{"加载中..."}</span> : null}
           </div>
           <div className="grid gap-2 md:grid-cols-[minmax(160px,220px)_minmax(140px,180px)_minmax(140px,180px)_auto_minmax(180px,1fr)_minmax(180px,1fr)]">
             <Select value={targetID == null ? "all" : String(targetID)} onValueChange={(value) => resetPage(() => setTargetID(value === "all" ? null : Number(value)))}>

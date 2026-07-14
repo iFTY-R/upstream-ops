@@ -303,14 +303,16 @@ function shopGoodsQuery(page: number, pageSize: number, filters?: ShopGoodsFilte
   return q.toString()
 }
 
-export function useShopGoods(targetID: number | null, page = 1, pageSize = 20, filters?: ShopGoodsFilters) {
+export function useShopGoods(targetID: number | null, page = 1, pageSize = 20, filters?: ShopGoodsFilters, enabled = true) {
   return useApi<PageResult<ShopGoodsSnapshot>>(
-    targetID == null ? null : `/shop-targets/${targetID}/goods?${shopGoodsQuery(page, pageSize, filters)}`,
+    targetID == null || !enabled ? null : `/shop-targets/${targetID}/goods?${shopGoodsQuery(page, pageSize, filters)}`,
   )
 }
 
-export function useAllShopGoods(page = 1, pageSize = 50, filters?: ShopGoodsFilters) {
-  return useApi<PageResult<ShopGoodsWithTarget>>(`/shop-goods?${shopGoodsQuery(page, pageSize, filters)}`)
+export function useAllShopGoods(page = 1, pageSize = 50, filters?: ShopGoodsFilters, enabled = true) {
+  return useApi<PageResult<ShopGoodsWithTarget>>(
+    enabled ? `/shop-goods?${shopGoodsQuery(page, pageSize, filters)}` : null,
+  )
 }
 
 export function useShopSnapshotCategories(targetID: number | null) {

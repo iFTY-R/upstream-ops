@@ -29,6 +29,7 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ShopWatchRulesDrawer, type ShopWatchSeed } from "@/components/monitor/shop-watch-rules-drawer"
+import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { apiFetch } from "@/lib/api"
 import { useShopChangeLogs, useShopGoods, useShopMonitorLogs, useShopSnapshotCategories, useShopTargets, useShopWatchRules } from "@/lib/queries"
 import { useTriggerRefresh } from "@/lib/refresh-context"
@@ -288,6 +289,7 @@ export default function ShopsPage() {
   const [inStockOnly, setInStockOnly] = useState(false)
   const [goodsSort, setGoodsSort] = useState<ShopGoodsSort>("category")
   const [goodsKeyword, setGoodsKeyword] = useState("")
+  const debouncedGoodsKeyword = useDebouncedValue(goodsKeyword)
   const [highlightedGoodsKey, setHighlightedGoodsKey] = useState<string | null>(null)
   const [watchRulesOpen, setWatchRulesOpen] = useState(false)
   const [watchSeed, setWatchSeed] = useState<ShopWatchSeed | null>(null)
@@ -299,12 +301,13 @@ export default function ShopsPage() {
     () => ({
       category_id: selectedCategoryID ?? undefined,
       status: inStockOnly ? "in_stock" as ShopGoodsStatus : goodsStatus,
-      keyword: goodsKeyword,
+      keyword: debouncedGoodsKeyword,
       sort: goodsSort,
     }),
-    [goodsKeyword, goodsSort, goodsStatus, inStockOnly, selectedCategoryID],
+    [debouncedGoodsKeyword, goodsSort, goodsStatus, inStockOnly, selectedCategoryID],
   )
-  const goods = useShopGoods(selectedID, goodsPage, 25, goodsFilters)
+  const goodsSearchPending = goodsKeyword !== debouncedGoodsKeyword
+  const goods = useShopGoods(selectedID, goodsPage, 25, goodsFilters, !goodsSearchPending)
   const snapshotCategories = useShopSnapshotCategories(selectedID)
   const watchRules = useShopWatchRules(selectedID)
   const changes = useShopChangeLogs(selectedID, changesPage, 20)
@@ -815,7 +818,7 @@ export default function ShopsPage() {
         <div className="min-w-0 space-y-4">
           <GoodsPanel
             target={selected}
-            loading={goods.loading}
+            loading={goods.loading || goodsSearchPending}
             categories={snapshotCategories.data ?? []}
             categoriesLoading={snapshotCategories.loading}
             rows={goods.data?.items ?? []}
@@ -837,7 +840,10 @@ export default function ShopsPage() {
             onInStockOnly={setInStockOnly}
             onSort={setGoodsSort}
             onSaveDefaultSort={saveGoodsSortAsDefault}
-            onKeyword={setGoodsKeyword}
+            onKeyword={(keyword) => {
+              setGoodsKeyword(keyword)
+              setGoodsPage(1)
+            }}
             onClearSearch={clearGoodsSearch}
             onRefreshGoods={refreshGoodsStock}
             onWatchGoods={watchGoods}
