@@ -172,7 +172,7 @@ func TestClientEstablishesSessionBeforeAPIRequest(t *testing.T) {
 	}
 }
 
-func TestClientUsesHTTP11ForTLSRequests(t *testing.T) {
+func TestClientNegotiatesHTTP2ForTLSRequests(t *testing.T) {
 	var protocolMajor int
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		protocolMajor = r.ProtoMajor
@@ -187,8 +187,8 @@ func TestClientUsesHTTP11ForTLSRequests(t *testing.T) {
 	if _, err := client.Info(context.Background(), shopprovider.Target{BaseURL: server.URL, Token: "TOKEN"}); err != nil {
 		t.Fatalf("info: %v", err)
 	}
-	if protocolMajor != 1 {
-		t.Fatalf("protocol major = %d, want 1", protocolMajor)
+	if protocolMajor != 2 {
+		t.Fatalf("protocol major = %d, want 2", protocolMajor)
 	}
 }
 

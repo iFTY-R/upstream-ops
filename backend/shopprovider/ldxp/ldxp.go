@@ -2,7 +2,6 @@ package ldxp
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -38,14 +37,8 @@ const (
 
 func New() *Client {
 	jar, _ := cookiejar.New(nil)
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	// Keep the LDXP request shape aligned with the known-good HTTP/1.1 exchange.
-	// This compatibility setting is limited to LDXP and never affects Ops itself.
-	transport.ForceAttemptHTTP2 = false
-	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 	return &Client{
 		http: resty.New().
-			SetTransport(transport).
 			SetTimeout(30*time.Second).
 			SetHeader("Accept", "application/json").
 			SetHeader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8").
