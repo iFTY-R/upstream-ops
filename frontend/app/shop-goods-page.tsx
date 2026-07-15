@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import { ExternalLink, Filter, Loader2, PackageSearch, RefreshCw, Search, ShoppingCart, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -11,10 +11,15 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { apiFetch } from "@/lib/api"
 import { useAllShopGoods, useShopTargets } from "@/lib/queries"
 import { money, relativeTime } from "@/lib/format"
+import {
+  readAllShopGoodsPreferences,
+  type ShopGoodsStatusFilter,
+  writeAllShopGoodsPreferences,
+} from "@/lib/shop-goods-preferences"
 import { cn } from "@/lib/utils"
 import type { ShopGoodsSort, ShopGoodsStatus, ShopGoodsWithTarget, ShopRefreshGoodsResult } from "@/lib/api-types"
 
-type GoodsStatusFilter = Exclude<ShopGoodsStatus, "in_stock">
+type GoodsStatusFilter = ShopGoodsStatusFilter
 
 const statusLabels: Record<GoodsStatusFilter, string> = {
   all: "全部状态",
@@ -39,14 +44,15 @@ function shopName(row: ShopGoodsWithTarget) {
 
 export default function ShopGoodsPage() {
   const targets = useShopTargets()
+  const [initialPreferences] = useState(readAllShopGoodsPreferences)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(50)
-  const [targetID, setTargetID] = useState<number | null>(null)
-  const [status, setStatus] = useState<GoodsStatusFilter>("all")
-  const [inStockOnly, setInStockOnly] = useState(false)
-  const [sort, setSort] = useState<ShopGoodsSort>("category")
-  const [keyword, setKeyword] = useState("")
-  const [categoryName, setCategoryName] = useState("")
+  const [pageSize, setPageSize] = useState(initialPreferences.pageSize)
+  const [targetID, setTargetID] = useState<number | null>(initialPreferences.targetID)
+  const [status, setStatus] = useState<GoodsStatusFilter>(initialPreferences.status)
+  const [inStockOnly, setInStockOnly] = useState(initialPreferences.inStockOnly)
+  const [sort, setSort] = useState<ShopGoodsSort>(initialPreferences.sort)
+  const [keyword, setKeyword] = useState(initialPreferences.keyword)
+  const [categoryName, setCategoryName] = useState(initialPreferences.categoryName)
   const debouncedKeyword = useDebouncedValue(keyword)
   const debouncedCategoryName = useDebouncedValue(categoryName)
   const [refreshingGoodsKey, setRefreshingGoodsKey] = useState<string | null>(null)
@@ -66,7 +72,11 @@ export default function ShopGoodsPage() {
   const rows = goods.data?.items ?? []
   const total = goods.data?.total ?? 0
   const pages = goods.data?.pages ?? 1
-  const activeFilters = targetID !== null || status !== "all" || inStockOnly || sort !== "category" || keyword.trim() !== "" || categoryName.trim() !== ""
+  const activeFilters = targetID !== null || status !== "all" || sort !== "category" || keyword.trim() !== "" || categoryName.trim() !== ""
+
+  useEffect(() => {
+    writeAllShopGoodsPreferences({ targetID, status, inStockOnly, sort, keyword, categoryName, pageSize })
+  }, [categoryName, inStockOnly, keyword, pageSize, sort, status, targetID])
 
   function resetPage(next: () => void) {
     next()

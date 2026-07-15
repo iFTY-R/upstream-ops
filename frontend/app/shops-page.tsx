@@ -34,6 +34,11 @@ import { apiFetch } from "@/lib/api"
 import { useShopChangeLogs, useShopGoods, useShopMonitorLogs, useShopSnapshotCategories, useShopTargets, useShopWatchRules } from "@/lib/queries"
 import { useTriggerRefresh } from "@/lib/refresh-context"
 import { money, relativeTime } from "@/lib/format"
+import {
+  readShopsGoodsPreferences,
+  type ShopGoodsStatusFilter,
+  writeShopsGoodsPreferences,
+} from "@/lib/shop-goods-preferences"
 import { cn } from "@/lib/utils"
 import type {
   ShopGoodsChangeEvent,
@@ -132,7 +137,7 @@ const eventLabels: Record<ShopGoodsChangeEvent, string> = {
   monitor_failed: "失败",
 }
 
-type GoodsStatusFilter = Exclude<ShopGoodsStatus, "in_stock">
+type GoodsStatusFilter = ShopGoodsStatusFilter
 
 const goodsStatusLabels: Record<GoodsStatusFilter, string> = {
   all: "全部状态",
@@ -276,7 +281,8 @@ function shopDisplayName(target: ShopTarget | null) {
 export default function ShopsPage() {
   const targets = useShopTargets()
   const refresh = useTriggerRefresh()
-  const [selectedID, setSelectedID] = useState<number | null>(null)
+  const [initialGoodsPreferences] = useState(readShopsGoodsPreferences)
+  const [selectedID, setSelectedID] = useState<number | null>(initialGoodsPreferences.selectedTargetID)
   const [editing, setEditing] = useState<ShopTarget | null>(null)
   const [formOpen, setFormOpen] = useState(false)
   const [form, setForm] = useState<ShopForm>(emptyForm)
@@ -284,11 +290,19 @@ export default function ShopsPage() {
   const [goodsPage, setGoodsPage] = useState(1)
   const [changesPage, setChangesPage] = useState(1)
   const [logsPage, setLogsPage] = useState(1)
-  const [selectedCategoryID, setSelectedCategoryID] = useState<number | null>(null)
-  const [goodsStatus, setGoodsStatus] = useState<GoodsStatusFilter>("all")
-  const [inStockOnly, setInStockOnly] = useState(false)
-  const [goodsSort, setGoodsSort] = useState<ShopGoodsSort>("category")
-  const [goodsKeyword, setGoodsKeyword] = useState("")
+  const [selectedCategoryID, setSelectedCategoryID] = useState<number | null>(() => {
+    const targetID = initialGoodsPreferences.selectedTargetID
+    return targetID == null ? null : initialGoodsPreferences.categoryIDs[String(targetID)] ?? null
+  })
+  const [goodsStatus, setGoodsStatus] = useState<GoodsStatusFilter>(initialGoodsPreferences.status)
+  const [inStockOnly, setInStockOnly] = useState(initialGoodsPreferences.inStockOnly)
+  const [goodsSort, setGoodsSort] = useState<ShopGoodsSort>(() => {
+    const targetID = initialGoodsPreferences.selectedTargetID
+    return targetID == null ? "category" : initialGoodsPreferences.sorts[String(targetID)] ?? "category"
+  })
+  const [goodsKeyword, setGoodsKeyword] = useState(initialGoodsPreferences.keyword)
+  const [categoryIDs, setCategoryIDs] = useState(initialGoodsPreferences.categoryIDs)
+  const [sorts, setSorts] = useState(initialGoodsPreferences.sorts)
   const debouncedGoodsKeyword = useDebouncedValue(goodsKeyword)
   const [highlightedGoodsKey, setHighlightedGoodsKey] = useState<string | null>(null)
   const [watchRulesOpen, setWatchRulesOpen] = useState(false)
@@ -319,6 +333,29 @@ export default function ShopsPage() {
     [syncJobs],
   )
   const activeSyncJobKey = activeSyncJobs.map((job) => `${job.id}:${job.status}`).join(",")
+
+  function updateSelectedCategory(categoryID: number | null) {
+    setSelectedCategoryID(categoryID)
+    if (selectedID == null) return
+    setCategoryIDs((current) => ({ ...current, [selectedID]: categoryID }))
+  }
+
+  function updateGoodsSort(sort: ShopGoodsSort) {
+    setGoodsSort(sort)
+    if (selectedID == null) return
+    setSorts((current) => ({ ...current, [selectedID]: sort }))
+  }
+
+  useEffect(() => {
+    writeShopsGoodsPreferences({
+      selectedTargetID: selectedID,
+      status: goodsStatus,
+      inStockOnly,
+      keyword: goodsKeyword,
+      categoryIDs,
+      sorts,
+    })
+  }, [categoryIDs, goodsKeyword, goodsStatus, inStockOnly, selectedID, sorts])
 
   function refreshShopData() {
     targets.refetch()
@@ -376,9 +413,9 @@ export default function ShopsPage() {
   }, [activeSyncJobKey])
 
   useEffect(() => {
-    if (selectedID != null) return
-    const first = targets.data?.[0]
-    if (first) setSelectedID(first.id)
+    const list = targets.data ?? []
+    if (list.length === 0 || (selectedID != null && list.some((target) => target.id === selectedID))) return
+    setSelectedID(list[0].id)
   }, [selectedID, targets.data])
 
   useEffect(() => {
@@ -387,13 +424,12 @@ export default function ShopsPage() {
     setGoodsPage(1)
     setChangesPage(1)
     setLogsPage(1)
-    setSelectedCategoryID(null)
-    setGoodsStatus("all")
-    setInStockOnly(false)
-    setGoodsSort(selected?.goods_sort || "category")
-    setGoodsKeyword(preserveLookup ? pendingLookup.goodsKey : "")
+    const preferenceKey = selectedID == null ? "" : String(selectedID)
+    setSelectedCategoryID(categoryIDs[preferenceKey] ?? null)
+    setGoodsSort((sorts[preferenceKey] ?? selected?.goods_sort) || "category")
+    if (preserveLookup) setGoodsKeyword(pendingLookup.goodsKey)
     if (preserveLookup) pendingGoodsLookupRef.current = null
-  }, [selectedID, selected?.goods_sort])
+  }, [categoryIDs, selectedID, selected?.goods_sort, sorts])
 
   useEffect(() => {
     setGoodsPage(1)
@@ -736,7 +772,7 @@ export default function ShopsPage() {
     } else {
       setGoodsKeyword(key)
     }
-    setSelectedCategoryID(null)
+    updateSelectedCategory(null)
     setGoodsStatus("all")
     setInStockOnly(false)
     setGoodsPage(1)
@@ -841,10 +877,10 @@ export default function ShopsPage() {
             highlightedGoodsKey={highlightedGoodsKey}
             watchedGoodsKeys={watchedGoodsKeys}
             rowRefs={goodsRowRefs}
-            onCategory={setSelectedCategoryID}
+            onCategory={updateSelectedCategory}
             onStatus={setGoodsStatus}
             onInStockOnly={setInStockOnly}
-            onSort={setGoodsSort}
+            onSort={updateGoodsSort}
             onSaveDefaultSort={saveGoodsSortAsDefault}
             onKeyword={(keyword) => {
               setGoodsKeyword(keyword)
@@ -1272,7 +1308,7 @@ function GoodsPanel({
   onPage: (page: number) => void
 }) {
   const allCount = categories.reduce((sum, category) => sum + category.goods_count, 0)
-  const activeFilters = selectedCategoryID !== null || status !== "all" || inStockOnly || sort !== "category" || keyword.trim() !== ""
+  const activeFilters = selectedCategoryID !== null || status !== "all" || sort !== "category" || keyword.trim() !== ""
   const selectedCategory = categories.find((category) => category.category_id === selectedCategoryID)
   const selectedCategoryName = selectedCategory ? categoryLabel(selectedCategory) : "全部分类"
   const displayName = shopDisplayName(target)
