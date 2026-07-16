@@ -23,6 +23,7 @@ func registerShopTargets(g *gin.RouterGroup, d *Deps) {
 	gp.POST("", func(c *gin.Context) { createShopTarget(c, d) })
 	gp.POST("/parse-url", func(c *gin.Context) { parseShopURL(c, d) })
 	gp.POST("/sync-all", func(c *gin.Context) { syncAllShopTargets(c, d) })
+	gp.POST("/sync-jobs/status", func(c *gin.Context) { getShopSyncJobsStatus(c, d) })
 	gp.POST("/reorder", func(c *gin.Context) { reorderShopTargets(c, d) })
 	gp.POST("/bulk-notification", func(c *gin.Context) { bulkConfigureShopNotifications(c, d) })
 	gp.GET("/:id", func(c *gin.Context) { getShopTarget(c, d) })
@@ -95,6 +96,26 @@ type shopBulkNotificationResult struct {
 	CreatedRules   int                  `json:"created_rules"`
 	UpdatedRules   int                  `json:"updated_rules"`
 	Targets        []storage.ShopTarget `json:"targets"`
+}
+
+type shopSyncAllJobResult struct {
+	TargetID uint                 `json:"target_id"`
+	Name     string               `json:"name"`
+	Job      *storage.ShopSyncJob `json:"job,omitempty"`
+	Reused   bool                 `json:"reused,omitempty"`
+	Error    string               `json:"error,omitempty"`
+}
+
+type shopSyncAllJobsResult struct {
+	Total   int                    `json:"total"`
+	Queued  int                    `json:"queued"`
+	Reused  int                    `json:"reused"`
+	Failed  int                    `json:"failed"`
+	Targets []shopSyncAllJobResult `json:"targets"`
+}
+
+type shopSyncJobsStatusInput struct {
+	JobIDs []uint `json:"job_ids" binding:"required"`
 }
 
 func listShopTargets(c *gin.Context, d *Deps) {
@@ -467,12 +488,53 @@ func getLatestShopSyncJob(c *gin.Context, d *Deps) {
 	c.JSON(http.StatusOK, gin.H{"data": job})
 }
 
-func syncAllShopTargets(c *gin.Context, d *Deps) {
-	if !shopMonitorReady(c, d) {
+func getShopSyncJobsStatus(c *gin.Context, d *Deps) {
+	if !shopSyncRunnerReady(c, d) {
 		return
 	}
-	result := d.ShopMonitor.SyncAll(c.Request.Context())
-	c.JSON(http.StatusOK, gin.H{"data": result})
+	var in shopSyncJobsStatusInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	jobIDs := cleanUintIDs(in.JobIDs)
+	if len(jobIDs) > 500 {
+		fail(c, http.StatusBadRequest, fmt.Errorf("too many shop sync jobs"))
+		return
+	}
+	jobs, err := d.ShopSyncRunner.GetMany(jobIDs)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": jobs})
+}
+
+func syncAllShopTargets(c *gin.Context, d *Deps) {
+	if !shopSyncRunnerReady(c, d) {
+		return
+	}
+	list, err := d.ShopTargets.ListMonitorEnabled()
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	result := shopSyncAllJobsResult{Total: len(list), Targets: make([]shopSyncAllJobResult, 0, len(list))}
+	for i := range list {
+		target := list[i]
+		job, reused, startErr := d.ShopSyncRunner.Start(target.ID)
+		item := shopSyncAllJobResult{TargetID: target.ID, Name: target.Name, Job: job, Reused: reused}
+		if startErr != nil {
+			item.Error = startErr.Error()
+			result.Failed++
+		} else if reused {
+			result.Reused++
+		} else {
+			result.Queued++
+		}
+		result.Targets = append(result.Targets, item)
+	}
+	c.JSON(http.StatusAccepted, gin.H{"data": result})
 }
 
 func shopTargetCategories(c *gin.Context, d *Deps) {
@@ -864,10 +926,7 @@ func shopMonitorReady(c *gin.Context, d *Deps) bool {
 }
 
 func shopSyncRunnerReady(c *gin.Context, d *Deps) bool {
-	if !shopReposReady(c, d) {
-		return false
-	}
-	if d.ShopSyncRunner == nil {
+	if d.ShopTargets == nil || d.ShopSyncRunner == nil {
 		fail(c, http.StatusInternalServerError, fmt.Errorf("shop sync job runner is not configured"))
 		return false
 	}

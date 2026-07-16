@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ifty-r/upstream-ops/backend/shopprovider"
 )
@@ -172,6 +174,62 @@ func TestClientEstablishesSessionBeforeAPIRequest(t *testing.T) {
 	}
 }
 
+func TestClientWarmsOriginOnceAcrossShopURLs(t *testing.T) {
+	var warmUpCalls, infoCalls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/shop/", func(w http.ResponseWriter, r *http.Request) {
+		warmUpCalls++
+		http.SetCookie(w, &http.Cookie{Name: "shop_session", Value: "ready", Path: "/"})
+		_, _ = w.Write([]byte("<html>shop</html>"))
+	})
+	mux.HandleFunc("/shopApi/Shop/info", func(w http.ResponseWriter, r *http.Request) {
+		infoCalls++
+		if _, err := r.Cookie("shop_session"); err != nil {
+			t.Fatalf("shared origin session cookie missing: %v", err)
+		}
+		writeEnvelope(t, w, map[string]any{"nickname": "shared"})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := New()
+	for _, token := range []string{"A", "B"} {
+		if _, err := client.Info(context.Background(), shopprovider.Target{
+			BaseURL: server.URL,
+			SiteURL: server.URL + "/shop/" + token,
+			Token:   token,
+		}); err != nil {
+			t.Fatalf("info %s: %v", token, err)
+		}
+	}
+	if warmUpCalls != 1 || infoCalls != 2 {
+		t.Fatalf("warm-up calls = %d, info calls = %d; want 1 and 2", warmUpCalls, infoCalls)
+	}
+}
+
+func TestClientSpacesRequestsWithinSharedSession(t *testing.T) {
+	var requestTimes []time.Time
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestTimes = append(requestTimes, time.Now())
+		writeEnvelope(t, w, map[string]any{"nickname": "paced"})
+	}))
+	defer server.Close()
+
+	client := New()
+	client.SetHTTPConfig(shopprovider.HTTPConfig{RequestInterval: 50 * time.Millisecond})
+	for _, token := range []string{"A", "B"} {
+		if _, err := client.Info(context.Background(), shopprovider.Target{BaseURL: server.URL, Token: token}); err != nil {
+			t.Fatalf("info %s: %v", token, err)
+		}
+	}
+	if len(requestTimes) != 2 {
+		t.Fatalf("request times = %d, want 2", len(requestTimes))
+	}
+	if spacing := requestTimes[1].Sub(requestTimes[0]); spacing < 40*time.Millisecond {
+		t.Fatalf("request spacing = %s, want at least 40ms", spacing)
+	}
+}
+
 func TestClientNegotiatesHTTP2ForTLSRequests(t *testing.T) {
 	var protocolMajor int
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -208,6 +266,10 @@ func TestClientReportsHTMLBlockPageClearly(t *testing.T) {
 	message := err.Error()
 	if !strings.Contains(message, "upstream returned HTML") || !strings.Contains(message, "http 200") || !strings.Contains(message, "ESA rejected the request as automated") {
 		t.Fatalf("error = %q", message)
+	}
+	var blocked *shopprovider.UpstreamBlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("error type = %T, want *shopprovider.UpstreamBlockedError", err)
 	}
 }
 

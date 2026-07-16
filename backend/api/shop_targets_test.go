@@ -372,11 +372,13 @@ func TestListAllShopGoodsReturnsTargetMetadata(t *testing.T) {
 }
 
 type fakeShopSyncJobRunner struct {
-	job    *storage.ShopSyncJob
-	reused bool
+	job     *storage.ShopSyncJob
+	reused  bool
+	started []uint
 }
 
 func (r *fakeShopSyncJobRunner) Start(targetID uint) (*storage.ShopSyncJob, bool, error) {
+	r.started = append(r.started, targetID)
 	job := *r.job
 	job.TargetID = targetID
 	r.job = &job
@@ -395,6 +397,18 @@ func (r *fakeShopSyncJobRunner) Latest(targetID uint) (*storage.ShopSyncJob, err
 		return r.job, nil
 	}
 	return nil, gorm.ErrRecordNotFound
+}
+
+func (r *fakeShopSyncJobRunner) GetMany(jobIDs []uint) ([]storage.ShopSyncJob, error) {
+	if r.job == nil {
+		return nil, nil
+	}
+	for _, id := range jobIDs {
+		if r.job.ID == id {
+			return []storage.ShopSyncJob{*r.job}, nil
+		}
+	}
+	return nil, nil
 }
 
 func TestShopSyncJobEndpointsStartAndReadJob(t *testing.T) {
@@ -440,5 +454,56 @@ func TestShopSyncJobEndpointsStartAndReadJob(t *testing.T) {
 	router.ServeHTTP(latestRec, latestReq)
 	if latestRec.Code != http.StatusOK {
 		t.Fatalf("latest status = %d, body = %s", latestRec.Code, latestRec.Body.String())
+	}
+
+	statusReq := httptest.NewRequest(http.MethodPost, "/api/shop-targets/sync-jobs/status", strings.NewReader(`{"job_ids":[12]}`))
+	statusReq.Header.Set("Content-Type", "application/json")
+	statusRec := httptest.NewRecorder()
+	router.ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("batch status = %d, body = %s", statusRec.Code, statusRec.Body.String())
+	}
+}
+
+func TestSyncAllShopTargetsQueuesBackgroundJobs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openTestDB(t)
+	targets := storage.NewShopTargets(db)
+	for _, name := range []string{"shop-a", "shop-b"} {
+		if err := targets.Create(&storage.ShopTarget{
+			Name:           name,
+			Platform:       storage.ShopPlatformLDXP,
+			SiteURL:        "https://pay.ldxp.cn/shop/" + name,
+			BaseURL:        "https://pay.ldxp.cn",
+			Token:          name,
+			MonitorEnabled: true,
+		}); err != nil {
+			t.Fatalf("create target %s: %v", name, err)
+		}
+	}
+	runner := &fakeShopSyncJobRunner{job: &storage.ShopSyncJob{ID: 20, Status: storage.ShopSyncJobQueued}}
+	router := gin.New()
+	registerShopTargets(router.Group("/api"), &Deps{ShopTargets: targets, ShopSyncRunner: runner})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/shop-targets/sync-all", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if len(runner.started) != 2 {
+		t.Fatalf("started jobs = %v, want two", runner.started)
+	}
+	var resp struct {
+		Data struct {
+			Total  int `json:"total"`
+			Queued int `json:"queued"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Data.Total != 2 || resp.Data.Queued != 2 {
+		t.Fatalf("response = %#v", resp.Data)
 	}
 }

@@ -2,6 +2,7 @@ package shopprovider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -92,12 +93,40 @@ type ProxySetter interface {
 }
 
 type HTTPConfig struct {
-	Timeout   time.Duration
-	UserAgent string
+	Timeout         time.Duration
+	UserAgent       string
+	RequestInterval time.Duration
 }
 
 type HTTPConfigSetter interface {
 	SetHTTPConfig(cfg HTTPConfig)
+}
+
+// UpstreamBlockedError marks an origin-wide rejection such as a WAF challenge.
+// Bulk synchronization may stop calling the same origin for the rest of the run,
+// while single-target operations still return the original error unchanged.
+type UpstreamBlockedError struct {
+	Err error
+}
+
+func (e *UpstreamBlockedError) Error() string {
+	if e == nil || e.Err == nil {
+		return "shop upstream blocked the request"
+	}
+	return e.Err.Error()
+}
+
+func (e *UpstreamBlockedError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// IsUpstreamBlocked reports whether a provider rejected the request at origin scope.
+func IsUpstreamBlocked(err error) bool {
+	var blocked *UpstreamBlockedError
+	return errors.As(err, &blocked)
 }
 
 type Factory func() Provider

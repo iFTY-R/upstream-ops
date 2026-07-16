@@ -428,7 +428,7 @@ Config additions:
 ```yaml
 shopMonitor:
   enabled: true
-  cron: "41 */10 * * * *"
+  cron: "41 7,37 8-22 * * *"
   concurrency: 2
 ```
 

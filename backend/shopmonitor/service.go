@@ -3,8 +3,10 @@ package shopmonitor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,14 +27,39 @@ type Service struct {
 	log        *slog.Logger
 	mu         sync.RWMutex
 	locks      sync.Map
+	providerMu sync.Mutex
+	providers  map[string]shopprovider.Provider
+	activeSync sync.Map
+	originMu   sync.Mutex
+	origins    map[string]*shopOriginState
 	proxy      config.ProxyConfig
 	upstream   config.UpstreamConfig
 }
 
 const (
-	shopGoodsPageSize = 50
-	maxShopGoodsPages = 1000
+	shopGoodsPageSize       = 50
+	maxShopGoodsPages       = 1000
+	shopOriginBlockCooldown = 15 * time.Minute
 )
+
+// ErrShopSyncAlreadyRunning prevents queued, scheduled, and manual operations
+// from executing the same target again after waiting for its lock.
+var ErrShopSyncAlreadyRunning = errors.New("shop sync already running")
+
+type shopOriginState struct {
+	mu            sync.Mutex
+	blockedUntil  time.Time
+	blockedReason string
+}
+
+type shopOriginCooldownError struct {
+	until  time.Time
+	reason string
+}
+
+func (e *shopOriginCooldownError) Error() string {
+	return fmt.Sprintf("同一店铺上游暂时不可用，本次同步已跳过（冷却至 %s）：%s", e.until.Format(time.RFC3339), e.reason)
+}
 
 func NewService(
 	targets *storage.ShopTargets,
@@ -49,6 +76,8 @@ func NewService(
 		goods:      goods,
 		dispatcher: dispatcher,
 		log:        log,
+		providers:  make(map[string]shopprovider.Provider),
+		origins:    make(map[string]*shopOriginState),
 		proxy:      proxy,
 		upstream:   upstream.WithDefaults(),
 	}
@@ -56,14 +85,16 @@ func NewService(
 
 func (s *Service) UpdateProxyConfig(cfg config.ProxyConfig) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.proxy = cfg
+	s.mu.Unlock()
+	s.clearProviderCache()
 }
 
 func (s *Service) UpdateUpstreamConfig(cfg config.UpstreamConfig) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.upstream = cfg.WithDefaults()
+	s.mu.Unlock()
+	s.clearProviderCache()
 }
 
 type TestResult struct {
@@ -96,13 +127,20 @@ type SyncAllTargetResult struct {
 	Name     string      `json:"name"`
 	Result   *SyncResult `json:"result,omitempty"`
 	Error    string      `json:"error,omitempty"`
+	Skipped  bool        `json:"skipped,omitempty"`
 }
 
 type SyncAllResult struct {
 	Total   int                   `json:"total"`
 	Success int                   `json:"success"`
 	Failed  int                   `json:"failed"`
+	Skipped int                   `json:"skipped"`
 	Targets []SyncAllTargetResult `json:"targets"`
+}
+
+type syncAllUpstreamState struct {
+	mu            sync.Mutex
+	blockedReason string
 }
 
 func (s *Service) ParseURL(siteURL string) (*shopprovider.ParsedURL, error) {
@@ -226,6 +264,13 @@ func (s *Service) SyncAllWithConcurrency(ctx context.Context, concurrency int) *
 	}
 
 	out.Targets = make([]SyncAllTargetResult, len(list))
+	upstreams := make(map[string]*syncAllUpstreamState, len(list))
+	for i := range list {
+		key := syncAllUpstreamKey(list[i])
+		if _, exists := upstreams[key]; !exists {
+			upstreams[key] = &syncAllUpstreamState{}
+		}
+	}
 	jobs := make(chan int)
 	var workers sync.WaitGroup
 	for worker := 0; worker < concurrency; worker++ {
@@ -234,15 +279,33 @@ func (s *Service) SyncAllWithConcurrency(ctx context.Context, concurrency int) *
 			defer workers.Done()
 			for index := range jobs {
 				target := list[index]
+				upstream := upstreams[syncAllUpstreamKey(target)]
+				upstream.mu.Lock()
+				if upstream.blockedReason != "" {
+					out.Targets[index] = SyncAllTargetResult{
+						TargetID: target.ID,
+						Name:     target.Name,
+						Error:    fmt.Sprintf("本批次已跳过：同一店铺上游不可用（%s）", upstream.blockedReason),
+						Skipped:  true,
+					}
+					upstream.mu.Unlock()
+					continue
+				}
 				result, syncErr := s.Sync(ctx, &target)
 				item := SyncAllTargetResult{TargetID: target.ID, Name: target.Name, Result: result}
 				if syncErr != nil {
 					item.Error = syncErr.Error()
-					if s.log != nil {
+					if isSkippedSyncError(syncErr) {
+						item.Skipped = true
+					} else if shopprovider.IsUpstreamBlocked(syncErr) {
+						upstream.blockedReason = syncErr.Error()
+					}
+					if s.log != nil && !item.Skipped {
 						s.log.Warn("shop sync failed", "target", target.Name, "err", syncErr)
 					}
 				}
 				out.Targets[index] = item
+				upstream.mu.Unlock()
 			}
 		}()
 	}
@@ -252,7 +315,9 @@ func (s *Service) SyncAllWithConcurrency(ctx context.Context, concurrency int) *
 	close(jobs)
 	workers.Wait()
 	for _, item := range out.Targets {
-		if item.Error == "" {
+		if item.Skipped {
+			out.Skipped++
+		} else if item.Error == "" {
 			out.Success++
 		} else {
 			out.Failed++
@@ -261,12 +326,29 @@ func (s *Service) SyncAllWithConcurrency(ctx context.Context, concurrency int) *
 	return out
 }
 
+func syncAllUpstreamKey(target storage.ShopTarget) string {
+	base := strings.TrimSpace(target.BaseURL)
+	if base == "" {
+		base = strings.TrimSpace(target.SiteURL)
+	}
+	if parsed, err := url.Parse(base); err == nil && parsed.Host != "" {
+		base = strings.ToLower(parsed.Scheme + "://" + parsed.Host)
+	} else {
+		base = strings.ToLower(strings.TrimRight(base, "/"))
+	}
+	return fmt.Sprintf("%s|%s|proxy=%t", target.Platform, base, target.ProxyEnabled)
+}
+
 func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncResult, error) {
 	started := time.Now()
 	result := &SyncResult{Events: map[string]int{}}
 	if target == nil {
 		return result, fmt.Errorf("shop target is nil")
 	}
+	if _, active := s.activeSync.LoadOrStore(target.ID, struct{}{}); active {
+		return result, fmt.Errorf("%w: target %d", ErrShopSyncAlreadyRunning, target.ID)
+	}
+	defer s.activeSync.Delete(target.ID)
 	unlock := s.lockTarget(target.ID)
 	defer unlock()
 	// The target may have been deleted while this caller waited for its lock.
@@ -275,15 +357,25 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 		return result, err
 	}
 	target = currentTarget
+	origin := s.originState(syncAllUpstreamKey(*target))
+	origin.mu.Lock()
+	defer origin.mu.Unlock()
+	if time.Now().Before(origin.blockedUntil) {
+		return result, &shopOriginCooldownError{until: origin.blockedUntil, reason: origin.blockedReason}
+	}
+	origin.blockedUntil = time.Time{}
+	origin.blockedReason = ""
 
 	provider, starget, err := s.providerFor(target)
 	if err != nil {
+		s.blockOrigin(origin, err)
 		s.recordFailure(target, started, err)
 		return result, err
 	}
 
-	info, err := provider.Info(ctx, starget)
+	info, infoRefreshedAt, err := s.shopInfoForSync(ctx, provider, starget, target)
 	if err != nil {
+		s.blockOrigin(origin, err)
 		s.recordFailure(target, started, err)
 		s.notifyFailure(ctx, target, err)
 		return result, err
@@ -291,6 +383,7 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 
 	fetched, err := s.fetchGoods(ctx, provider, starget, target)
 	if err != nil {
+		s.blockOrigin(origin, err)
 		s.recordFailure(target, started, err)
 		s.notifyFailure(ctx, target, err)
 		return result, err
@@ -308,7 +401,7 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 	}
 
 	finished := time.Now()
-	if err := s.targets.SetSyncResult(target.ID, &finished, "", info.Name, result.GoodsCount, lowStockCount, result.ChangedCount); err != nil {
+	if err := s.targets.SetSyncResultWithInfoAt(target.ID, &finished, infoRefreshedAt, "", info.Name, result.GoodsCount, lowStockCount, result.ChangedCount); err != nil {
 		return result, fmt.Errorf("保存店铺同步结果失败：%w", err)
 	}
 	if err := s.goods.AppendMonitorLog(&storage.ShopMonitorLog{
@@ -348,32 +441,44 @@ func (s *Service) lockTarget(targetID uint) func() {
 }
 
 func (s *Service) providerFor(target *storage.ShopTarget) (shopprovider.Provider, shopprovider.Target, error) {
-	provider, err := shopprovider.For(target.Platform)
-	if err != nil {
-		return nil, shopprovider.Target{}, err
-	}
 	s.mu.RLock()
-	upstream := s.upstream
+	upstream := s.upstream.WithDefaults()
 	proxy := s.proxy
 	s.mu.RUnlock()
-	if setter, ok := provider.(shopprovider.HTTPConfigSetter); ok {
-		upstream = upstream.WithDefaults()
-		setter.SetHTTPConfig(shopprovider.HTTPConfig{
-			Timeout:   time.Duration(upstream.TimeoutSeconds) * time.Second,
-			UserAgent: upstream.UserAgent,
-		})
-	}
+	proxyURL := ""
 	if target.ProxyEnabled {
-		proxyURL, err := proxy.ActiveURL()
+		var err error
+		proxyURL, err = proxy.ActiveURL()
 		if err != nil {
 			return nil, shopprovider.Target{}, err
+		}
+	}
+
+	cacheKey := syncAllUpstreamKey(*target)
+	s.providerMu.Lock()
+	provider := s.providers[cacheKey]
+	if provider == nil {
+		var err error
+		provider, err = shopprovider.For(target.Platform)
+		if err != nil {
+			s.providerMu.Unlock()
+			return nil, shopprovider.Target{}, err
+		}
+		if setter, ok := provider.(shopprovider.HTTPConfigSetter); ok {
+			setter.SetHTTPConfig(shopprovider.HTTPConfig{
+				Timeout:         time.Duration(upstream.TimeoutSeconds) * time.Second,
+				UserAgent:       upstream.UserAgent,
+				RequestInterval: time.Duration(upstream.ShopRequestIntervalMilliseconds) * time.Millisecond,
+			})
 		}
 		if proxyURL != "" {
 			if setter, ok := provider.(shopprovider.ProxySetter); ok {
 				setter.SetProxy(proxyURL)
 			}
 		}
+		s.providers[cacheKey] = provider
 	}
+	s.providerMu.Unlock()
 	return provider, shopprovider.Target{
 		ID:       target.ID,
 		Name:     target.Name,
@@ -382,6 +487,94 @@ func (s *Service) providerFor(target *storage.ShopTarget) (shopprovider.Provider
 		BaseURL:  target.BaseURL,
 		Token:    target.Token,
 	}, nil
+}
+
+func (s *Service) clearProviderCache() {
+	s.providerMu.Lock()
+	s.providers = make(map[string]shopprovider.Provider)
+	s.providerMu.Unlock()
+	s.originMu.Lock()
+	states := make([]*shopOriginState, 0, len(s.origins))
+	for _, state := range s.origins {
+		states = append(states, state)
+	}
+	s.originMu.Unlock()
+	for _, state := range states {
+		state.mu.Lock()
+		state.blockedUntil = time.Time{}
+		state.blockedReason = ""
+		state.mu.Unlock()
+	}
+}
+
+func (s *Service) originState(key string) *shopOriginState {
+	s.originMu.Lock()
+	defer s.originMu.Unlock()
+	state := s.origins[key]
+	if state == nil {
+		state = &shopOriginState{}
+		s.origins[key] = state
+	}
+	return state
+}
+
+func (s *Service) blockOrigin(state *shopOriginState, err error) {
+	if state == nil || !shopprovider.IsUpstreamBlocked(err) {
+		return
+	}
+	state.blockedUntil = time.Now().Add(shopOriginBlockCooldown)
+	state.blockedReason = err.Error()
+}
+
+func isSkippedSyncError(err error) bool {
+	var cooldown *shopOriginCooldownError
+	return errors.Is(err, ErrShopSyncAlreadyRunning) || errors.As(err, &cooldown)
+}
+
+func (s *Service) shopInfoForSync(
+	ctx context.Context,
+	provider shopprovider.Provider,
+	starget shopprovider.Target,
+	target *storage.ShopTarget,
+) (*shopprovider.ShopInfo, *time.Time, error) {
+	now := time.Now()
+	if info := s.cachedShopInfo(target, now); info != nil {
+		return info, nil, nil
+	}
+	info, err := provider.Info(ctx, starget)
+	if err != nil {
+		return nil, nil, err
+	}
+	if strings.TrimSpace(info.Name) == "" {
+		info.Name = strings.TrimSpace(target.LastShopName)
+		if info.Name == "" {
+			info.Name = target.Name
+		}
+	}
+	return info, &now, nil
+}
+
+func (s *Service) cachedShopInfo(target *storage.ShopTarget, now time.Time) *shopprovider.ShopInfo {
+	if target == nil || strings.TrimSpace(target.LastShopName) == "" {
+		return nil
+	}
+	s.mu.RLock()
+	ttl := time.Duration(s.upstream.WithDefaults().ShopInfoTTLHours) * time.Hour
+	s.mu.RUnlock()
+	refreshedAt := target.LastInfoAt
+	// Existing databases did not track metadata refreshes separately. A prior
+	// successful sync is a safe compatibility baseline for the first TTL window.
+	if refreshedAt == nil {
+		refreshedAt = target.LastSyncAt
+	}
+	if refreshedAt == nil || now.Sub(*refreshedAt) > ttl {
+		return nil
+	}
+	return &shopprovider.ShopInfo{
+		Name:       target.LastShopName,
+		Link:       target.SiteURL,
+		GoodsCount: target.LastGoodsCount,
+	}
 }
 
 func (s *Service) fetchGoods(ctx context.Context, provider shopprovider.Provider, starget shopprovider.Target, target *storage.ShopTarget) (map[string]shopprovider.Goods, error) {

@@ -79,6 +79,12 @@ function normalizeSystemConfig(config: SystemConfig): SystemConfig {
         probeConcurrency: config.scheduler.autoGroup?.probeConcurrency ?? 1,
       },
     },
+    upstream: {
+      ...config.upstream,
+      userAgent: config.upstream.userAgent === "upstream-ops/0.1" ? "" : config.upstream.userAgent,
+      shopRequestIntervalMilliseconds: config.upstream.shopRequestIntervalMilliseconds ?? 1500,
+      shopInfoTTLHours: config.upstream.shopInfoTTLHours ?? 24,
+    },
   };
 }
 
@@ -1152,7 +1158,7 @@ export default function SettingsPage() {
           <SectionCard
             icon={<Server className="size-4 text-indigo-600" />}
             title="上游请求"
-            description="配置渠道访问上游站点时使用的超时时间和 User-Agent。"
+            description="配置上游访问参数和店铺请求节奏。"
           >
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="超时时间（秒）" description="小于等于 0 时使用默认 30 秒。">
@@ -1175,10 +1181,10 @@ export default function SettingsPage() {
                   }
                 />
               </Field>
-              <Field label="User-Agent" description="为空时使用 upstream-ops/0.1。">
+              <Field label="User-Agent" description="留空时由不同类型的上游连接器选择合适的默认值。">
                 <Input
                   value={form.upstream.userAgent}
-                  placeholder="upstream-ops/0.1"
+                  placeholder="使用连接器默认值"
                   onChange={(e) =>
                     setForm((prev) =>
                       prev
@@ -1187,6 +1193,47 @@ export default function SettingsPage() {
                             upstream: {
                               ...prev.upstream,
                               userAgent: e.target.value,
+                            },
+                          }
+                        : prev,
+                    )
+                  }
+                />
+              </Field>
+              <Field label="店铺请求间隔（毫秒）" description="同一店铺域名的请求最小间隔，默认 1500 毫秒。">
+                <Input
+                  type="number"
+                  min={100}
+                  step={100}
+                  value={String(form.upstream.shopRequestIntervalMilliseconds)}
+                  onChange={(e) =>
+                    setForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            upstream: {
+                              ...prev.upstream,
+                              shopRequestIntervalMilliseconds: Math.max(100, num(e.target.value)),
+                            },
+                          }
+                        : prev,
+                    )
+                  }
+                />
+              </Field>
+              <Field label="店铺信息缓存（小时）" description="缓存有效时库存同步不再调用店铺信息接口。">
+                <Input
+                  type="number"
+                  min={1}
+                  value={String(form.upstream.shopInfoTTLHours)}
+                  onChange={(e) =>
+                    setForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            upstream: {
+                              ...prev.upstream,
+                              shopInfoTTLHours: Math.max(1, num(e.target.value)),
                             },
                           }
                         : prev,

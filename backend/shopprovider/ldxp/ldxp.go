@@ -25,8 +25,11 @@ func init() {
 type Client struct {
 	http *resty.Client
 
-	sessionMu   sync.Mutex
-	warmedSites map[string]struct{}
+	sessionMu     sync.Mutex
+	warmedOrigins map[string]struct{}
+	requestMu     sync.Mutex
+	requestEvery  time.Duration
+	lastRequestAt time.Time
 }
 
 const (
@@ -44,7 +47,7 @@ func New() *Client {
 			SetHeader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8").
 			SetHeader("User-Agent", browserUserAgent).
 			SetCookieJar(jar),
-		warmedSites: make(map[string]struct{}),
+		warmedOrigins: make(map[string]struct{}),
 	}
 }
 
@@ -62,6 +65,9 @@ func (c *Client) SetHTTPConfig(cfg shopprovider.HTTPConfig) {
 	if userAgent != "" && userAgent != legacyOpsUserAgent {
 		c.http.SetHeader("User-Agent", userAgent)
 	}
+	c.requestMu.Lock()
+	c.requestEvery = cfg.RequestInterval
+	c.requestMu.Unlock()
 }
 
 type envelope struct {
@@ -254,15 +260,18 @@ func (c *Client) prepareSession(ctx context.Context, siteURL string) {
 	if siteURL == "" {
 		return
 	}
-	c.sessionMu.Lock()
-	_, warmed := c.warmedSites[siteURL]
-	c.sessionMu.Unlock()
-	if warmed || c.warmUp(ctx, siteURL) != nil {
-		return
+	origin := requestOrigin(siteURL)
+	if origin == "" {
+		origin = siteURL
 	}
 	c.sessionMu.Lock()
-	c.warmedSites[siteURL] = struct{}{}
-	c.sessionMu.Unlock()
+	defer c.sessionMu.Unlock()
+	if _, warmed := c.warmedOrigins[origin]; warmed {
+		return
+	}
+	if c.warmUp(ctx, siteURL) == nil {
+		c.warmedOrigins[origin] = struct{}{}
+	}
 }
 
 func (c *Client) postWithChallenge(ctx context.Context, endpoint, siteURL string, body any) (*resty.Response, error) {
@@ -307,7 +316,7 @@ func (c *Client) postOnce(ctx context.Context, endpoint, siteURL string, body an
 	if cookie != "" {
 		req.SetHeader("Cookie", cookie)
 	}
-	return req.Post(endpoint)
+	return c.doRequest(ctx, func() (*resty.Response, error) { return req.Post(endpoint) })
 }
 
 func (c *Client) getOnce(ctx context.Context, endpoint, cookie string) (*resty.Response, error) {
@@ -322,7 +331,29 @@ func (c *Client) getOnce(ctx context.Context, endpoint, cookie string) (*resty.R
 	if cookie != "" {
 		req.SetHeader("Cookie", cookie)
 	}
-	return req.Get(endpoint)
+	return c.doRequest(ctx, func() (*resty.Response, error) { return req.Get(endpoint) })
+}
+
+// doRequest serializes one origin session and spaces request starts. Keeping
+// this inside the provider also covers retries and warm-up requests.
+func (c *Client) doRequest(ctx context.Context, send func() (*resty.Response, error)) (*resty.Response, error) {
+	c.requestMu.Lock()
+	defer c.requestMu.Unlock()
+	spacing := c.requestEvery
+	if jitterMax := min(c.requestEvery/3, 500*time.Millisecond); jitterMax > 0 {
+		spacing += time.Duration(time.Now().UnixNano() % int64(jitterMax))
+	}
+	if wait := spacing - time.Since(c.lastRequestAt); c.requestEvery > 0 && !c.lastRequestAt.IsZero() && wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	c.lastRequestAt = time.Now()
+	return send()
 }
 
 func (c *Client) rememberCookie(endpoint, raw string) {
@@ -360,7 +391,13 @@ func ldxpHTMLResponseError(path string, resp *resty.Response) error {
 	} else if strings.Contains(body, "acw_sc__v2") || strings.Contains(body, "arg1=") {
 		reason = "anti-bot challenge was not accepted"
 	}
-	return fmt.Errorf("ldxp %s: upstream returned HTML (http %d, content-type %q): %s", path, resp.StatusCode(), resp.Header().Get("Content-Type"), reason)
+	return &shopprovider.UpstreamBlockedError{Err: fmt.Errorf(
+		"ldxp %s: upstream returned HTML (http %d, content-type %q): %s",
+		path,
+		resp.StatusCode(),
+		resp.Header().Get("Content-Type"),
+		reason,
+	)}
 }
 
 var acwArgRe = regexp.MustCompile(`arg1\s*=\s*['"]([0-9A-Fa-f]{40})['"]`)

@@ -397,7 +397,7 @@ pnpm build
 
 ## 代理与上游 HTTP 配置
 
-系统设置页可以配置全局代理和上游请求参数。代理默认关闭，协议默认 `http`；上游请求超时默认 `30` 秒，`User-Agent` 默认 `upstream-ops/0.1`。
+系统设置页可以配置全局代理和上游请求参数。代理默认关闭，协议默认 `http`；上游请求超时默认 `30` 秒，`User-Agent` 默认留空并由各连接器选择合适值。
 
 配置文件字段：
 
@@ -413,7 +413,9 @@ proxy:
 
 upstream:
   timeoutSeconds: 30
-  userAgent: upstream-ops/0.1
+  userAgent: ""
+  shopRequestIntervalMilliseconds: 1500
+  shopInfoTTLHours: 24
 ```
 
 - `proxy.enabled`：是否启用全局代理。
@@ -422,7 +424,9 @@ upstream:
 - `proxy.host` / `proxy.port`：代理地址和端口。
 - `proxy.username` / `proxy.password`：代理认证信息，可留空。
 - `upstream.timeoutSeconds`：访问上游站点的请求超时时间。
-- `upstream.userAgent`：访问上游站点时使用的 `User-Agent`。
+- `upstream.userAgent`：访问上游站点时使用的自定义 `User-Agent`；留空时使用连接器默认值。
+- `upstream.shopRequestIntervalMilliseconds`：同一店铺域名连续请求的最小间隔，默认 1500 毫秒。
+- `upstream.shopInfoTTLHours`：店铺信息缓存时间；缓存有效时库存同步不重复调用店铺信息接口。
 - `proxy.enabled=false` 时，即使上游渠道、通知渠道或验证码服务开启 `proxy_enabled`，也不会走代理。
 
 代理测试接口：

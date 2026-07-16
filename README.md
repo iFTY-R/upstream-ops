@@ -384,7 +384,7 @@ pnpm build
 
 ## Proxy and Upstream HTTP Settings
 
-System settings can configure global proxy and upstream request settings. Proxy is disabled by default, protocol defaults to `http`, upstream timeout defaults to `30` seconds, and `User-Agent` defaults to `upstream-ops/0.1`.
+System settings can configure global proxy and upstream request settings. Proxy is disabled by default, protocol defaults to `http`, upstream timeout defaults to `30` seconds, and `User-Agent` is left empty so each connector can choose an appropriate default.
 
 Configuration fields:
 
@@ -400,7 +400,9 @@ proxy:
 
 upstream:
   timeoutSeconds: 30
-  userAgent: upstream-ops/0.1
+  userAgent: ""
+  shopRequestIntervalMilliseconds: 1500
+  shopInfoTTLHours: 24
 ```
 
 - `proxy.enabled`: enables global proxy.
@@ -409,7 +411,9 @@ upstream:
 - `proxy.host` / `proxy.port`: proxy host and port.
 - `proxy.username` / `proxy.password`: optional proxy authentication.
 - `upstream.timeoutSeconds`: upstream request timeout.
-- `upstream.userAgent`: upstream request `User-Agent`.
+- `upstream.userAgent`: custom upstream request `User-Agent`; leave empty to use the connector default.
+- `upstream.shopRequestIntervalMilliseconds`: minimum delay between requests to the same shop origin; defaults to 1500 ms.
+- `upstream.shopInfoTTLHours`: shop metadata cache lifetime; inventory sync skips the shop info endpoint while the cache is valid.
 - When `proxy.enabled=false`, per-channel `proxy_enabled` settings do not take effect.
 
 Proxy test endpoint:

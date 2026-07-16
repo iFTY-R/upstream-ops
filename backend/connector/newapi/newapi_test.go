@@ -13,6 +13,12 @@ import (
 	"github.com/ifty-r/upstream-ops/backend/connector"
 )
 
+func TestDefaultUserAgentDoesNotExposeOpsIdentity(t *testing.T) {
+	if got := New().http.Header.Get("User-Agent"); got != connector.DefaultBrowserUserAgent {
+		t.Fatalf("default user agent = %q", got)
+	}
+}
+
 func TestSetHTTPConfigAppliesUserAgentAndTimeout(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("User-Agent"); got != "custom-agent" {

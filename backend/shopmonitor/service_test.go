@@ -2,6 +2,7 @@ package shopmonitor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -231,6 +232,37 @@ func TestDeleteTargetWaitsForActiveSync(t *testing.T) {
 	}
 }
 
+func TestSyncSkipsDuplicateActiveTarget(t *testing.T) {
+	platform := storage.ShopPlatform("duplicate-active-sync-test")
+	provider := &blockingShopProvider{started: make(chan struct{}), release: make(chan struct{})}
+	shopprovider.Register(platform, func() shopprovider.Provider { return provider })
+
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	target := createRefreshTarget(t, targets, platform)
+	monitor := NewService(targets, storage.NewShopWatchRules(db), goods, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := monitor.SyncByID(context.Background(), target.ID)
+		firstDone <- err
+	}()
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("first sync did not reach upstream")
+	}
+
+	if _, err := monitor.SyncByID(context.Background(), target.ID); !errors.Is(err, ErrShopSyncAlreadyRunning) {
+		t.Fatalf("duplicate sync error = %v, want ErrShopSyncAlreadyRunning", err)
+	}
+	close(provider.release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+}
+
 func TestFetchGoodsReadsPastFiftyPages(t *testing.T) {
 	items := make([]shopprovider.Goods, 2501)
 	for i := range items {
@@ -246,6 +278,107 @@ func TestFetchGoodsReadsPastFiftyPages(t *testing.T) {
 	}
 	if len(result) != len(items) {
 		t.Fatalf("goods count = %d, want %d", len(result), len(items))
+	}
+}
+
+func TestSyncAllSkipsRemainingTargetsAfterUpstreamBlock(t *testing.T) {
+	platform := storage.ShopPlatform("sync-all-circuit-test")
+	provider := &batchBlockingShopProvider{infoCalls: map[string]int{}}
+	shopprovider.Register(platform, func() shopprovider.Provider { return provider })
+
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	for _, item := range []struct {
+		name    string
+		baseURL string
+	}{
+		{name: "blocked-1", baseURL: "https://blocked.example"},
+		{name: "blocked-2", baseURL: "https://blocked.example"},
+		{name: "blocked-3", baseURL: "https://blocked.example"},
+		{name: "healthy", baseURL: "https://healthy.example"},
+	} {
+		target := &storage.ShopTarget{
+			Name:           item.name,
+			Platform:       platform,
+			SiteURL:        item.baseURL + "/shop/TOKEN",
+			BaseURL:        item.baseURL,
+			Token:          "TOKEN",
+			MonitorEnabled: true,
+			ScopeMode:      storage.ShopScopeAll,
+			GoodsTypesJSON: `["card"]`,
+		}
+		if err := targets.Create(target); err != nil {
+			t.Fatalf("create target %s: %v", item.name, err)
+		}
+	}
+
+	service := NewService(targets, storage.NewShopWatchRules(db), goods, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	result := service.SyncAllWithConcurrency(context.Background(), 4)
+	if result.Total != 4 || result.Success != 1 || result.Failed != 1 || result.Skipped != 2 {
+		t.Fatalf("unexpected sync result: %#v", result)
+	}
+	var skipped int
+	for _, item := range result.Targets {
+		if item.Skipped {
+			skipped++
+		}
+	}
+	if skipped != 2 {
+		t.Fatalf("skipped targets = %d, want 2: %#v", skipped, result.Targets)
+	}
+	if got := provider.callCount("https://blocked.example"); got != 1 {
+		t.Fatalf("blocked upstream calls = %d, want 1", got)
+	}
+	if got := provider.callCount("https://healthy.example"); got != 1 {
+		t.Fatalf("healthy upstream calls = %d, want 1", got)
+	}
+}
+
+func TestSyncAllReusesProviderAndCachedShopInfo(t *testing.T) {
+	platform := storage.ShopPlatform("sync-cache-test")
+	provider := &countingShopProvider{}
+	var factoryCalls int
+	shopprovider.Register(platform, func() shopprovider.Provider {
+		factoryCalls++
+		return provider
+	})
+
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	now := time.Now()
+	for _, name := range []string{"cached-1", "cached-2"} {
+		target := &storage.ShopTarget{
+			Name:           name,
+			Platform:       platform,
+			SiteURL:        "https://shared.example/shop/" + name,
+			BaseURL:        "https://shared.example",
+			Token:          name,
+			MonitorEnabled: true,
+			ScopeMode:      storage.ShopScopeAll,
+			GoodsTypesJSON: `["card"]`,
+			LastShopName:   name,
+			LastInfoAt:     &now,
+		}
+		if err := targets.Create(target); err != nil {
+			t.Fatalf("create target %s: %v", name, err)
+		}
+	}
+
+	service := NewService(targets, storage.NewShopWatchRules(db), goods, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{
+		ShopInfoTTLHours: 24,
+	})
+	result := service.SyncAllWithConcurrency(context.Background(), 2)
+	if result.Success != 2 || result.Failed != 0 || result.Skipped != 0 {
+		t.Fatalf("unexpected sync result: %#v", result)
+	}
+	if factoryCalls != 1 {
+		t.Fatalf("provider factory calls = %d, want 1", factoryCalls)
+	}
+	infoCalls, goodsCalls := provider.counts()
+	if infoCalls != 0 || goodsCalls != 2 {
+		t.Fatalf("info calls = %d, goods calls = %d; want 0 and 2", infoCalls, goodsCalls)
 	}
 }
 
@@ -291,6 +424,73 @@ type blockingShopProvider struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+type batchBlockingShopProvider struct {
+	mu        sync.Mutex
+	infoCalls map[string]int
+}
+
+type countingShopProvider struct {
+	mu         sync.Mutex
+	infoCalls  int
+	goodsCalls int
+}
+
+func (p *countingShopProvider) Info(_ context.Context, target shopprovider.Target) (*shopprovider.ShopInfo, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.infoCalls++
+	return &shopprovider.ShopInfo{Name: target.Name}, nil
+}
+
+func (p *countingShopProvider) Categories(context.Context, shopprovider.Target, shopprovider.CategoryRequest) ([]shopprovider.Category, error) {
+	return nil, nil
+}
+
+func (p *countingShopProvider) Goods(context.Context, shopprovider.Target, shopprovider.GoodsRequest) (*shopprovider.GoodsPage, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.goodsCalls++
+	return &shopprovider.GoodsPage{}, nil
+}
+
+func (p *countingShopProvider) Price(context.Context, shopprovider.Target, shopprovider.PriceRequest) (*shopprovider.PriceResult, error) {
+	return &shopprovider.PriceResult{}, nil
+}
+
+func (p *countingShopProvider) counts() (int, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.infoCalls, p.goodsCalls
+}
+
+func (p *batchBlockingShopProvider) Info(_ context.Context, target shopprovider.Target) (*shopprovider.ShopInfo, error) {
+	p.mu.Lock()
+	p.infoCalls[target.BaseURL]++
+	p.mu.Unlock()
+	if target.BaseURL == "https://blocked.example" {
+		return nil, &shopprovider.UpstreamBlockedError{Err: fmt.Errorf("upstream returned HTML")}
+	}
+	return &shopprovider.ShopInfo{Name: target.Name}, nil
+}
+
+func (p *batchBlockingShopProvider) Categories(context.Context, shopprovider.Target, shopprovider.CategoryRequest) ([]shopprovider.Category, error) {
+	return nil, nil
+}
+
+func (p *batchBlockingShopProvider) Goods(context.Context, shopprovider.Target, shopprovider.GoodsRequest) (*shopprovider.GoodsPage, error) {
+	return &shopprovider.GoodsPage{}, nil
+}
+
+func (p *batchBlockingShopProvider) Price(context.Context, shopprovider.Target, shopprovider.PriceRequest) (*shopprovider.PriceResult, error) {
+	return &shopprovider.PriceResult{}, nil
+}
+
+func (p *batchBlockingShopProvider) callCount(baseURL string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.infoCalls[baseURL]
 }
 
 func (p *blockingShopProvider) Info(ctx context.Context, _ shopprovider.Target) (*shopprovider.ShopInfo, error) {

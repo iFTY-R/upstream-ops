@@ -16,6 +16,22 @@ func TestLoadAppliesUpstreamDefaults(t *testing.T) {
 	if cfg.Upstream.UserAgent != DefaultUpstreamUserAgent {
 		t.Fatalf("user agent = %q", cfg.Upstream.UserAgent)
 	}
+	if cfg.Upstream.ShopRequestIntervalMilliseconds != DefaultShopRequestIntervalMilliseconds {
+		t.Fatalf("shop request interval = %d", cfg.Upstream.ShopRequestIntervalMilliseconds)
+	}
+	if cfg.Upstream.ShopInfoTTLHours != DefaultShopInfoTTLHours {
+		t.Fatalf("shop info TTL = %d", cfg.Upstream.ShopInfoTTLHours)
+	}
+}
+
+func TestLoadAppliesStaggeredShopCronDefault(t *testing.T) {
+	cfg, err := LoadFile(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if cfg.Scheduler.ShopCron != "41 7,37 8-22 * * *" {
+		t.Fatalf("shop cron = %q", cfg.Scheduler.ShopCron)
+	}
 }
 
 func TestLoadEnablesAuthByDefault(t *testing.T) {
@@ -51,6 +67,13 @@ func TestUpstreamConfigWithDefaultsKeepsCustomUserAgent(t *testing.T) {
 	}
 	if cfg.UserAgent != "custom-agent" {
 		t.Fatalf("user agent = %q", cfg.UserAgent)
+	}
+}
+
+func TestUpstreamConfigWithDefaultsRemovesLegacyOpsUserAgent(t *testing.T) {
+	cfg := UpstreamConfig{UserAgent: LegacyUpstreamUserAgent}.WithDefaults()
+	if cfg.UserAgent != "" {
+		t.Fatalf("legacy user agent = %q, want empty provider default", cfg.UserAgent)
 	}
 }
 

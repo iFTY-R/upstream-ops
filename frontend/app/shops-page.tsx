@@ -55,7 +55,6 @@ import type {
   ShopSyncAllResult,
   ShopSyncJob,
   ShopSyncJobStartResult,
-  ShopSyncResult,
   ShopTarget,
   ShopTestResult,
   ShopWatchRule,
@@ -138,6 +137,10 @@ const eventLabels: Record<ShopGoodsChangeEvent, string> = {
 }
 
 type GoodsStatusFilter = ShopGoodsStatusFilter
+
+function isActiveSyncJob(job: ShopSyncJob) {
+  return job.status === "queued" || job.status === "running"
+}
 
 const goodsStatusLabels: Record<GoodsStatusFilter, string> = {
   all: "全部状态",
@@ -310,6 +313,7 @@ export default function ShopsPage() {
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkForm, setBulkForm] = useState<BulkNotificationForm>(defaultBulkNotificationForm)
   const [syncJobs, setSyncJobs] = useState<Record<number, ShopSyncJob>>({})
+  const bulkSyncJobIDsRef = useRef<Set<number> | null>(null)
   const goodsRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({})
   const pendingGoodsLookupRef = useRef<{ targetID: number; goodsKey: string } | null>(null)
   const goodsFilters = useMemo(
@@ -367,7 +371,7 @@ export default function ShopsPage() {
   }
 
   useEffect(() => {
-    if (selectedID == null || syncJobs[selectedID]?.status === "queued" || syncJobs[selectedID]?.status === "running") return
+    if (selectedID == null || syncJobs[selectedID]) return
     let cancelled = false
     void apiFetch<ShopSyncJob>(`/shop-targets/${selectedID}/sync-jobs/latest`)
       .then((job) => {
@@ -385,22 +389,49 @@ export default function ShopsPage() {
     if (activeSyncJobs.length === 0) return
     let cancelled = false
     const poll = async () => {
-      const updates = await Promise.all(activeSyncJobs.map(async (job) => {
-        try {
-          return await apiFetch<ShopSyncJob>(`/shop-targets/${job.target_id}/sync-jobs/${job.id}`)
-        } catch {
-          return null
-        }
-      }))
+      let updates: ShopSyncJob[]
+      try {
+        updates = await apiFetch<ShopSyncJob[]>("/shop-targets/sync-jobs/status", {
+          method: "POST",
+          body: JSON.stringify({ job_ids: activeSyncJobs.map((job) => job.id) }),
+        })
+      } catch {
+        return
+      }
       if (cancelled) return
+      const nextJobs = { ...syncJobs }
       for (const job of updates) {
-        if (!job) continue
-        setSyncJobs((current) => ({ ...current, [job.target_id]: job }))
+        nextJobs[job.target_id] = job
+      }
+      setSyncJobs(nextJobs)
+
+      const bulkIDs = bulkSyncJobIDsRef.current
+      if (bulkIDs) {
+        const bulkJobs = [...bulkIDs].map((id) => Object.values(nextJobs).find((job) => job.id === id)).filter(Boolean) as ShopSyncJob[]
+        const bulkFinished = bulkJobs.length === bulkIDs.size && bulkJobs.every((job) => !isActiveSyncJob(job))
+        if (bulkFinished) {
+          const succeeded = bulkJobs.filter((job) => job.status === "succeeded").length
+          const skipped = bulkJobs.filter((job) => job.status === "skipped").length
+          const failed = bulkJobs.length - succeeded - skipped
+          bulkSyncJobIDsRef.current = null
+          refreshShopData()
+          if (failed > 0 || skipped > 0) {
+            toast.warning(`批量同步结束：成功 ${succeeded} 家，失败 ${failed} 家，跳过 ${skipped} 家`)
+          } else {
+            toast.success(`批量同步完成：${succeeded} 家店铺已更新`)
+          }
+        }
+        return
+      }
+
+      for (const job of updates) {
         if (job.status === "succeeded") {
           toast.success(`同步完成：${job.goods_count} 个商品，${job.changed_count} 个变化`)
           refreshShopData()
         } else if (job.status === "failed" || job.status === "timed_out") {
           toast.error(job.error_message || "同步失败")
+        } else if (job.status === "skipped") {
+          toast.message(job.error_message || "已有同步任务，已跳过")
         }
       }
     }
@@ -663,17 +694,20 @@ export default function ShopsPage() {
     setBusy("sync-all")
     try {
       const result = await apiFetch<ShopSyncAllResult>("/shop-targets/sync-all", { method: "POST" })
-      if (result.failed > 0) {
-        toast.warning(`同步完成：成功 ${result.success} 家，失败 ${result.failed} 家`)
-      } else {
-        toast.success(`同步完成：${result.success} 家店铺已更新`)
+      const jobs = result.targets.flatMap((item) => item.job ? [item.job] : [])
+      if (jobs.length > 0) {
+        setSyncJobs((current) => {
+          const next = { ...current }
+          for (const job of jobs) next[job.target_id] = job
+          return next
+        })
+        bulkSyncJobIDsRef.current = new Set(jobs.map((job) => job.id))
       }
-      targets.refetch()
-      goods.refetch()
-      snapshotCategories.refetch()
-      changes.refetch()
-      monitorLogs.refetch()
-      refresh()
+      if (result.failed > 0) {
+        toast.warning(`已加入同步队列：新建 ${result.queued} 家，复用 ${result.reused} 家，入队失败 ${result.failed} 家`)
+      } else {
+        toast.message(`已加入同步队列：${result.queued} 家，复用运行中任务 ${result.reused} 家`)
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "同步全部失败")
     } finally {

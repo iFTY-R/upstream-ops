@@ -89,6 +89,13 @@ func (r *SyncJobRunner) Get(targetID, jobID uint) (*storage.ShopSyncJob, error) 
 	return r.jobs.FindByTargetAndID(targetID, jobID)
 }
 
+func (r *SyncJobRunner) GetMany(jobIDs []uint) ([]storage.ShopSyncJob, error) {
+	if r == nil || r.jobs == nil {
+		return nil, fmt.Errorf("shop sync job runner is unavailable")
+	}
+	return r.jobs.FindByIDs(jobIDs)
+}
+
 func (r *SyncJobRunner) Latest(targetID uint) (*storage.ShopSyncJob, error) {
 	if r == nil || r.jobs == nil {
 		return nil, fmt.Errorf("shop sync job runner is unavailable")
@@ -134,7 +141,11 @@ func (r *SyncJobRunner) run(jobID, targetID uint) {
 	status := storage.ShopSyncJobSucceeded
 	errorMessage := ""
 	if err != nil {
-		status = storage.ShopSyncJobFailed
+		if isSkippedSyncError(err) {
+			status = storage.ShopSyncJobSkipped
+		} else {
+			status = storage.ShopSyncJobFailed
+		}
 		errorMessage = err.Error()
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			status = storage.ShopSyncJobTimedOut

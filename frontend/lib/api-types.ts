@@ -301,18 +301,20 @@ export interface ShopSyncResult {
 export interface ShopSyncAllTargetResult {
   target_id: number
   name: string
-  result?: ShopSyncResult
+  job?: ShopSyncJob
+  reused?: boolean
   error?: string
 }
 
 export interface ShopSyncAllResult {
-	total: number
-	success: number
-	failed: number
-	targets: ShopSyncAllTargetResult[]
+  total: number
+  queued: number
+  reused: number
+  failed: number
+  targets: ShopSyncAllTargetResult[]
 }
 
-export type ShopSyncJobStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out"
+export type ShopSyncJobStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "skipped"
 
 export interface ShopSyncJob {
 	id: number
@@ -553,6 +555,8 @@ export interface SystemProxyConfig {
 export interface SystemUpstreamConfig {
   timeoutSeconds: number
   userAgent: string
+  shopRequestIntervalMilliseconds: number
+  shopInfoTTLHours: number
 }
 
 export interface SystemConfig {

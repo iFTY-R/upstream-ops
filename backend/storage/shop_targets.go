@@ -97,6 +97,16 @@ func (r *ShopTargets) ListMonitorEnabled() ([]ShopTarget, error) {
 }
 
 func (r *ShopTargets) SetSyncResult(id uint, at *time.Time, lastErr string, shopName string, goodsCount, lowStockGoods, changedCount int) error {
+	return r.setSyncResult(id, at, nil, lastErr, shopName, goodsCount, lowStockGoods, changedCount)
+}
+
+// SetSyncResultWithInfoAt atomically records a successful sync and the time at
+// which shop metadata was actually refreshed from the upstream.
+func (r *ShopTargets) SetSyncResultWithInfoAt(id uint, at, infoAt *time.Time, lastErr string, shopName string, goodsCount, lowStockGoods, changedCount int) error {
+	return r.setSyncResult(id, at, infoAt, lastErr, shopName, goodsCount, lowStockGoods, changedCount)
+}
+
+func (r *ShopTargets) setSyncResult(id uint, at, infoAt *time.Time, lastErr string, shopName string, goodsCount, lowStockGoods, changedCount int) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		updates := map[string]any{
 			"last_sync_at":         at,
@@ -105,6 +115,9 @@ func (r *ShopTargets) SetSyncResult(id uint, at *time.Time, lastErr string, shop
 			"last_goods_count":     goodsCount,
 			"last_low_stock_goods": lowStockGoods,
 			"last_changed_count":   changedCount,
+		}
+		if infoAt != nil {
+			updates["last_info_at"] = infoAt
 		}
 		if err := tx.Model(&ShopTarget{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 			return err
@@ -702,6 +715,17 @@ func (r *ShopSyncJobs) FindByTargetAndID(targetID, id uint) (*ShopSyncJob, error
 		return nil, err
 	}
 	return &job, nil
+}
+
+func (r *ShopSyncJobs) FindByIDs(ids []uint) ([]ShopSyncJob, error) {
+	if len(ids) == 0 {
+		return []ShopSyncJob{}, nil
+	}
+	var jobs []ShopSyncJob
+	if err := r.db.Where("id IN ?", ids).Order("id ASC").Find(&jobs).Error; err != nil {
+		return nil, err
+	}
+	return jobs, nil
 }
 
 func (r *ShopSyncJobs) FindLatestByTarget(targetID uint) (*ShopSyncJob, error) {

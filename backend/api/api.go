@@ -54,6 +54,7 @@ type upstreamSubscriptionService interface {
 type shopSyncJobRunner interface {
 	Start(targetID uint) (*storage.ShopSyncJob, bool, error)
 	Get(targetID, jobID uint) (*storage.ShopSyncJob, error)
+	GetMany(jobIDs []uint) ([]storage.ShopSyncJob, error)
 	Latest(targetID uint) (*storage.ShopSyncJob, error)
 }
 

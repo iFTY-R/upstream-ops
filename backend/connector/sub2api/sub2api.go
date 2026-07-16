@@ -30,7 +30,7 @@ type Client struct {
 func New() *Client {
 	c := resty.New().
 		SetTimeout(30*time.Second).
-		SetHeader("User-Agent", "upstream-ops/0.1").
+		SetHeader("User-Agent", connector.DefaultBrowserUserAgent).
 		SetHeader("Accept", "application/json")
 	return &Client{http: c}
 }

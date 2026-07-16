@@ -345,6 +345,7 @@ type ShopTarget struct {
 	SortOrder           int           `gorm:"not null;default:1" json:"sort_order"`
 	GoodsSort           string        `gorm:"size:32;not null;default:'category'" json:"goods_sort"`
 	LastSyncAt          *time.Time    `json:"last_sync_at,omitempty"`
+	LastInfoAt          *time.Time    `json:"last_info_at,omitempty"`
 	LastError           string        `gorm:"type:text" json:"last_error,omitempty"`
 	LastShopName        string        `gorm:"size:256" json:"last_shop_name,omitempty"`
 	LastGoodsCount      int           `gorm:"default:0" json:"last_goods_count"`
@@ -450,6 +451,7 @@ const (
 	ShopSyncJobSucceeded ShopSyncJobStatus = "succeeded"
 	ShopSyncJobFailed    ShopSyncJobStatus = "failed"
 	ShopSyncJobTimedOut  ShopSyncJobStatus = "timed_out"
+	ShopSyncJobSkipped   ShopSyncJobStatus = "skipped"
 )
 
 // ShopSyncJob keeps manual shop synchronization independent from the request

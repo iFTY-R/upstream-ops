@@ -159,21 +159,33 @@ type ProxyConfig struct {
 }
 
 const (
-	DefaultUpstreamTimeoutSeconds = 30
-	DefaultUpstreamUserAgent      = "upstream-ops/0.1"
+	DefaultUpstreamTimeoutSeconds          = 30
+	DefaultUpstreamUserAgent               = ""
+	LegacyUpstreamUserAgent                = "upstream-ops/0.1"
+	DefaultShopRequestIntervalMilliseconds = 1500
+	DefaultShopInfoTTLHours                = 24
 )
 
 type UpstreamConfig struct {
-	TimeoutSeconds int    `mapstructure:"timeoutSeconds" yaml:"timeoutSeconds" json:"timeoutSeconds"`
-	UserAgent      string `mapstructure:"userAgent" yaml:"userAgent" json:"userAgent"`
+	TimeoutSeconds                  int    `mapstructure:"timeoutSeconds" yaml:"timeoutSeconds" json:"timeoutSeconds"`
+	UserAgent                       string `mapstructure:"userAgent" yaml:"userAgent" json:"userAgent"`
+	ShopRequestIntervalMilliseconds int    `mapstructure:"shopRequestIntervalMilliseconds" yaml:"shopRequestIntervalMilliseconds" json:"shopRequestIntervalMilliseconds"`
+	ShopInfoTTLHours                int    `mapstructure:"shopInfoTTLHours" yaml:"shopInfoTTLHours" json:"shopInfoTTLHours"`
 }
 
 func (u UpstreamConfig) WithDefaults() UpstreamConfig {
 	if u.TimeoutSeconds <= 0 {
 		u.TimeoutSeconds = DefaultUpstreamTimeoutSeconds
 	}
-	if strings.TrimSpace(u.UserAgent) == "" {
-		u.UserAgent = DefaultUpstreamUserAgent
+	u.UserAgent = strings.TrimSpace(u.UserAgent)
+	if u.UserAgent == LegacyUpstreamUserAgent {
+		u.UserAgent = ""
+	}
+	if u.ShopRequestIntervalMilliseconds <= 0 {
+		u.ShopRequestIntervalMilliseconds = DefaultShopRequestIntervalMilliseconds
+	}
+	if u.ShopInfoTTLHours <= 0 {
+		u.ShopInfoTTLHours = DefaultShopInfoTTLHours
 	}
 	return u
 }
@@ -445,7 +457,7 @@ func setDefaults(v *viper.Viper) {
 	// CLAUDE.md 默认建议：余额 15 分钟，倍率 30 分钟。
 	v.SetDefault("scheduler.balanceCron", "37 */15 * * * *")
 	v.SetDefault("scheduler.rateCron", "13 */30 * * * *")
-	v.SetDefault("scheduler.shopCron", "41 */10 * * * *")
+	v.SetDefault("scheduler.shopCron", "41 7,37 8-22 * * *")
 	v.SetDefault("scheduler.concurrency", 4)
 	v.SetDefault("scheduler.autoGroup.enabled", false)
 	v.SetDefault("scheduler.autoGroup.cron", "29 */5 * * * *")
@@ -487,6 +499,8 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("upstream.timeoutSeconds", DefaultUpstreamTimeoutSeconds)
 	v.SetDefault("upstream.userAgent", DefaultUpstreamUserAgent)
+	v.SetDefault("upstream.shopRequestIntervalMilliseconds", DefaultShopRequestIntervalMilliseconds)
+	v.SetDefault("upstream.shopInfoTTLHours", DefaultShopInfoTTLHours)
 
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "text")
