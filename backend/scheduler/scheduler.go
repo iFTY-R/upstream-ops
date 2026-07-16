@@ -4,6 +4,7 @@ package scheduler
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/ifty-r/upstream-ops/backend/autogroup"
@@ -27,9 +28,26 @@ type Scheduler struct {
 	rates         *storage.Rates
 	notifies      *storage.Notifications
 	announcements *storage.UpstreamAnnouncements
+	shopGoods     *storage.ShopGoods
+	shopSyncJobs  *storage.ShopSyncJobs
 	captchas      *storage.Captchas
 	cipher        *crypto.Cipher
 	proxy         config.ProxyConfig
+}
+
+// retentionExecutionMu spans scheduler instances so a hot reload cannot start
+// manual cleanup while the previous scheduler is still finishing its cron run.
+var retentionExecutionMu sync.Mutex
+
+// ShopRetentionResult reports each independent cleanup category so manual
+// callers can surface partial success instead of losing completed work.
+type ShopRetentionResult struct {
+	HighFrequencyChangesDeleted int64             `json:"high_frequency_changes_deleted"`
+	OtherChangesDeleted         int64             `json:"other_changes_deleted"`
+	MonitorLogsDeleted          int64             `json:"monitor_logs_deleted"`
+	SyncJobsDeleted             int64             `json:"sync_jobs_deleted"`
+	TotalDeleted                int64             `json:"total_deleted"`
+	Errors                      map[string]string `json:"errors,omitempty"`
 }
 
 func New(
@@ -41,6 +59,8 @@ func New(
 	rates *storage.Rates,
 	notifies *storage.Notifications,
 	announcements *storage.UpstreamAnnouncements,
+	shopGoods *storage.ShopGoods,
+	shopSyncJobs *storage.ShopSyncJobs,
 	captchas *storage.Captchas,
 	cipher *crypto.Cipher,
 	proxy config.ProxyConfig,
@@ -57,6 +77,8 @@ func New(
 		rates:         rates,
 		notifies:      notifies,
 		announcements: announcements,
+		shopGoods:     shopGoods,
+		shopSyncJobs:  shopSyncJobs,
 		captchas:      captchas,
 		cipher:        cipher,
 		proxy:         proxy,
@@ -160,11 +182,18 @@ func (s *Scheduler) hasRetention() bool {
 	return r.MonitorLogsDays > 0 ||
 		r.BalanceSnapshotsDays > 0 ||
 		r.NotificationLogsDays > 0 ||
-		r.AnnouncementsDays > 0
+		r.AnnouncementsDays > 0 ||
+		r.ShopHighFrequencyChangeLogsDays > 0 ||
+		r.ShopOtherChangeLogsDays > 0 ||
+		r.ShopMonitorLogsDays > 0 ||
+		r.ShopSyncJobsDays > 0
 }
 
 // runRetention 按配置删除过期历史。任一表失败不影响其它，全部错误写日志。
 func (s *Scheduler) runRetention() {
+	retentionExecutionMu.Lock()
+	defer retentionExecutionMu.Unlock()
+
 	r := s.cfg.Retention
 	now := time.Now()
 
@@ -214,4 +243,96 @@ func (s *Scheduler) runRetention() {
 			s.log.Info("retention announcements deleted", "rows", n, "before", cutoff)
 		}
 	}
+
+	s.runShopRetention(r, now)
+}
+
+// RunShopRetention immediately applies the supplied shop-only policy. Manual
+// and scheduled cleanup share one process-wide lock so their DELETE statements
+// cannot overlap against SQLite.
+func (s *Scheduler) RunShopRetention(retention config.RetentionConfig) ShopRetentionResult {
+	retentionExecutionMu.Lock()
+	defer retentionExecutionMu.Unlock()
+	return s.runShopRetention(retention, time.Now())
+}
+
+func (s *Scheduler) runShopRetention(retention config.RetentionConfig, now time.Time) ShopRetentionResult {
+	result := ShopRetentionResult{}
+	highFrequencyEvents := []storage.ShopGoodsChangeEvent{
+		storage.ShopChangeStockChanged,
+		storage.ShopChangeMonitorFailed,
+	}
+	if retention.ShopHighFrequencyChangeLogsDays > 0 {
+		cutoff := now.AddDate(0, 0, -retention.ShopHighFrequencyChangeLogsDays)
+		if s.shopGoods == nil {
+			result.addError("high_frequency_changes", "shop goods repository is unavailable")
+		} else {
+			n, err := s.shopGoods.DeleteChangesBefore(cutoff, highFrequencyEvents)
+			result.HighFrequencyChangesDeleted = n
+			result.TotalDeleted += n
+			s.logShopRetention("high-frequency shop changes", n, cutoff, err)
+			result.addErrorFrom("high_frequency_changes", err)
+		}
+	}
+	if retention.ShopOtherChangeLogsDays > 0 {
+		cutoff := now.AddDate(0, 0, -retention.ShopOtherChangeLogsDays)
+		if s.shopGoods == nil {
+			result.addError("other_changes", "shop goods repository is unavailable")
+		} else {
+			n, err := s.shopGoods.DeleteChangesBeforeExcluding(cutoff, highFrequencyEvents)
+			result.OtherChangesDeleted = n
+			result.TotalDeleted += n
+			s.logShopRetention("other shop changes", n, cutoff, err)
+			result.addErrorFrom("other_changes", err)
+		}
+	}
+	if retention.ShopMonitorLogsDays > 0 {
+		cutoff := now.AddDate(0, 0, -retention.ShopMonitorLogsDays)
+		if s.shopGoods == nil {
+			result.addError("monitor_logs", "shop goods repository is unavailable")
+		} else {
+			n, err := s.shopGoods.DeleteMonitorLogsBefore(cutoff)
+			result.MonitorLogsDeleted = n
+			result.TotalDeleted += n
+			s.logShopRetention("shop monitor logs", n, cutoff, err)
+			result.addErrorFrom("monitor_logs", err)
+		}
+	}
+	if retention.ShopSyncJobsDays > 0 {
+		cutoff := now.AddDate(0, 0, -retention.ShopSyncJobsDays)
+		if s.shopSyncJobs == nil {
+			result.addError("sync_jobs", "shop sync jobs repository is unavailable")
+		} else {
+			n, err := s.shopSyncJobs.DeleteFinishedBefore(cutoff)
+			result.SyncJobsDeleted = n
+			result.TotalDeleted += n
+			s.logShopRetention("shop sync jobs", n, cutoff, err)
+			result.addErrorFrom("sync_jobs", err)
+		}
+	}
+	return result
+}
+
+func (s *Scheduler) logShopRetention(category string, rows int64, cutoff time.Time, err error) {
+	if s.log == nil {
+		return
+	}
+	if err != nil {
+		s.log.Warn("retention "+category+" failed", "err", err)
+	} else if rows > 0 {
+		s.log.Info("retention "+category+" deleted", "rows", rows, "before", cutoff)
+	}
+}
+
+func (r *ShopRetentionResult) addErrorFrom(category string, err error) {
+	if err != nil {
+		r.addError(category, err.Error())
+	}
+}
+
+func (r *ShopRetentionResult) addError(category, message string) {
+	if r.Errors == nil {
+		r.Errors = make(map[string]string)
+	}
+	r.Errors[category] = message
 }

@@ -702,6 +702,11 @@ Default retention:
 - Balance snapshots: 90 days.
 - Notification logs: 90 days.
 - Upstream announcements: controlled by announcement retention days. `0` disables cleanup.
+- High-frequency shop changes (`stock_changed`, `monitor_failed`): 15 days.
+- Other shop changes: 90 days.
+- Shop monitor logs and completed sync jobs: 30 days.
+- Current shop goods snapshots are not cleaned by retention.
+- The settings page can run shop history cleanup immediately with the current form values and reports deleted rows per category.
 - Rate change logs are not cleaned by default.
 
 ## Data Security

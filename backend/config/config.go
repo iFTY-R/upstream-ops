@@ -118,11 +118,15 @@ type AutoGroupConfig struct {
 // 字段为 0 表示该表不清理，永久保留（默认 rate_change_logs 永远保留，是核心业务数据）。
 // Cron 为空时不启动清理任务。
 type RetentionConfig struct {
-	Cron                 string `mapstructure:"cron" yaml:"cron" json:"cron"`
-	MonitorLogsDays      int    `mapstructure:"monitorLogsDays" yaml:"monitorLogsDays" json:"monitorLogsDays"`
-	BalanceSnapshotsDays int    `mapstructure:"balanceSnapshotsDays" yaml:"balanceSnapshotsDays" json:"balanceSnapshotsDays"`
-	NotificationLogsDays int    `mapstructure:"notificationLogsDays" yaml:"notificationLogsDays" json:"notificationLogsDays"`
-	AnnouncementsDays    int    `mapstructure:"announcementsDays" yaml:"announcementsDays" json:"announcementsDays"`
+	Cron                            string `mapstructure:"cron" yaml:"cron" json:"cron"`
+	MonitorLogsDays                 int    `mapstructure:"monitorLogsDays" yaml:"monitorLogsDays" json:"monitorLogsDays"`
+	BalanceSnapshotsDays            int    `mapstructure:"balanceSnapshotsDays" yaml:"balanceSnapshotsDays" json:"balanceSnapshotsDays"`
+	NotificationLogsDays            int    `mapstructure:"notificationLogsDays" yaml:"notificationLogsDays" json:"notificationLogsDays"`
+	AnnouncementsDays               int    `mapstructure:"announcementsDays" yaml:"announcementsDays" json:"announcementsDays"`
+	ShopHighFrequencyChangeLogsDays int    `mapstructure:"shopHighFrequencyChangeLogsDays" yaml:"shopHighFrequencyChangeLogsDays" json:"shopHighFrequencyChangeLogsDays"`
+	ShopOtherChangeLogsDays         int    `mapstructure:"shopOtherChangeLogsDays" yaml:"shopOtherChangeLogsDays" json:"shopOtherChangeLogsDays"`
+	ShopMonitorLogsDays             int    `mapstructure:"shopMonitorLogsDays" yaml:"shopMonitorLogsDays" json:"shopMonitorLogsDays"`
+	ShopSyncJobsDays                int    `mapstructure:"shopSyncJobsDays" yaml:"shopSyncJobsDays" json:"shopSyncJobsDays"`
 }
 
 // NotificationsConfig 通知去抖策略。所有字段都是"少烦我"取向，默认不丢消息只合并。
@@ -465,12 +469,17 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("scheduler.autoGroup.probeConcurrency", 1)
 
 	// 历史清理：每天凌晨 3:17 跑一次（6 字段 cron 含秒），
-	// monitor 30 天 / balance 90 天 / notify 90 天。rate_change_logs 不清理（业务核心数据）。
+	// 高频店铺变化 15 天 / 其他店铺变化 90 天 / 店铺监控与同步任务 30 天。
+	// rate_change_logs 不清理（业务核心数据）。
 	v.SetDefault("scheduler.retention.cron", "0 17 3 * * *")
 	v.SetDefault("scheduler.retention.monitorLogsDays", 30)
 	v.SetDefault("scheduler.retention.balanceSnapshotsDays", 90)
 	v.SetDefault("scheduler.retention.notificationLogsDays", 90)
 	v.SetDefault("scheduler.retention.announcementsDays", 90)
+	v.SetDefault("scheduler.retention.shopHighFrequencyChangeLogsDays", 15)
+	v.SetDefault("scheduler.retention.shopOtherChangeLogsDays", 90)
+	v.SetDefault("scheduler.retention.shopMonitorLogsDays", 30)
+	v.SetDefault("scheduler.retention.shopSyncJobsDays", 30)
 
 	v.SetDefault("auth.enabled", true)
 	v.SetDefault("auth.username", DefaultAuthUsername)

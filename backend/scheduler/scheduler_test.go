@@ -65,6 +65,8 @@ func TestRunRetentionDeletesAnnouncements(t *testing.T) {
 		announcements,
 		nil,
 		nil,
+		nil,
+		nil,
 		config.ProxyConfig{},
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
@@ -77,5 +79,63 @@ func TestRunRetentionDeletesAnnouncements(t *testing.T) {
 	}
 	if total != 0 || len(list) != 0 {
 		t.Fatalf("announcements not cleaned: total=%d list=%#v", total, list)
+	}
+}
+
+func TestRunRetentionDeletesTieredShopHistory(t *testing.T) {
+	db := openTestDB(t)
+	goods := storage.NewShopGoods(db)
+	jobs := storage.NewShopSyncJobs(db)
+	now := time.Now()
+
+	changes := []storage.ShopGoodsChangeLog{
+		{TargetID: 1, Event: storage.ShopChangeStockChanged, Summary: "old stock", ChangedAt: now.AddDate(0, 0, -20)},
+		{TargetID: 1, Event: storage.ShopChangePriceChanged, Summary: "old price", ChangedAt: now.AddDate(0, 0, -100)},
+	}
+	for i := range changes {
+		if err := goods.AppendChange(&changes[i]); err != nil {
+			t.Fatalf("append change: %v", err)
+		}
+	}
+	oldMonitorAt := now.AddDate(0, 0, -31)
+	if err := goods.AppendMonitorLog(&storage.ShopMonitorLog{TargetID: 1, Success: true, StartedAt: oldMonitorAt, FinishedAt: oldMonitorAt.Add(time.Second)}); err != nil {
+		t.Fatalf("append shop monitor log: %v", err)
+	}
+	oldFinishedAt := now.AddDate(0, 0, -31)
+	if err := jobs.Create(&storage.ShopSyncJob{TargetID: 1, Status: storage.ShopSyncJobSucceeded, FinishedAt: &oldFinishedAt, CreatedAt: oldFinishedAt}); err != nil {
+		t.Fatalf("create shop sync job: %v", err)
+	}
+
+	s := New(
+		config.SchedulerConfig{Retention: config.RetentionConfig{
+			ShopHighFrequencyChangeLogsDays: 15,
+			ShopOtherChangeLogsDays:         90,
+			ShopMonitorLogsDays:             30,
+			ShopSyncJobsDays:                30,
+		}},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		goods,
+		jobs,
+		nil,
+		nil,
+		config.ProxyConfig{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	s.runRetention()
+
+	for _, model := range []any{&storage.ShopGoodsChangeLog{}, &storage.ShopMonitorLog{}, &storage.ShopSyncJob{}} {
+		var count int64
+		if err := db.Model(model).Count(&count).Error; err != nil {
+			t.Fatalf("count %T: %v", model, err)
+		}
+		if count != 0 {
+			t.Fatalf("remaining %T rows = %d", model, count)
+		}
 	}
 }

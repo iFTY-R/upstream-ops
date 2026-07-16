@@ -133,6 +133,75 @@ func TestShopSyncJobsLifecycle(t *testing.T) {
 	}
 }
 
+func TestShopHistoryRetentionKeepsRecentAndActiveRecords(t *testing.T) {
+	db := openTestDB(t)
+	goods := NewShopGoods(db)
+	jobs := NewShopSyncJobs(db)
+	now := time.Now()
+
+	changes := []ShopGoodsChangeLog{
+		{TargetID: 1, GoodsKey: "old-stock", Event: ShopChangeStockChanged, Summary: "old stock", ChangedAt: now.AddDate(0, 0, -20)},
+		{TargetID: 1, Event: ShopChangeMonitorFailed, Summary: "old failure", ChangedAt: now.AddDate(0, 0, -20)},
+		{TargetID: 1, GoodsKey: "old-price", Event: ShopChangePriceChanged, Summary: "old price", ChangedAt: now.AddDate(0, 0, -100)},
+		{TargetID: 1, GoodsKey: "recent-stock", Event: ShopChangeStockChanged, Summary: "recent stock", ChangedAt: now.AddDate(0, 0, -5)},
+		{TargetID: 1, GoodsKey: "recent-price", Event: ShopChangePriceChanged, Summary: "recent price", ChangedAt: now.AddDate(0, 0, -30)},
+	}
+	for i := range changes {
+		if err := goods.AppendChange(&changes[i]); err != nil {
+			t.Fatalf("append change: %v", err)
+		}
+	}
+
+	frequentEvents := []ShopGoodsChangeEvent{ShopChangeStockChanged, ShopChangeMonitorFailed}
+	deleted, err := goods.DeleteChangesBefore(now.AddDate(0, 0, -15), frequentEvents)
+	if err != nil || deleted != 2 {
+		t.Fatalf("delete frequent changes = %d, err = %v", deleted, err)
+	}
+	deleted, err = goods.DeleteChangesBeforeExcluding(now.AddDate(0, 0, -90), frequentEvents)
+	if err != nil || deleted != 1 {
+		t.Fatalf("delete other changes = %d, err = %v", deleted, err)
+	}
+	var remainingChanges int64
+	if err := db.Model(&ShopGoodsChangeLog{}).Count(&remainingChanges).Error; err != nil {
+		t.Fatalf("count remaining changes: %v", err)
+	}
+	if remainingChanges != 2 {
+		t.Fatalf("remaining changes = %d", remainingChanges)
+	}
+
+	for _, startedAt := range []time.Time{now.AddDate(0, 0, -31), now.AddDate(0, 0, -1)} {
+		if err := goods.AppendMonitorLog(&ShopMonitorLog{TargetID: 1, Success: true, StartedAt: startedAt, FinishedAt: startedAt.Add(time.Second)}); err != nil {
+			t.Fatalf("append shop monitor log: %v", err)
+		}
+	}
+	deleted, err = goods.DeleteMonitorLogsBefore(now.AddDate(0, 0, -30))
+	if err != nil || deleted != 1 {
+		t.Fatalf("delete shop monitor logs = %d, err = %v", deleted, err)
+	}
+
+	oldFinishedAt := now.AddDate(0, 0, -31)
+	recentFinishedAt := now.AddDate(0, 0, -1)
+	oldFinished := &ShopSyncJob{TargetID: 1, Status: ShopSyncJobSucceeded, FinishedAt: &oldFinishedAt, CreatedAt: oldFinishedAt}
+	recentFinished := &ShopSyncJob{TargetID: 1, Status: ShopSyncJobSucceeded, FinishedAt: &recentFinishedAt, CreatedAt: recentFinishedAt}
+	oldActive := &ShopSyncJob{TargetID: 1, Status: ShopSyncJobQueued, FinishedAt: &oldFinishedAt, CreatedAt: oldFinishedAt}
+	for _, job := range []*ShopSyncJob{oldFinished, recentFinished, oldActive} {
+		if err := jobs.Create(job); err != nil {
+			t.Fatalf("create sync job: %v", err)
+		}
+	}
+	deleted, err = jobs.DeleteFinishedBefore(now.AddDate(0, 0, -30))
+	if err != nil || deleted != 1 {
+		t.Fatalf("delete finished sync jobs = %d, err = %v", deleted, err)
+	}
+	var remainingJobs int64
+	if err := db.Model(&ShopSyncJob{}).Count(&remainingJobs).Error; err != nil {
+		t.Fatalf("count remaining jobs: %v", err)
+	}
+	if remainingJobs != 2 {
+		t.Fatalf("remaining jobs = %d", remainingJobs)
+	}
+}
+
 func TestChannelProxyEnabledPersists(t *testing.T) {
 	db := openTestDB(t)
 	channels := NewChannels(db)

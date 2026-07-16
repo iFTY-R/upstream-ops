@@ -40,6 +40,7 @@ import type {
   CaptchaConfig,
   NotificationChannel,
   NotificationChannelType,
+  ShopRetentionResult,
   SystemConfig,
 } from "@/lib/api-types";
 import { decimal, money, relativeTime } from "@/lib/format";
@@ -55,6 +56,13 @@ import { cn } from "@/lib/utils";
 
 function num(v: string) {
   return Number(v || 0);
+}
+
+function retentionCutoffLabel(days: number) {
+  if (days <= 0) return "不清理";
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  return `早于 ${cutoff.toLocaleDateString("zh-CN")}`;
 }
 
 function normalizeSystemConfig(config: SystemConfig): SystemConfig {
@@ -77,6 +85,13 @@ function normalizeSystemConfig(config: SystemConfig): SystemConfig {
         cron: config.scheduler.autoGroup?.cron ?? "29 */5 * * * *",
         concurrency: config.scheduler.autoGroup?.concurrency ?? 2,
         probeConcurrency: config.scheduler.autoGroup?.probeConcurrency ?? 1,
+      },
+      retention: {
+        ...config.scheduler.retention,
+        shopHighFrequencyChangeLogsDays: config.scheduler.retention.shopHighFrequencyChangeLogsDays ?? 15,
+        shopOtherChangeLogsDays: config.scheduler.retention.shopOtherChangeLogsDays ?? 90,
+        shopMonitorLogsDays: config.scheduler.retention.shopMonitorLogsDays ?? 30,
+        shopSyncJobsDays: config.scheduler.retention.shopSyncJobsDays ?? 30,
       },
     },
     upstream: {
@@ -118,6 +133,7 @@ export default function SettingsPage() {
   const [configSavedPendingApply, setConfigSavedPendingApply] = useState(false);
   const [testingProxy, setTestingProxy] = useState(false);
   const [checkingVersion, setCheckingVersion] = useState(false);
+  const [cleaningShopHistory, setCleaningShopHistory] = useState(false);
   const [editingNotification, setEditingNotification] =
     useState<NotificationChannel | null>(null);
   const [notificationOpen, setNotificationOpen] = useState(false);
@@ -278,6 +294,51 @@ export default function SettingsPage() {
       toast.error(err instanceof Error ? err.message : "应用失败");
     } finally {
       setApplying(false);
+    }
+  }
+
+  async function handleCleanupShopHistory() {
+    if (!form) return;
+    const retention = form.scheduler.retention;
+    const ok = await confirm({
+      title: "立即清理店铺历史？",
+      description: [
+        `高频变化${retentionCutoffLabel(retention.shopHighFrequencyChangeLogsDays)}`,
+        `其他变化${retentionCutoffLabel(retention.shopOtherChangeLogsDays)}`,
+        `监控日志${retentionCutoffLabel(retention.shopMonitorLogsDays)}`,
+        `已完成同步任务${retentionCutoffLabel(retention.shopSyncJobsDays)}`,
+        "商品快照与排队、运行中的任务不受影响。",
+      ].join("；"),
+      confirmLabel: "立即清理",
+      destructive: true,
+    });
+    if (!ok) return;
+
+    setCleaningShopHistory(true);
+    try {
+      const result = await apiFetch<ShopRetentionResult>(
+        "/settings/retention/shop/cleanup",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            shopHighFrequencyChangeLogsDays:
+              retention.shopHighFrequencyChangeLogsDays,
+            shopOtherChangeLogsDays: retention.shopOtherChangeLogsDays,
+            shopMonitorLogsDays: retention.shopMonitorLogsDays,
+            shopSyncJobsDays: retention.shopSyncJobsDays,
+          }),
+        },
+      );
+      const summary = `共删除 ${result.total_deleted} 条：高频变化 ${result.high_frequency_changes_deleted}，其他变化 ${result.other_changes_deleted}，监控日志 ${result.monitor_logs_deleted}，同步任务 ${result.sync_jobs_deleted}`;
+      if (Object.keys(result.errors ?? {}).length > 0) {
+        toast.warning(`部分清理完成，${summary}`);
+      } else {
+        toast.success(`店铺历史清理完成，${summary}`);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "店铺历史清理失败");
+    } finally {
+      setCleaningShopHistory(false);
     }
   }
 
@@ -863,7 +924,7 @@ export default function SettingsPage() {
                   />
                 </Field>
               </div>
-              <div className="mt-4 grid gap-4 md:grid-cols-3">
+              <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <Field
                   label="监控日志保留天数"
                   description="超过该天数的监控日志会被清理。"
@@ -943,6 +1004,127 @@ export default function SettingsPage() {
                     }
                   />
                 </Field>
+                <Field
+                  label="高频店铺变更保留天数"
+                  description="库存变化和店铺监控失败默认保留 15 天；0 表示永久保留。"
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    value={String(form.scheduler.retention.shopHighFrequencyChangeLogsDays)}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                retention: {
+                                  ...prev.scheduler.retention,
+                                  shopHighFrequencyChangeLogsDays: Math.max(0, num(e.target.value)),
+                                },
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
+                <Field
+                  label="重要店铺变更保留天数"
+                  description="价格、新增、下架、补货等变化默认保留 90 天；0 表示永久保留。"
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    value={String(form.scheduler.retention.shopOtherChangeLogsDays)}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                retention: {
+                                  ...prev.scheduler.retention,
+                                  shopOtherChangeLogsDays: Math.max(0, num(e.target.value)),
+                                },
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
+                <Field
+                  label="店铺监控日志保留天数"
+                  description="同步成功和失败记录默认保留 30 天；0 表示永久保留。"
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    value={String(form.scheduler.retention.shopMonitorLogsDays)}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                retention: {
+                                  ...prev.scheduler.retention,
+                                  shopMonitorLogsDays: Math.max(0, num(e.target.value)),
+                                },
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
+                <Field
+                  label="店铺同步任务保留天数"
+                  description="仅清理已完成任务，排队和运行中的任务始终保留。"
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    value={String(form.scheduler.retention.shopSyncJobsDays)}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                retention: {
+                                  ...prev.scheduler.retention,
+                                  shopSyncJobsDays: Math.max(0, num(e.target.value)),
+                                },
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
+              </div>
+              <div className="mt-4 flex justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={cleaningShopHistory}
+                  onClick={handleCleanupShopHistory}
+                >
+                  <Trash2
+                    className={cn(
+                      "size-4",
+                      cleaningShopHistory ? "animate-pulse" : "",
+                    )}
+                  />
+                  {cleaningShopHistory ? "清理中..." : "立即清理店铺历史"}
+                </Button>
               </div>
             </SectionCard>
           </div>

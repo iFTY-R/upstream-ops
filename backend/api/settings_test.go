@@ -2,15 +2,20 @@ package api
 
 import (
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/ifty-r/upstream-ops/backend/config"
 	"github.com/ifty-r/upstream-ops/backend/runtimeconfig"
+	"github.com/ifty-r/upstream-ops/backend/scheduler"
+	"github.com/ifty-r/upstream-ops/backend/storage"
 )
 
 func TestSaveSettingsKeepsAppVersion(t *testing.T) {
@@ -36,7 +41,7 @@ func TestSaveSettingsKeepsAppVersion(t *testing.T) {
 	body := `{
 		"app":{"title":"New","notificationPrefix":"[New] "},
 		"auth":{"enabled":false,"username":"admin","password":"","tokenSecret":"","sessionTTLHours":168},
-		"scheduler":{"balanceCron":"37 */15 * * * *","rateCron":"13 */30 * * * *","concurrency":4,"retention":{"cron":"0 17 3 * * *","monitorLogsDays":30,"balanceSnapshotsDays":90,"notificationLogsDays":90,"announcementsDays":90}},
+		"scheduler":{"balanceCron":"37 */15 * * * *","rateCron":"13 */30 * * * *","concurrency":4,"retention":{"cron":"0 17 3 * * *","monitorLogsDays":30,"balanceSnapshotsDays":90,"notificationLogsDays":90,"announcementsDays":90,"shopHighFrequencyChangeLogsDays":15,"shopOtherChangeLogsDays":90,"shopMonitorLogsDays":30,"shopSyncJobsDays":30}},
 		"notifications":{"batchRateChanges":true,"minChangePct":0,"balanceLowCooldownMinutes":60,"subscriptionDailyRemainingThresholdPct":0,"subscriptionWeeklyRemainingThresholdPct":0,"subscriptionMonthlyRemainingThresholdPct":0,"subscriptionExpiryThresholdHours":0,"subscriptionAlertCooldownMinutes":1440,"sendMaxAttempts":3},
 		"proxy":{"enabled":true,"versionCheckEnabled":true,"protocol":"socks5","host":"127.0.0.1","port":1080,"username":"u","password":"p"},
 		"upstream":{"timeoutSeconds":45,"userAgent":"custom-agent"}
@@ -64,6 +69,10 @@ func TestSaveSettingsKeepsAppVersion(t *testing.T) {
 	}
 	if got.Upstream.TimeoutSeconds != 45 || got.Upstream.UserAgent != "custom-agent" {
 		t.Fatalf("upstream = %#v", got.Upstream)
+	}
+	retention := got.Scheduler.Retention
+	if retention.ShopHighFrequencyChangeLogsDays != 15 || retention.ShopOtherChangeLogsDays != 90 || retention.ShopMonitorLogsDays != 30 || retention.ShopSyncJobsDays != 30 {
+		t.Fatalf("shop retention = %#v", retention)
 	}
 }
 
@@ -133,6 +142,57 @@ func TestGetSettingsConfigRedactsSecrets(t *testing.T) {
 	}
 	if resp.Data.Config.Proxy.Password != redactedSecret {
 		t.Fatalf("proxy password = %q", resp.Data.Config.Proxy.Password)
+	}
+}
+
+func TestCleanupShopHistoryRunsWithSubmittedPolicy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openTestDB(t)
+	goods := storage.NewShopGoods(db)
+	jobs := storage.NewShopSyncJobs(db)
+	now := time.Now()
+
+	for _, change := range []storage.ShopGoodsChangeLog{
+		{TargetID: 1, Event: storage.ShopChangeStockChanged, Summary: "old stock", ChangedAt: now.AddDate(0, 0, -20)},
+		{TargetID: 1, Event: storage.ShopChangePriceChanged, Summary: "old price", ChangedAt: now.AddDate(0, 0, -100)},
+	} {
+		change := change
+		if err := goods.AppendChange(&change); err != nil {
+			t.Fatalf("append change: %v", err)
+		}
+	}
+	oldMonitorAt := now.AddDate(0, 0, -31)
+	if err := goods.AppendMonitorLog(&storage.ShopMonitorLog{TargetID: 1, Success: true, StartedAt: oldMonitorAt, FinishedAt: oldMonitorAt.Add(time.Second)}); err != nil {
+		t.Fatalf("append monitor log: %v", err)
+	}
+	oldFinishedAt := now.AddDate(0, 0, -31)
+	if err := jobs.Create(&storage.ShopSyncJob{TargetID: 1, Status: storage.ShopSyncJobSucceeded, FinishedAt: &oldFinishedAt, CreatedAt: oldFinishedAt}); err != nil {
+		t.Fatalf("create sync job: %v", err)
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	sch := scheduler.New(config.SchedulerConfig{}, nil, nil, nil, nil, nil, nil, nil, goods, jobs, nil, nil, config.ProxyConfig{}, log)
+	runtimeMgr := runtimeconfig.New(filepath.Join(t.TempDir(), "config.yaml"), "", log, nil, nil, nil, nil, sch, config.ProxyConfig{}, config.UpstreamConfig{}, nil)
+	router := gin.New()
+	registerSettings(router.Group("/api"), &Deps{Runtime: runtimeMgr})
+
+	body := `{"shopHighFrequencyChangeLogsDays":15,"shopOtherChangeLogsDays":90,"shopMonitorLogsDays":30,"shopSyncJobsDays":30}`
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/retention/shop/cleanup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data scheduler.ShopRetentionResult `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	result := response.Data
+	if result.HighFrequencyChangesDeleted != 1 || result.OtherChangesDeleted != 1 || result.MonitorLogsDeleted != 1 || result.SyncJobsDeleted != 1 || result.TotalDeleted != 4 {
+		t.Fatalf("cleanup result = %#v", result)
 	}
 }
 

@@ -34,6 +34,26 @@ func TestLoadAppliesStaggeredShopCronDefault(t *testing.T) {
 	}
 }
 
+func TestLoadAppliesShopRetentionDefaults(t *testing.T) {
+	cfg, err := LoadFile(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	retention := cfg.Scheduler.Retention
+	if retention.ShopHighFrequencyChangeLogsDays != 15 {
+		t.Fatalf("shop high-frequency change logs days = %d", retention.ShopHighFrequencyChangeLogsDays)
+	}
+	if retention.ShopOtherChangeLogsDays != 90 {
+		t.Fatalf("shop other change logs days = %d", retention.ShopOtherChangeLogsDays)
+	}
+	if retention.ShopMonitorLogsDays != 30 {
+		t.Fatalf("shop monitor logs days = %d", retention.ShopMonitorLogsDays)
+	}
+	if retention.ShopSyncJobsDays != 30 {
+		t.Fatalf("shop sync jobs days = %d", retention.ShopSyncJobsDays)
+	}
+}
+
 func TestLoadEnablesAuthByDefault(t *testing.T) {
 	cfg, err := LoadFile(filepath.Join(t.TempDir(), "missing.yaml"))
 	if err != nil {

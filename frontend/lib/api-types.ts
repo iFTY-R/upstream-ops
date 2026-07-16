@@ -512,6 +512,19 @@ export interface SystemSchedulerRetentionConfig {
   balanceSnapshotsDays: number
   notificationLogsDays: number
   announcementsDays: number
+  shopHighFrequencyChangeLogsDays: number
+  shopOtherChangeLogsDays: number
+  shopMonitorLogsDays: number
+  shopSyncJobsDays: number
+}
+
+export interface ShopRetentionResult {
+  high_frequency_changes_deleted: number
+  other_changes_deleted: number
+  monitor_logs_deleted: number
+  sync_jobs_deleted: number
+  total_deleted: number
+  errors?: Record<string, string>
 }
 
 export interface SystemSchedulerAutoGroupConfig {

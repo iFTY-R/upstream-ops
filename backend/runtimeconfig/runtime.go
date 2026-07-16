@@ -89,6 +89,20 @@ func (m *Manager) CurrentUpstream() config.UpstreamConfig {
 	return m.upstreamConfig
 }
 
+// RunShopRetention executes a one-off cleanup against the current scheduler.
+// The caller supplies the confirmed policy so unsaved settings can be applied
+// to this operation without changing the active cron configuration.
+func (m *Manager) RunShopRetention(retention config.RetentionConfig) (*scheduler.ShopRetentionResult, error) {
+	m.mu.RLock()
+	current := m.scheduler
+	m.mu.RUnlock()
+	if current == nil {
+		return nil, fmt.Errorf("scheduler is unavailable")
+	}
+	result := current.RunShopRetention(retention)
+	return &result, nil
+}
+
 func (m *Manager) AuthMiddleware() gin.HandlerFunc {
 	whitelist := map[string]struct{}{
 		"/healthz":                   {},

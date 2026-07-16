@@ -644,6 +644,28 @@ func (r *ShopGoods) AppendChange(log *ShopGoodsChangeLog) error {
 	return r.db.Create(log).Error
 }
 
+// DeleteChangesBefore deletes selected event types older than the cutoff. An
+// empty event list is rejected to prevent a caller from accidentally deleting
+// every kind of shop change.
+func (r *ShopGoods) DeleteChangesBefore(cutoff time.Time, events []ShopGoodsChangeEvent) (int64, error) {
+	if len(events) == 0 {
+		return 0, nil
+	}
+	result := r.db.Where("changed_at < ? AND event IN ?", cutoff, events).Delete(&ShopGoodsChangeLog{})
+	return result.RowsAffected, result.Error
+}
+
+// DeleteChangesBeforeExcluding deletes historical events except the supplied
+// high-frequency types. With no exclusions, all events before the cutoff match.
+func (r *ShopGoods) DeleteChangesBeforeExcluding(cutoff time.Time, excluded []ShopGoodsChangeEvent) (int64, error) {
+	query := r.db.Where("changed_at < ?", cutoff)
+	if len(excluded) > 0 {
+		query = query.Where("event NOT IN ?", excluded)
+	}
+	result := query.Delete(&ShopGoodsChangeLog{})
+	return result.RowsAffected, result.Error
+}
+
 func (r *ShopGoods) ListChangesPage(targetID uint, page, pageSize int) ([]ShopGoodsChangeLog, int64, error) {
 	if page < 1 {
 		page = 1
@@ -677,6 +699,11 @@ func (r *ShopGoods) AppendMonitorLog(log *ShopMonitorLog) error {
 		log.DurationMS = log.FinishedAt.Sub(log.StartedAt).Milliseconds()
 	}
 	return r.db.Create(log).Error
+}
+
+func (r *ShopGoods) DeleteMonitorLogsBefore(cutoff time.Time) (int64, error) {
+	result := r.db.Where("started_at < ?", cutoff).Delete(&ShopMonitorLog{})
+	return result.RowsAffected, result.Error
 }
 
 func (r *ShopGoods) ListMonitorLogsPage(targetID uint, page, pageSize int) ([]ShopMonitorLog, int64, error) {
@@ -781,4 +808,14 @@ func (r *ShopSyncJobs) MarkInterrupted() error {
 			"error_message": "服务重启前同步未完成",
 			"finished_at":   now,
 		}).Error
+}
+
+// DeleteFinishedBefore keeps queued and running jobs even if malformed data
+// happens to contain a finished_at value.
+func (r *ShopSyncJobs) DeleteFinishedBefore(cutoff time.Time) (int64, error) {
+	result := r.db.
+		Where("finished_at IS NOT NULL AND finished_at < ?", cutoff).
+		Where("status NOT IN ?", []ShopSyncJobStatus{ShopSyncJobQueued, ShopSyncJobRunning}).
+		Delete(&ShopSyncJob{})
+	return result.RowsAffected, result.Error
 }

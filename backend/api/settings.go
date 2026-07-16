@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -51,7 +52,15 @@ func registerSettings(g *gin.RouterGroup, d *Deps) {
 	gs.GET("/config", func(c *gin.Context) { getSettingsConfig(c, d) })
 	gs.PUT("/config", func(c *gin.Context) { saveSettingsConfig(c, d) })
 	gs.POST("/apply", func(c *gin.Context) { applySettingsConfig(c, d) })
+	gs.POST("/retention/shop/cleanup", func(c *gin.Context) { cleanupShopHistory(c, d) })
 	gs.POST("/proxy/test", func(c *gin.Context) { testProxy(c) })
+}
+
+type shopRetentionInput struct {
+	ShopHighFrequencyChangeLogsDays int `json:"shopHighFrequencyChangeLogsDays" binding:"gte=0"`
+	ShopOtherChangeLogsDays         int `json:"shopOtherChangeLogsDays" binding:"gte=0"`
+	ShopMonitorLogsDays             int `json:"shopMonitorLogsDays" binding:"gte=0"`
+	ShopSyncJobsDays                int `json:"shopSyncJobsDays" binding:"gte=0"`
 }
 
 func getSettingsConfig(c *gin.Context, d *Deps) {
@@ -135,6 +144,29 @@ func applySettingsConfig(c *gin.Context, d *Deps) {
 	result, err := d.Runtime.ApplyFromFile()
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+func cleanupShopHistory(c *gin.Context, d *Deps) {
+	if d.Runtime == nil {
+		fail(c, http.StatusServiceUnavailable, fmt.Errorf("runtime manager is unavailable"))
+		return
+	}
+	var in shopRetentionInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	result, err := d.Runtime.RunShopRetention(config.RetentionConfig{
+		ShopHighFrequencyChangeLogsDays: in.ShopHighFrequencyChangeLogsDays,
+		ShopOtherChangeLogsDays:         in.ShopOtherChangeLogsDays,
+		ShopMonitorLogsDays:             in.ShopMonitorLogsDays,
+		ShopSyncJobsDays:                in.ShopSyncJobsDays,
+	})
+	if err != nil {
+		fail(c, http.StatusServiceUnavailable, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": result})
