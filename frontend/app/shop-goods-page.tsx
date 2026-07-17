@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { apiFetch } from "@/lib/api"
-import { useAllShopGoods, useShopTargets } from "@/lib/queries"
+import { useShopGoodsOverview, useShopGoodsTargetOptions } from "@/lib/queries"
 import { money, relativeTime } from "@/lib/format"
 import {
   readAllShopGoodsPreferences,
@@ -17,7 +17,7 @@ import {
   writeAllShopGoodsPreferences,
 } from "@/lib/shop-goods-preferences"
 import { cn } from "@/lib/utils"
-import type { ShopGoodsSort, ShopGoodsStatus, ShopGoodsWithTarget, ShopRefreshGoodsResult } from "@/lib/api-types"
+import type { ShopGoodsListItem, ShopGoodsSort, ShopGoodsStatus, ShopRefreshGoodsResult } from "@/lib/api-types"
 
 type GoodsStatusFilter = ShopGoodsStatusFilter
 
@@ -38,12 +38,12 @@ const sortLabels: Record<ShopGoodsSort, string> = {
   last_seen_desc: "最近出现",
 }
 
-function shopName(row: ShopGoodsWithTarget) {
+function shopName(row: ShopGoodsListItem) {
   return row.target_name?.trim() || row.target_last_shop_name?.trim() || `店铺 #${row.target_id}`
 }
 
-export default function ShopGoodsPage() {
-  const targets = useShopTargets()
+export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boolean }) {
+  const targets = useShopGoodsTargetOptions(publicMode)
   const [initialPreferences] = useState(readAllShopGoodsPreferences)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(initialPreferences.pageSize)
@@ -68,7 +68,7 @@ export default function ShopGoodsPage() {
     [debouncedCategoryName, debouncedKeyword, inStockOnly, sort, status, targetID],
   )
   const goodsSearchPending = keyword !== debouncedKeyword || categoryName !== debouncedCategoryName
-  const goods = useAllShopGoods(page, pageSize, filters, !goodsSearchPending)
+  const goods = useShopGoodsOverview(page, pageSize, filters, !goodsSearchPending, publicMode)
   const rows = goods.data?.items ?? []
   const total = goods.data?.total ?? 0
   const pages = goods.data?.pages ?? 1
@@ -88,7 +88,7 @@ export default function ShopGoodsPage() {
     setPage(1)
   }
 
-  async function refreshGoodsStock(row: ShopGoodsWithTarget) {
+  async function refreshGoodsStock(row: ShopGoodsListItem) {
     const busyKey = `${row.target_id}:${row.goods_key}`
     setRefreshingGoodsKey(busyKey)
     try {
@@ -224,15 +224,21 @@ export default function ShopGoodsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((row) => (
+              {goods.error ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="h-24 text-center text-sm text-destructive">
+                    {`商品加载失败：${goods.error}`}
+                  </TableCell>
+                </TableRow>
+              ) : rows.map((row) => (
                 <GoodsRow
                   key={row.id}
                   row={row}
                   refreshing={refreshingGoodsKey === `${row.target_id}:${row.goods_key}`}
-                  onRefreshStock={refreshGoodsStock}
+                  onRefreshStock={publicMode ? undefined : refreshGoodsStock}
                 />
               ))}
-              {rows.length === 0 ? (
+              {!goods.error && rows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} className="h-24 text-center text-sm text-muted-foreground">
                     {activeFilters ? "当前筛选条件下没有商品。" : "暂无商品快照，先同步店铺。"}
@@ -261,9 +267,9 @@ function GoodsRow({
   refreshing,
   onRefreshStock,
 }: {
-  row: ShopGoodsWithTarget
+  row: ShopGoodsListItem
   refreshing: boolean
-  onRefreshStock: (row: ShopGoodsWithTarget) => void
+  onRefreshStock?: (row: ShopGoodsListItem) => void
 }) {
   const canBuy = !row.removed_at && row.stock_count > 0 && row.link
   const low = !row.removed_at && row.target_stock_threshold > 0 && row.stock_count <= row.target_stock_threshold
@@ -272,9 +278,11 @@ function GoodsRow({
       <TableCell>
         <div className="min-w-0">
           <div className="truncate font-medium" title={shopName(row)}>{shopName(row)}</div>
-          <a href={row.target_site_url} target="_blank" rel="noreferrer" className="mt-1 inline-flex max-w-full items-center gap-1 truncate text-xs text-muted-foreground hover:text-foreground">
-            店铺页 <ExternalLink className="size-3" />
-          </a>
+          {row.target_site_url ? (
+            <a href={row.target_site_url} target="_blank" rel="noreferrer" className="mt-1 inline-flex max-w-full items-center gap-1 truncate text-xs text-muted-foreground hover:text-foreground">
+              店铺页 <ExternalLink className="size-3" />
+            </a>
+          ) : null}
         </div>
       </TableCell>
       <TableCell>
@@ -288,19 +296,23 @@ function GoodsRow({
       <TableCell className="truncate" title={row.category_name || undefined}>{row.category_name || "未分组"}</TableCell>
       <TableCell>{money(row.price)}</TableCell>
       <TableCell>
-        <button
-          type="button"
-          onClick={() => onRefreshStock(row)}
-          disabled={refreshing}
-          className={cn(
-            "inline-flex items-center gap-1 rounded-md px-2 py-1 font-semibold tabular-nums transition hover:bg-muted disabled:cursor-wait disabled:opacity-70",
-            low && "text-warning",
-          )}
-          title="点击刷新该商品库存"
-        >
-          {refreshing ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3 opacity-60" />}
-          {row.stock_count}
-        </button>
+        {onRefreshStock ? (
+          <button
+            type="button"
+            onClick={() => onRefreshStock(row)}
+            disabled={refreshing}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md px-2 py-1 font-semibold tabular-nums transition hover:bg-muted disabled:cursor-wait disabled:opacity-70",
+              low && "text-warning",
+            )}
+            title="点击刷新该商品库存"
+          >
+            {refreshing ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3 opacity-60" />}
+            {row.stock_count}
+          </button>
+        ) : (
+          <span className={cn("font-semibold tabular-nums", low && "text-warning")}>{row.stock_count}</span>
+        )}
       </TableCell>
       <TableCell>{row.removed_at ? "已消失" : row.stock_count > 0 ? "有库存" : "零库存"}</TableCell>
       <TableCell>{relativeTime(row.last_seen_at)}</TableCell>

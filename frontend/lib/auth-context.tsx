@@ -11,6 +11,7 @@ import {
 } from "react"
 import {
   apiFetch,
+  getToken,
   setToken,
   setUnauthorizedHandler,
 } from "@/lib/api"
@@ -69,6 +70,15 @@ function isEmbeddedModeURL() {
   return new URLSearchParams(window.location.search).get("ui_mode") === "embedded"
 }
 
+function isPublicShopGoodsURL() {
+  if (typeof window === "undefined") return false
+  return window.location.pathname.replace(/\/+$/, "") === "/shop-goods"
+}
+
+function startsInPublicMode() {
+  return isPublicShopGoodsURL() && !getToken() && !readEmbeddedLoginPayload()
+}
+
 function removeEmbeddedTokenFromURL() {
   if (typeof window === "undefined") return
   const url = new URL(window.location.href)
@@ -84,8 +94,9 @@ function embeddedLoginMessage(err?: unknown) {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  // 启动时无论有没有 token 都先 /auth/me 探测一次，因为后端可能开了"无鉴权模式"。
-  const [status, setStatus] = useState<AuthStatus>("loading")
+  // The public goods page must not depend on a protected auth probe. Existing
+  // Ops or Sub2API credentials still enter the normal verification flow.
+  const [status, setStatus] = useState<AuthStatus>(() => startsInPublicMode() ? "anonymous" : "loading")
   const [username, setUsername] = useState<string | null>(null)
   const [authDisabled, setAuthDisabled] = useState(false)
   const [embeddedMode, setEmbeddedMode] = useState(() => isEmbeddedModeURL())
@@ -127,6 +138,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
+      if (isPublicShopGoodsURL() && !getToken()) {
+        setUsername(null)
+        setStatus("anonymous")
+        return
+      }
+
       try {
         const me = await apiFetch<MeResponse>("/auth/me", { skipAuthErrorHandler: true })
         if (cancelled) return
@@ -163,6 +180,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // 注册全局 401 回调：让 apiFetch 在任何业务请求 401 时把我们打回登录页。
   // 鉴权关闭时不可能拿到 401，这里也无害。
   useEffect(() => {
+    if (status === "anonymous" && isPublicShopGoodsURL()) {
+      setUnauthorizedHandler(null)
+      return () => setUnauthorizedHandler(null)
+    }
     setUnauthorizedHandler(() => {
       setUsername(null)
       if (embeddedMode) {
@@ -171,7 +192,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setStatus("anonymous")
     })
     return () => setUnauthorizedHandler(null)
-  }, [embeddedMode])
+  }, [embeddedMode, status])
 
   const login = useCallback(async (u: string, p: string) => {
     const res = await apiFetch<LoginResponse>("/auth/login", {

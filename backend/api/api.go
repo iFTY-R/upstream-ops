@@ -109,6 +109,7 @@ func Register(r *gin.Engine, d *Deps) {
 	})
 
 	api := r.Group("/api")
+	registerPublicShopGoods(r.Group("/api/public"), d)
 	if d.Runtime != nil {
 		api.Use(d.Runtime.AuthMiddleware())
 	}

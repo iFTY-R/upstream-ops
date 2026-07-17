@@ -25,7 +25,8 @@ import type {
   ShopGoodsChangeLog,
   ShopGoodsStatus,
   ShopGoodsSnapshot,
-  ShopGoodsWithTarget,
+  ShopGoodsListItem,
+  ShopGoodsTargetOption,
   ShopMonitorLog,
   ShopSnapshotCategory,
   ShopTarget,
@@ -284,6 +285,10 @@ export function useShopTargets() {
   return useApi<ShopTarget[]>("/shop-targets")
 }
 
+export function useShopGoodsTargetOptions(publicMode = false) {
+  return useApi<ShopGoodsTargetOption[]>(publicMode ? "/public/shop-targets" : "/shop-targets")
+}
+
 export function useShopWatchRules(targetID: number | null) {
   return useApi<ShopWatchRule[]>(
     targetID == null ? null : `/shop-targets/${targetID}/watch-rules`,
@@ -318,9 +323,10 @@ export function useShopGoods(targetID: number | null, page = 1, pageSize = 20, f
   )
 }
 
-export function useAllShopGoods(page = 1, pageSize = 50, filters?: ShopGoodsFilters, enabled = true) {
-  return useApi<PageResult<ShopGoodsWithTarget>>(
-    enabled ? `/shop-goods?${shopGoodsQuery(page, pageSize, filters)}` : null,
+export function useShopGoodsOverview(page = 1, pageSize = 50, filters?: ShopGoodsFilters, enabled = true, publicMode = false) {
+  const resource = publicMode ? "/public/shop-goods" : "/shop-goods"
+  return useApi<PageResult<ShopGoodsListItem>>(
+    enabled ? `${resource}?${shopGoodsQuery(page, pageSize, filters)}` : null,
   )
 }
 

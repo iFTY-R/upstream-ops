@@ -148,6 +148,13 @@ export interface ShopTarget {
   updated_at: string
 }
 
+export interface ShopGoodsTargetOption {
+  id: number
+  name: string
+  last_shop_name?: string
+  site_url: string
+}
+
 export interface ShopWatchRule {
   id: number
   target_id: number
@@ -224,6 +231,24 @@ export interface ShopGoodsWithTarget extends ShopGoodsSnapshot {
   target_site_url: string
   target_monitor_enabled: boolean
   target_notify_enabled: boolean
+  target_stock_threshold: number
+}
+
+/** Fields shared by the authenticated and anonymous goods overview. */
+export interface ShopGoodsListItem {
+  id: number
+  target_id: number
+  goods_key: string
+  name: string
+  category_name: string
+  link: string
+  price: number
+  stock_count: number
+  last_seen_at: string
+  removed_at?: string | null
+  target_name: string
+  target_last_shop_name: string
+  target_site_url: string
   target_stock_threshold: number
 }
 
