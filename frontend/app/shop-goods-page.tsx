@@ -204,7 +204,7 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
               value={keyword}
               onChange={(value) => resetPage(() => setKeyword(value))}
               onClear={() => resetPage(() => setKeyword(""))}
-              placeholder="搜索商品名、Key 或分类"
+              placeholder="搜索商品名或 Key"
             />
           </div>
         </div>

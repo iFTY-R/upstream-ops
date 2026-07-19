@@ -560,7 +560,7 @@ func applyShopGoodsFilterQualified(q *gorm.DB, filter ShopGoodsFilter, alias str
 	}
 	if filter.Keyword != "" {
 		like := "%" + filter.Keyword + "%"
-		q = q.Where("("+col("name")+" LIKE ? OR "+col("goods_key")+" LIKE ? OR "+col("category_name")+" LIKE ?)", like, like, like)
+		q = q.Where("("+col("name")+" LIKE ? OR "+col("goods_key")+" LIKE ?)", like, like)
 	}
 	switch filter.Status {
 	case "active":

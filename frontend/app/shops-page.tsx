@@ -1433,7 +1433,7 @@ function GoodsPanel({
               value={keyword}
               onChange={(event) => onKeyword(event.target.value)}
               className="pl-9 pr-10"
-              placeholder={`在 ${selectedCategoryName} 中搜索商品名、Key 或分类`}
+              placeholder={`在 ${selectedCategoryName} 中搜索商品名或 Key`}
             />
             {canClearSearch ? (
               <button

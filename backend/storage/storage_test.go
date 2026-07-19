@@ -820,6 +820,14 @@ func TestShopGoodsListAllPageFilteredIncludesTargetAndFilters(t *testing.T) {
 	if total != 2 || len(lowStock) != 2 {
 		t.Fatalf("low stock total=%d len=%d rows=%#v", total, len(lowStock), lowStock)
 	}
+
+	keywordGoods, total, err := goods.ListAllPageFiltered(1, 20, ShopGoodsFilter{Keyword: "GPT"})
+	if err != nil {
+		t.Fatalf("list keyword goods: %v", err)
+	}
+	if total != 0 || len(keywordGoods) != 0 {
+		t.Fatalf("keyword search should not match category names: total=%d len=%d rows=%#v", total, len(keywordGoods), keywordGoods)
+	}
 }
 
 func TestAggregateBalanceTrendFillsMissingDays(t *testing.T) {
