@@ -214,6 +214,12 @@ func (s *Service) RefreshGoodsByKey(ctx context.Context, targetID uint, goodsKey
 		}
 		return &RefreshGoodsResult{Snapshot: current, Found: false, Changed: changed}, nil
 	}
+	fetched := map[string]shopprovider.Goods{item.GoodsKey: *item}
+	if err := s.collectPaymentQuotes(ctx, provider, starget, fetched); err != nil {
+		return nil, err
+	}
+	quotedItem := fetched[item.GoodsKey]
+	item = &quotedItem
 
 	next := snapshotFromGoods(targetID, *item, now)
 	changed := true
@@ -384,6 +390,11 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 	fetched, err := s.fetchGoods(ctx, provider, starget, target)
 	if err != nil {
 		s.blockOrigin(origin, err)
+		s.recordFailure(target, started, err)
+		s.notifyFailure(ctx, target, err)
+		return result, err
+	}
+	if err := s.collectPaymentQuotes(ctx, provider, starget, fetched); err != nil {
 		s.recordFailure(target, started, err)
 		s.notifyFailure(ctx, target, err)
 		return result, err
@@ -628,6 +639,90 @@ func (s *Service) fetchGoods(ctx context.Context, provider shopprovider.Provider
 	return out, nil
 }
 
+func (s *Service) collectPaymentQuotes(ctx context.Context, provider shopprovider.Provider, starget shopprovider.Target, fetched map[string]shopprovider.Goods) error {
+	channelProvider, ok := provider.(shopprovider.PaymentChannelProvider)
+	if !ok || len(fetched) == 0 {
+		return nil
+	}
+	for key, item := range fetched {
+		item.PaymentQuote = nil
+		fetched[key] = item
+	}
+	channels, err := channelProvider.PaymentChannels(ctx, starget)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if s.log != nil {
+			s.log.Warn("load shop payment channels failed", "target_id", starget.ID, "err", err)
+		}
+		return nil
+	}
+	if len(channels) == 0 {
+		return nil
+	}
+	channel := channels[0]
+	if channel.ID == 0 {
+		if s.log != nil {
+			s.log.Warn("shop payment channel has no id", "target_id", starget.ID)
+		}
+		return nil
+	}
+	keys := make([]string, 0, len(fetched))
+	for key := range fetched {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	failed := 0
+	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		item := fetched[key]
+		quantity := item.LimitCount
+		if quantity < 1 {
+			quantity = 1
+		}
+		price, err := provider.Price(ctx, starget, shopprovider.PriceRequest{
+			GoodsKey:  item.GoodsKey,
+			Quantity:  quantity,
+			ChannelID: channel.ID,
+		})
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			failed++
+			continue
+		}
+		if price == nil {
+			failed++
+			continue
+		}
+		channelName := strings.TrimSpace(channel.DisplayName)
+		if channelName == "" {
+			channelName = strings.TrimSpace(channel.Name)
+		}
+		quotedAt := time.Now()
+		item.PaymentQuote = &shopprovider.PaymentQuote{
+			ChannelID:      channel.ID,
+			ChannelName:    channelName,
+			ChannelRate:    channel.Rate,
+			Quantity:       quantity,
+			OriginalAmount: price.OriginalAmount,
+			Fee:            price.Fee,
+			FeePayer:       price.FeePayer,
+			TotalAmount:    price.TotalAmount,
+			QuotedAt:       quotedAt,
+		}
+		fetched[key] = item
+	}
+	if failed > 0 && s.log != nil {
+		s.log.Warn("collect shop payment quotes incomplete", "target_id", starget.ID, "failed", failed, "total", len(keys))
+	}
+	return nil
+}
+
 func (s *Service) buildGoodsRequests(ctx context.Context, provider shopprovider.Provider, starget shopprovider.Target, target *storage.ShopTarget, goodsType string) ([]shopprovider.GoodsRequest, error) {
 	mode := target.ScopeMode
 	if mode == "" {
@@ -786,6 +881,9 @@ func (s *Service) diffAndSave(target *storage.ShopTarget, fetched map[string]sho
 			changed = true
 			drafts = append(drafts, changeDraft{item: item, event: storage.ShopChangePriceChanged, oldValue: fmtFloat(prev.Price), newValue: fmtFloat(item.Price), summary: fmt.Sprintf("%s 价格 %.4f -> %.4f", item.Name, prev.Price, item.Price)})
 		}
+		if !paymentQuoteValuesEqual(prev, next) {
+			changed = true
+		}
 		if target.StockChangeEnabled && prev.StockCount != item.StockCount {
 			changed = true
 			drafts = append(drafts, changeDraft{item: item, event: storage.ShopChangeStockChanged, oldValue: strconv.Itoa(prev.StockCount), newValue: strconv.Itoa(item.StockCount), summary: fmt.Sprintf("%s 库存 %d -> %d", item.Name, prev.StockCount, item.StockCount)})
@@ -844,7 +942,8 @@ func shopSnapshotChanged(prev, next storage.ShopGoodsSnapshot) bool {
 		prev.StockCount != next.StockCount ||
 		prev.LimitCount != next.LimitCount ||
 		prev.SendOrder != next.SendOrder ||
-		prev.ContactFormat != next.ContactFormat
+		prev.ContactFormat != next.ContactFormat ||
+		!paymentQuoteValuesEqual(prev, next)
 }
 
 func (s *Service) appendChange(changes *[]storage.ShopGoodsChangeLog, target *storage.ShopTarget, item shopprovider.Goods, event storage.ShopGoodsChangeEvent, oldValue, newValue, summary string, changedAt time.Time) error {
@@ -1013,7 +1112,7 @@ func (s *Service) hasMatchingWatchRule(targetID uint, event storage.ShopGoodsCha
 }
 
 func snapshotFromGoods(targetID uint, item shopprovider.Goods, now time.Time) storage.ShopGoodsSnapshot {
-	return storage.ShopGoodsSnapshot{
+	snapshot := storage.ShopGoodsSnapshot{
 		TargetID:      targetID,
 		GoodsKey:      item.GoodsKey,
 		GoodsType:     item.GoodsType,
@@ -1032,7 +1131,47 @@ func snapshotFromGoods(targetID uint, item shopprovider.Goods, now time.Time) st
 		LastSeenAt:    now,
 		RemovedAt:     nil,
 	}
+	if item.PaymentQuote != nil {
+		quote := item.PaymentQuote
+		snapshot.PaymentChannelID = int64Ptr(quote.ChannelID)
+		snapshot.PaymentChannelName = stringPtr(quote.ChannelName)
+		snapshot.PaymentChannelRate = float64Ptr(quote.ChannelRate)
+		snapshot.PaymentQuoteQuantity = intPtr(quote.Quantity)
+		snapshot.PaymentOriginalAmount = float64Ptr(quote.OriginalAmount)
+		snapshot.PaymentFee = float64Ptr(quote.Fee)
+		snapshot.PaymentFeePayer = intPtr(quote.FeePayer)
+		snapshot.PaymentTotalAmount = float64Ptr(quote.TotalAmount)
+		quotedAt := quote.QuotedAt
+		snapshot.PaymentQuotedAt = &quotedAt
+	}
+	return snapshot
 }
+
+func paymentQuoteValuesEqual(prev, next storage.ShopGoodsSnapshot) bool {
+	return equalPtr(prev.PaymentChannelID, next.PaymentChannelID) &&
+		equalPtr(prev.PaymentChannelName, next.PaymentChannelName) &&
+		equalPtr(prev.PaymentChannelRate, next.PaymentChannelRate) &&
+		equalPtr(prev.PaymentQuoteQuantity, next.PaymentQuoteQuantity) &&
+		equalPtr(prev.PaymentOriginalAmount, next.PaymentOriginalAmount) &&
+		equalPtr(prev.PaymentFee, next.PaymentFee) &&
+		equalPtr(prev.PaymentFeePayer, next.PaymentFeePayer) &&
+		equalPtr(prev.PaymentTotalAmount, next.PaymentTotalAmount)
+}
+
+func equalPtr[T comparable](left, right *T) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func intPtr(value int) *int { return &value }
+
+func int64Ptr(value int64) *int64 { return &value }
+
+func float64Ptr(value float64) *float64 { return &value }
+
+func stringPtr(value string) *string { return &value }
 
 func parseStringList(raw string) []string {
 	var list []string

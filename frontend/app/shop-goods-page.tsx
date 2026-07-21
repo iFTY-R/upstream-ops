@@ -38,6 +38,58 @@ const sortLabels: Record<ShopGoodsSort, string> = {
   last_seen_desc: "最近出现",
 }
 
+function minimumQuantity(limitCount: number) {
+  return limitCount > 0 ? limitCount : 1
+}
+
+type PaymentPriceDetails = {
+  quantityLabel: string | null
+  amountLabel: "小计" | "应付" | null
+  amount: number | null
+  buyerFee: number | null
+  title: string | undefined
+}
+
+function paymentPriceDetails(row: ShopGoodsListItem): PaymentPriceDetails {
+  const quantity = minimumQuantity(row.limit_count)
+  const hasQuote = Boolean(
+    row.payment_quoted_at
+    && row.payment_channel_name != null
+    && row.payment_quote_quantity != null
+    && row.payment_original_amount != null
+    && row.payment_fee != null
+    && row.payment_fee_payer != null
+    && row.payment_total_amount != null
+    && row.payment_quote_quantity === quantity,
+  )
+  if (!hasQuote) {
+    return {
+      quantityLabel: quantity > 1 ? `${quantity}件起` : null,
+      amountLabel: quantity > 1 ? "小计" : null,
+      amount: quantity > 1 ? row.price * quantity : null,
+      buyerFee: null,
+      title: undefined,
+    }
+  }
+
+  const fee = row.payment_fee as number
+  const totalAmount = row.payment_total_amount as number
+  const buyerFee = row.payment_fee_payer === 1 && fee > 0 ? fee : null
+  const showAmount = quantity > 1 || buyerFee != null || money(row.price) !== money(totalAmount)
+  const channelName = row.payment_channel_name?.trim()
+  let title = channelName ? `默认渠道：${channelName}` : undefined
+  if (title && buyerFee != null) {
+    title += "，手续费已计入应付金额"
+  }
+  return {
+    quantityLabel: quantity > 1 ? `${quantity}件起` : null,
+    amountLabel: showAmount ? "应付" : null,
+    amount: showAmount ? totalAmount : null,
+    buyerFee,
+    title,
+  }
+}
+
 function shopName(row: ShopGoodsListItem) {
   return row.target_name?.trim() || row.target_last_shop_name?.trim() || `店铺 #${row.target_id}`
 }
@@ -214,9 +266,9 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
             <TableHeader>
               <TableRow>
                 <TableHead className="w-[13%]">店铺</TableHead>
-                <TableHead className="w-[29%]">商品</TableHead>
-                <TableHead className="w-[18%]">分组 / 分类</TableHead>
-                <TableHead className="w-[10%]">价格</TableHead>
+                <TableHead className="w-[28%]">商品</TableHead>
+                <TableHead className="w-[17%]">分组 / 分类</TableHead>
+                <TableHead className="w-[12%]">价格</TableHead>
                 <TableHead className="w-[7%]">库存</TableHead>
                 <TableHead className="w-[7%]">状态</TableHead>
                 <TableHead className="w-[9%]">最近出现</TableHead>
@@ -273,6 +325,7 @@ function GoodsRow({
 }) {
   const canBuy = !row.removed_at && row.stock_count > 0 && row.link
   const low = !row.removed_at && row.target_stock_threshold > 0 && row.stock_count <= row.target_stock_threshold
+  const priceDetails = paymentPriceDetails(row)
   return (
     <TableRow className={cn(row.removed_at && "opacity-50")}>
       <TableCell>
@@ -299,10 +352,19 @@ function GoodsRow({
         </div>
       </TableCell>
       <TableCell>
-        <div className="whitespace-nowrap tabular-nums">
-          <div>{money(row.price)}</div>
-          {row.limit_count > 1 ? (
-            <div className="mt-0.5 text-xs text-muted-foreground">{`×${row.limit_count} = ${money(row.price * row.limit_count)}`}</div>
+        <div className="whitespace-nowrap tabular-nums" title={priceDetails.title}>
+          <div className="font-medium">
+            {money(row.price)}
+            <span className="ml-1 text-[11px] font-normal text-muted-foreground">/ 件</span>
+          </div>
+          {priceDetails.amount != null && priceDetails.amountLabel ? (
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              {priceDetails.quantityLabel ? `${priceDetails.quantityLabel} · ` : null}
+              {priceDetails.amountLabel} <span className="font-medium text-foreground">{money(priceDetails.amount)}</span>
+            </div>
+          ) : null}
+          {priceDetails.buyerFee != null ? (
+            <div className="mt-0.5 text-[11px] text-muted-foreground">手续费 {money(priceDetails.buyerFee)}</div>
           ) : null}
         </div>
       </TableCell>

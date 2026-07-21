@@ -382,6 +382,175 @@ func TestSyncAllReusesProviderAndCachedShopInfo(t *testing.T) {
 	}
 }
 
+func TestSyncCollectsDefaultChannelQuotesSerially(t *testing.T) {
+	platform := storage.ShopPlatform("payment-quote-sync-test")
+	provider := &paymentQuoteShopProvider{
+		goods: []shopprovider.Goods{
+			{GoodsKey: "limit-zero", GoodsType: "card", Name: "Zero", Price: 1, StockCount: 3, LimitCount: 0},
+			{GoodsKey: "limit-one", GoodsType: "card", Name: "One", Price: 2, StockCount: 3, LimitCount: 1},
+			{GoodsKey: "limit-five", GoodsType: "card", Name: "Five", Price: 3, StockCount: 10, LimitCount: 5},
+		},
+		channels: []shopprovider.PaymentChannel{
+			{ID: 7, Name: "支付宝电脑收款", DisplayName: "支付宝", Rate: 3},
+			{ID: 8, Name: "微信收款", DisplayName: "微信", Rate: 2},
+		},
+		prices: map[string]shopprovider.PriceResult{
+			"limit-zero": {OriginalAmount: 1, Fee: 0.03, FeePayer: 1, TotalAmount: 1.03},
+			"limit-one":  {OriginalAmount: 2, Fee: 0.06, FeePayer: 1, TotalAmount: 2.06},
+			"limit-five": {OriginalAmount: 15, Fee: 0.45, FeePayer: 1, TotalAmount: 15.45},
+		},
+		priceErrors: map[string]error{},
+	}
+	shopprovider.Register(platform, func() shopprovider.Provider { return provider })
+
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goodsRepo := storage.NewShopGoods(db)
+	target := createRefreshTarget(t, targets, platform)
+	service := NewService(targets, storage.NewShopWatchRules(db), goodsRepo, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	result, err := service.SyncByID(context.Background(), target.ID)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.GoodsCount != 3 {
+		t.Fatalf("goods count = %d, want 3", result.GoodsCount)
+	}
+
+	requests, maxActive := provider.priceRequestSnapshot()
+	if len(requests) != 3 || maxActive != 1 {
+		t.Fatalf("price requests = %#v, max active = %d", requests, maxActive)
+	}
+	wantKeys := []string{"limit-five", "limit-one", "limit-zero"}
+	wantQuantities := map[string]int{"limit-zero": 1, "limit-one": 1, "limit-five": 5}
+	for index, request := range requests {
+		if request.GoodsKey != wantKeys[index] || request.ChannelID != 7 || request.Quantity != wantQuantities[request.GoodsKey] {
+			t.Fatalf("price request[%d] = %#v", index, request)
+		}
+	}
+
+	for key, quantity := range wantQuantities {
+		snapshot, err := goodsRepo.FindSnapshot(target.ID, key)
+		if err != nil {
+			t.Fatalf("find snapshot %s: %v", key, err)
+		}
+		if snapshot == nil || snapshot.PaymentChannelID == nil || *snapshot.PaymentChannelID != 7 ||
+			snapshot.PaymentChannelName == nil || *snapshot.PaymentChannelName != "支付宝" ||
+			snapshot.PaymentQuoteQuantity == nil || *snapshot.PaymentQuoteQuantity != quantity ||
+			snapshot.PaymentFee == nil || snapshot.PaymentFeePayer == nil || *snapshot.PaymentFeePayer != 1 ||
+			snapshot.PaymentTotalAmount == nil || snapshot.PaymentQuotedAt == nil {
+			t.Fatalf("snapshot quote %s = %#v", key, snapshot)
+		}
+	}
+}
+
+func TestQuoteFailuresClearStaleDataWithoutFailingSync(t *testing.T) {
+	platform := storage.ShopPlatform("payment-quote-failure-test")
+	provider := &paymentQuoteShopProvider{
+		goods:       []shopprovider.Goods{{GoodsKey: "goods", GoodsType: "card", Name: "Goods", Price: 2, StockCount: 5, LimitCount: 1}},
+		channels:    []shopprovider.PaymentChannel{{ID: 7, DisplayName: "支付宝", Rate: 3}},
+		prices:      map[string]shopprovider.PriceResult{"goods": {OriginalAmount: 2, Fee: 0.06, FeePayer: 1, TotalAmount: 2.06}},
+		priceErrors: map[string]error{},
+	}
+	shopprovider.Register(platform, func() shopprovider.Provider { return provider })
+
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goodsRepo := storage.NewShopGoods(db)
+	target := createRefreshTarget(t, targets, platform)
+	service := NewService(targets, storage.NewShopWatchRules(db), goodsRepo, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	if _, err := service.SyncByID(context.Background(), target.ID); err != nil {
+		t.Fatalf("initial sync: %v", err)
+	}
+
+	provider.setPriceError("goods", errors.New("quote failed"))
+	if _, err := service.SyncByID(context.Background(), target.ID); err != nil {
+		t.Fatalf("sync with quote failure: %v", err)
+	}
+	assertPaymentQuoteCleared(t, findPaymentSnapshot(t, goodsRepo, target.ID, "goods"))
+
+	provider.setPriceError("goods", nil)
+	if _, err := service.SyncByID(context.Background(), target.ID); err != nil {
+		t.Fatalf("restore quote: %v", err)
+	}
+	provider.setChannelError(errors.New("channels failed"))
+	if _, err := service.SyncByID(context.Background(), target.ID); err != nil {
+		t.Fatalf("sync with channel failure: %v", err)
+	}
+	assertPaymentQuoteCleared(t, findPaymentSnapshot(t, goodsRepo, target.ID, "goods"))
+
+	provider.setChannelError(nil)
+	if _, err := service.SyncByID(context.Background(), target.ID); err != nil {
+		t.Fatalf("restore channel quote: %v", err)
+	}
+	provider.setPriceError("goods", errors.New("refresh quote failed"))
+	refresh, err := service.RefreshGoodsByKey(context.Background(), target.ID, "goods")
+	if err != nil {
+		t.Fatalf("refresh with quote failure: %v", err)
+	}
+	assertPaymentQuoteCleared(t, refresh.Snapshot)
+}
+
+func TestCollectPaymentQuotesHonorsContextCancellation(t *testing.T) {
+	provider := &paymentQuoteShopProvider{
+		channels: []shopprovider.PaymentChannel{{ID: 7, DisplayName: "支付宝"}},
+		prices:   map[string]shopprovider.PriceResult{},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	service := NewService(nil, nil, nil, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	err := service.collectPaymentQuotes(ctx, provider, shopprovider.Target{}, map[string]shopprovider.Goods{
+		"goods": {GoodsKey: "goods"},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("collect quotes error = %v, want context canceled", err)
+	}
+}
+
+func TestCollectPaymentQuotesReturnsCancellationFromPriceRequest(t *testing.T) {
+	started := make(chan struct{})
+	provider := &paymentQuoteShopProvider{
+		channels:                 []shopprovider.PaymentChannel{{ID: 7, DisplayName: "支付宝"}},
+		prices:                   map[string]shopprovider.PriceResult{},
+		priceStarted:             started,
+		waitForPriceCancellation: true,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	service := NewService(nil, nil, nil, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- service.collectPaymentQuotes(ctx, provider, shopprovider.Target{}, map[string]shopprovider.Goods{
+			"goods": {GoodsKey: "goods"},
+		})
+	}()
+	<-started
+	cancel()
+
+	if err := <-errCh; !errors.Is(err, context.Canceled) {
+		t.Fatalf("collect quotes error = %v, want context canceled", err)
+	}
+}
+
+func findPaymentSnapshot(t *testing.T, goods *storage.ShopGoods, targetID uint, goodsKey string) *storage.ShopGoodsSnapshot {
+	t.Helper()
+	snapshot, err := goods.FindSnapshot(targetID, goodsKey)
+	if err != nil {
+		t.Fatalf("find snapshot: %v", err)
+	}
+	if snapshot == nil {
+		t.Fatal("snapshot is nil")
+	}
+	return snapshot
+}
+
+func assertPaymentQuoteCleared(t *testing.T, snapshot *storage.ShopGoodsSnapshot) {
+	t.Helper()
+	if snapshot.PaymentChannelID != nil || snapshot.PaymentChannelName != nil || snapshot.PaymentChannelRate != nil ||
+		snapshot.PaymentQuoteQuantity != nil || snapshot.PaymentOriginalAmount != nil || snapshot.PaymentFee != nil ||
+		snapshot.PaymentFeePayer != nil || snapshot.PaymentTotalAmount != nil || snapshot.PaymentQuotedAt != nil {
+		t.Fatalf("payment quote was not cleared: %#v", snapshot)
+	}
+}
+
 func createRefreshTarget(t *testing.T, targets *storage.ShopTargets, platform storage.ShopPlatform) *storage.ShopTarget {
 	t.Helper()
 	target := &storage.ShopTarget{
@@ -406,6 +575,96 @@ type fakeShopProvider struct {
 
 type pagedShopProvider struct {
 	goods []shopprovider.Goods
+}
+
+type paymentQuoteShopProvider struct {
+	mu                       sync.Mutex
+	goods                    []shopprovider.Goods
+	channels                 []shopprovider.PaymentChannel
+	channelErr               error
+	prices                   map[string]shopprovider.PriceResult
+	priceErrors              map[string]error
+	priceRequests            []shopprovider.PriceRequest
+	activePrices             int
+	maxActive                int
+	priceStarted             chan struct{}
+	waitForPriceCancellation bool
+}
+
+func (p *paymentQuoteShopProvider) Info(context.Context, shopprovider.Target) (*shopprovider.ShopInfo, error) {
+	return &shopprovider.ShopInfo{Name: "payment shop"}, nil
+}
+
+func (p *paymentQuoteShopProvider) Categories(context.Context, shopprovider.Target, shopprovider.CategoryRequest) ([]shopprovider.Category, error) {
+	return nil, nil
+}
+
+func (p *paymentQuoteShopProvider) Goods(context.Context, shopprovider.Target, shopprovider.GoodsRequest) (*shopprovider.GoodsPage, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	list := append([]shopprovider.Goods(nil), p.goods...)
+	return &shopprovider.GoodsPage{Total: len(list), List: list}, nil
+}
+
+func (p *paymentQuoteShopProvider) PaymentChannels(context.Context, shopprovider.Target) ([]shopprovider.PaymentChannel, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.channelErr != nil {
+		return nil, p.channelErr
+	}
+	return append([]shopprovider.PaymentChannel(nil), p.channels...), nil
+}
+
+func (p *paymentQuoteShopProvider) Price(ctx context.Context, _ shopprovider.Target, request shopprovider.PriceRequest) (*shopprovider.PriceResult, error) {
+	p.mu.Lock()
+	p.priceRequests = append(p.priceRequests, request)
+	p.activePrices++
+	if p.activePrices > p.maxActive {
+		p.maxActive = p.activePrices
+	}
+	result := p.prices[request.GoodsKey]
+	err := p.priceErrors[request.GoodsKey]
+	started := p.priceStarted
+	waitForCancellation := p.waitForPriceCancellation
+	p.mu.Unlock()
+	if started != nil {
+		close(started)
+	}
+	if waitForCancellation {
+		<-ctx.Done()
+		err = ctx.Err()
+	} else {
+		time.Sleep(time.Millisecond)
+	}
+	p.mu.Lock()
+	p.activePrices--
+	p.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (p *paymentQuoteShopProvider) setPriceError(goodsKey string, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err == nil {
+		delete(p.priceErrors, goodsKey)
+		return
+	}
+	p.priceErrors[goodsKey] = err
+}
+
+func (p *paymentQuoteShopProvider) setChannelError(err error) {
+	p.mu.Lock()
+	p.channelErr = err
+	p.mu.Unlock()
+}
+
+func (p *paymentQuoteShopProvider) priceRequestSnapshot() ([]shopprovider.PriceRequest, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]shopprovider.PriceRequest(nil), p.priceRequests...), p.maxActive
 }
 
 func TestHasMoreShopGoodsPagesUsesTotalAndFailsClosedAtLimit(t *testing.T) {

@@ -214,6 +214,15 @@ export interface ShopGoodsSnapshot {
   market_price: number
   stock_count: number
   limit_count: number
+  payment_channel_id?: number | null
+  payment_channel_name?: string | null
+  payment_channel_rate?: number | null
+  payment_quote_quantity?: number | null
+  payment_original_amount?: number | null
+  payment_fee?: number | null
+  payment_fee_payer?: number | null
+  payment_total_amount?: number | null
+  payment_quoted_at?: string | null
   send_order: number
   contact_format: string
   raw_json?: string
@@ -245,6 +254,13 @@ export interface ShopGoodsListItem {
   price: number
   stock_count: number
   limit_count: number
+  payment_channel_name?: string | null
+  payment_quote_quantity?: number | null
+  payment_original_amount?: number | null
+  payment_fee?: number | null
+  payment_fee_payer?: number | null
+  payment_total_amount?: number | null
+  payment_quoted_at?: string | null
   last_seen_at: string
   removed_at?: string | null
   target_name: string
