@@ -821,6 +821,14 @@ func TestShopGoodsListAllPageFilteredIncludesTargetAndFilters(t *testing.T) {
 		t.Fatalf("low stock total=%d len=%d rows=%#v", total, len(lowStock), lowStock)
 	}
 
+	categoryGoods, total, err := goods.ListAllPageFiltered(1, 20, ShopGoodsFilter{CategoryName: "PT"})
+	if err != nil {
+		t.Fatalf("list category goods: %v", err)
+	}
+	if total != 2 || len(categoryGoods) != 2 {
+		t.Fatalf("category search should support partial matches: total=%d len=%d rows=%#v", total, len(categoryGoods), categoryGoods)
+	}
+
 	keywordGoods, total, err := goods.ListAllPageFiltered(1, 20, ShopGoodsFilter{Keyword: "GPT"})
 	if err != nil {
 		t.Fatalf("list keyword goods: %v", err)
