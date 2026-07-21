@@ -28,6 +28,7 @@ export interface AllShopGoodsPreferences {
   targetID: number | null
   status: ShopGoodsStatusFilter
   inStockOnly: boolean
+  showGoodsKey: boolean
   sort: ShopGoodsSort
   keyword: string
   excludeKeyword: string
@@ -57,6 +58,7 @@ const defaultAllShopGoodsPreferences: AllShopGoodsPreferences = {
   targetID: null,
   status: "all",
   inStockOnly: true,
+  showGoodsKey: false,
   sort: "category",
   keyword: "",
   excludeKeyword: "",
@@ -171,6 +173,7 @@ export function readAllShopGoodsPreferences(): AllShopGoodsPreferences {
     targetID: asTargetID(value.targetID),
     status: asStatus(value.status),
     inStockOnly: typeof value.inStockOnly === "boolean" ? value.inStockOnly : defaultAllShopGoodsPreferences.inStockOnly,
+    showGoodsKey: typeof value.showGoodsKey === "boolean" ? value.showGoodsKey : defaultAllShopGoodsPreferences.showGoodsKey,
     sort: asSort(value.sort),
     keyword: asText(value.keyword),
     excludeKeyword: asText(value.excludeKeyword),

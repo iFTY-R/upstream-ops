@@ -24,6 +24,7 @@ func registerShopTargets(g *gin.RouterGroup, d *Deps) {
 	gp.POST("/parse-url", func(c *gin.Context) { parseShopURL(c, d) })
 	gp.POST("/sync-all", func(c *gin.Context) { syncAllShopTargets(c, d) })
 	gp.POST("/sync-jobs/status", func(c *gin.Context) { getShopSyncJobsStatus(c, d) })
+	gp.GET("/monitor-logs/latest", func(c *gin.Context) { getLatestShopMonitorLog(c, d) })
 	gp.POST("/reorder", func(c *gin.Context) { reorderShopTargets(c, d) })
 	gp.POST("/bulk-notification", func(c *gin.Context) { bulkConfigureShopNotifications(c, d) })
 	gp.GET("/:id", func(c *gin.Context) { getShopTarget(c, d) })
@@ -535,6 +536,22 @@ func syncAllShopTargets(c *gin.Context, d *Deps) {
 		result.Targets = append(result.Targets, item)
 	}
 	c.JSON(http.StatusAccepted, gin.H{"data": result})
+}
+
+func getLatestShopMonitorLog(c *gin.Context, d *Deps) {
+	if !shopReposReady(c, d) {
+		return
+	}
+	list, _, err := d.ShopGoods.ListMonitorLogsPage(0, 1, 1)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	if len(list) == 0 {
+		c.JSON(http.StatusOK, gin.H{"data": nil})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list[0]})
 }
 
 func shopTargetCategories(c *gin.Context, d *Deps) {

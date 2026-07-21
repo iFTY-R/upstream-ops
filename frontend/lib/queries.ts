@@ -349,3 +349,7 @@ export function useShopMonitorLogs(targetID: number | null, page = 1, pageSize =
     targetID == null ? null : `/shop-targets/${targetID}/monitor-logs?page=${page}&page_size=${pageSize}`,
   )
 }
+
+export function useLatestShopMonitorLog(enabled = true) {
+  return useApi<ShopMonitorLog | null>(enabled ? "/shop-targets/monitor-logs/latest" : null)
+}

@@ -1,11 +1,11 @@
 package api
 
 import (
-    "bytes"
-    "encoding/json"
-    "errors"
-    "net/http"
-    "net/http/httptest"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -119,34 +119,34 @@ func TestBuildShopTargetDefaultsNotifyEnabledForCreate(t *testing.T) {
 }
 
 func TestBuildShopTargetNormalizesLDXPItemURL(t *testing.T) {
-    var server *httptest.Server
-    server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        switch r.URL.Path {
-        case "/shopApi/Shop/goodsInfo":
-            _, _ = w.Write([]byte(strings.ReplaceAll(`{"code":1,"msg":"success","data":{"user":{"nickname":"测试店铺","token":"ITEMSHOP","link":"__SERVER__/shop/ITEMSHOP"}}}`, "__SERVER__", server.URL)))
-        default:
-            http.NotFound(w, r)
-        }
-    }))
-    defer server.Close()
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/shopApi/Shop/goodsInfo":
+			_, _ = w.Write([]byte(strings.ReplaceAll(`{"code":1,"msg":"success","data":{"user":{"nickname":"测试店铺","token":"ITEMSHOP","link":"__SERVER__/shop/ITEMSHOP"}}}`, "__SERVER__", server.URL)))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
 
-    next, err := buildShopTarget(shopTargetInput{
-        Name:     "shop",
-        Platform: storage.ShopPlatformLDXP,
-        SiteURL:  server.URL + "/item/9l814h",
-    }, nil)
-    if err != nil {
-        t.Fatalf("build target: %v", err)
-    }
-    if next.SiteURL != server.URL+"/shop/ITEMSHOP" {
-        t.Fatalf("site_url = %q", next.SiteURL)
-    }
-    if next.BaseURL != server.URL {
-        t.Fatalf("base_url = %q", next.BaseURL)
-    }
-    if next.Token != "ITEMSHOP" {
-        t.Fatalf("token = %q", next.Token)
-    }
+	next, err := buildShopTarget(shopTargetInput{
+		Name:     "shop",
+		Platform: storage.ShopPlatformLDXP,
+		SiteURL:  server.URL + "/item/9l814h",
+	}, nil)
+	if err != nil {
+		t.Fatalf("build target: %v", err)
+	}
+	if next.SiteURL != server.URL+"/shop/ITEMSHOP" {
+		t.Fatalf("site_url = %q", next.SiteURL)
+	}
+	if next.BaseURL != server.URL {
+		t.Fatalf("base_url = %q", next.BaseURL)
+	}
+	if next.Token != "ITEMSHOP" {
+		t.Fatalf("token = %q", next.Token)
+	}
 }
 
 func TestBuildShopTargetAcceptsGoodsSort(t *testing.T) {
@@ -167,59 +167,59 @@ func TestBuildShopTargetAcceptsGoodsSort(t *testing.T) {
 }
 
 func TestParseShopURLAPIResolvesLDXPItemURL(t *testing.T) {
-    gin.SetMode(gin.TestMode)
+	gin.SetMode(gin.TestMode)
 
-    var server *httptest.Server
-    server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        switch r.URL.Path {
-        case "/shopApi/Shop/goodsInfo":
-            _, _ = w.Write([]byte(strings.ReplaceAll(`{"code":1,"msg":"success","data":{"user":{"nickname":"商品店铺","token":"ITEMSHOP","link":"__SERVER__/shop/ITEMSHOP"}}}`, "__SERVER__", server.URL)))
-        case "/shopApi/Shop/info":
-            _, _ = w.Write([]byte(strings.ReplaceAll(`{"code":1,"msg":"success","data":{"nickname":"商品店铺","link":"__SERVER__/shop/ITEMSHOP","goods_count":2}}`, "__SERVER__", server.URL)))
-        default:
-            http.NotFound(w, r)
-        }
-    }))
-    defer server.Close()
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/shopApi/Shop/goodsInfo":
+			_, _ = w.Write([]byte(strings.ReplaceAll(`{"code":1,"msg":"success","data":{"user":{"nickname":"商品店铺","token":"ITEMSHOP","link":"__SERVER__/shop/ITEMSHOP"}}}`, "__SERVER__", server.URL)))
+		case "/shopApi/Shop/info":
+			_, _ = w.Write([]byte(strings.ReplaceAll(`{"code":1,"msg":"success","data":{"nickname":"商品店铺","link":"__SERVER__/shop/ITEMSHOP","goods_count":2}}`, "__SERVER__", server.URL)))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
 
-    router := gin.New()
-    router.POST("/api/shop-targets/parse-url", func(c *gin.Context) { parseShopURL(c, &Deps{}) })
+	router := gin.New()
+	router.POST("/api/shop-targets/parse-url", func(c *gin.Context) { parseShopURL(c, &Deps{}) })
 
-    req := httptest.NewRequest(http.MethodPost, "/api/shop-targets/parse-url", bytes.NewBufferString(`{"site_url":"`+server.URL+`/item/9l814h"}`))
-    req.Header.Set("Content-Type", "application/json")
-    rec := httptest.NewRecorder()
-    router.ServeHTTP(rec, req)
+	req := httptest.NewRequest(http.MethodPost, "/api/shop-targets/parse-url", bytes.NewBufferString(`{"site_url":"`+server.URL+`/item/9l814h"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
 
-    if rec.Code != http.StatusOK {
-        t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
-    }
-    var body struct {
-        Data struct {
-            Platform string `json:"platform"`
-            SiteURL  string `json:"site_url"`
-            BaseURL  string `json:"base_url"`
-            Token    string `json:"token"`
-            Name     string `json:"name"`
-        } `json:"data"`
-    }
-    if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-        t.Fatalf("decode response: %v", err)
-    }
-    if body.Data.Platform != string(storage.ShopPlatformLDXP) {
-        t.Fatalf("platform = %q", body.Data.Platform)
-    }
-    if body.Data.SiteURL != server.URL+"/shop/ITEMSHOP" {
-        t.Fatalf("site_url = %q", body.Data.SiteURL)
-    }
-    if body.Data.BaseURL != server.URL {
-        t.Fatalf("base_url = %q", body.Data.BaseURL)
-    }
-    if body.Data.Token != "ITEMSHOP" {
-        t.Fatalf("token = %q", body.Data.Token)
-    }
-    if body.Data.Name != "商品店铺" {
-        t.Fatalf("name = %q", body.Data.Name)
-    }
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Platform string `json:"platform"`
+			SiteURL  string `json:"site_url"`
+			BaseURL  string `json:"base_url"`
+			Token    string `json:"token"`
+			Name     string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Data.Platform != string(storage.ShopPlatformLDXP) {
+		t.Fatalf("platform = %q", body.Data.Platform)
+	}
+	if body.Data.SiteURL != server.URL+"/shop/ITEMSHOP" {
+		t.Fatalf("site_url = %q", body.Data.SiteURL)
+	}
+	if body.Data.BaseURL != server.URL {
+		t.Fatalf("base_url = %q", body.Data.BaseURL)
+	}
+	if body.Data.Token != "ITEMSHOP" {
+		t.Fatalf("token = %q", body.Data.Token)
+	}
+	if body.Data.Name != "商品店铺" {
+		t.Fatalf("name = %q", body.Data.Name)
+	}
 }
 
 func TestBulkConfigureShopNotificationsUpsertsRules(t *testing.T) {
@@ -550,6 +550,49 @@ func TestShopSyncJobEndpointsStartAndReadJob(t *testing.T) {
 	router.ServeHTTP(statusRec, statusReq)
 	if statusRec.Code != http.StatusOK {
 		t.Fatalf("batch status = %d, body = %s", statusRec.Code, statusRec.Body.String())
+	}
+}
+
+func TestLatestShopMonitorLogEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	oldStartedAt := time.Now().Add(-10 * time.Minute)
+	newStartedAt := time.Now().Add(-5 * time.Minute)
+	if err := goods.AppendMonitorLog(&storage.ShopMonitorLog{
+		TargetID:   1,
+		Success:    true,
+		StartedAt:  oldStartedAt,
+		FinishedAt: oldStartedAt.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("append old monitor log: %v", err)
+	}
+	if err := goods.AppendMonitorLog(&storage.ShopMonitorLog{
+		TargetID:   2,
+		Success:    true,
+		StartedAt:  newStartedAt,
+		FinishedAt: newStartedAt.Add(2500 * time.Millisecond),
+	}); err != nil {
+		t.Fatalf("append new monitor log: %v", err)
+	}
+	router := gin.New()
+	registerShopTargets(router.Group("/api"), &Deps{ShopTargets: targets, ShopGoods: goods})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/shop-targets/monitor-logs/latest", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data storage.ShopMonitorLog `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Data.TargetID != 2 || resp.Data.DurationMS <= 0 {
+		t.Fatalf("latest monitor log = %#v", resp.Data)
 	}
 }
 
