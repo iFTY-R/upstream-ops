@@ -16,7 +16,6 @@ import (
 
 func TestClientReadsInfoCategoriesGoodsAndPrice(t *testing.T) {
 	mux := http.NewServeMux()
-	var priceRequest map[string]any
 	mux.HandleFunc("/shopApi/Shop/info", func(w http.ResponseWriter, r *http.Request) {
 		writeEnvelope(t, w, map[string]any{
 			"nickname":    "测试店铺",
@@ -48,23 +47,8 @@ func TestClientReadsInfoCategoriesGoodsAndPrice(t *testing.T) {
 			},
 		})
 	})
-	mux.HandleFunc("/shopApi/Shop/getUserChannel", func(w http.ResponseWriter, r *http.Request) {
-		writeEnvelope(t, w, []map[string]any{
-			{"id": 6, "name": "停用渠道", "show_name": "停用", "status": 0, "custom_status": 1, "rate": 1},
-			{"id": 7, "name": "支付宝电脑收款", "show_name": "支付宝", "status": 1, "custom_status": 1, "rate": 3},
-			{"id": 8, "name": "微信收款", "show_name": "微信", "status": 1, "custom_status": 1, "rate": 2},
-		})
-	})
 	mux.HandleFunc("/shopApi/Shop/getGoodsPrice", func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&priceRequest); err != nil {
-			t.Fatalf("decode price request: %v", err)
-		}
-		writeEnvelope(t, w, map[string]any{
-			"original_amount": 2.46,
-			"total_amount":    2.53,
-			"fee":             0.07,
-			"fee_payer":       1,
-		})
+		writeEnvelope(t, w, map[string]any{"original_amount": 2.46, "total_amount": 2.46})
 	})
 	server := httptest.NewServer(mux)
 	defer server.Close()
@@ -92,22 +76,12 @@ func TestClientReadsInfoCategoriesGoodsAndPrice(t *testing.T) {
 	if goods.Total != 1 || len(goods.List) != 1 || goods.List[0].GoodsKey != "abc" || goods.List[0].StockCount != 8 {
 		t.Fatalf("goods = %+v", goods)
 	}
-	channels, err := client.PaymentChannels(context.Background(), target)
-	if err != nil {
-		t.Fatalf("payment channels: %v", err)
-	}
-	if len(channels) != 2 || channels[0].ID != 7 || channels[0].DisplayName != "支付宝" || channels[1].ID != 8 {
-		t.Fatalf("payment channels = %+v", channels)
-	}
-	price, err := client.Price(context.Background(), target, shopprovider.PriceRequest{GoodsKey: "abc", Quantity: 2, ChannelID: 7})
+	price, err := client.Price(context.Background(), target, shopprovider.PriceRequest{GoodsKey: "abc", Quantity: 2})
 	if err != nil {
 		t.Fatalf("price: %v", err)
 	}
-	if price.OriginalAmount != 2.46 || price.TotalAmount != 2.53 || price.Fee != 0.07 || price.FeePayer != 1 {
+	if price.TotalAmount != 2.46 {
 		t.Fatalf("price = %+v", price)
-	}
-	if priceRequest["goods_key"] != "abc" || priceRequest["quantity"] != float64(2) || priceRequest["channel_id"] != float64(7) {
-		t.Fatalf("price request = %#v", priceRequest)
 	}
 }
 

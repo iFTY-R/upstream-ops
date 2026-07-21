@@ -189,43 +189,6 @@ func (c *Client) Goods(ctx context.Context, target shopprovider.Target, req shop
 	return out, nil
 }
 
-func (c *Client) PaymentChannels(ctx context.Context, target shopprovider.Target) ([]shopprovider.PaymentChannel, error) {
-	var data []struct {
-		ID           int64   `json:"id"`
-		Name         string  `json:"name"`
-		ShowName     string  `json:"show_name"`
-		Status       int     `json:"status"`
-		CustomStatus int     `json:"custom_status"`
-		Rate         float64 `json:"rate"`
-		PayType      struct {
-			Name string `json:"name"`
-		} `json:"paytype"`
-	}
-	if _, err := c.post(ctx, target, "/shopApi/Shop/getUserChannel", map[string]any{"token": target.Token}, &data); err != nil {
-		return nil, err
-	}
-	out := make([]shopprovider.PaymentChannel, 0, len(data))
-	for _, item := range data {
-		if item.Status != 1 || item.CustomStatus != 1 {
-			continue
-		}
-		displayName := strings.TrimSpace(item.ShowName)
-		if displayName == "" {
-			displayName = strings.TrimSpace(item.PayType.Name)
-		}
-		if displayName == "" {
-			displayName = strings.TrimSpace(item.Name)
-		}
-		out = append(out, shopprovider.PaymentChannel{
-			ID:          item.ID,
-			Name:        item.Name,
-			DisplayName: displayName,
-			Rate:        item.Rate,
-		})
-	}
-	return out, nil
-}
-
 func (c *Client) Price(ctx context.Context, target shopprovider.Target, req shopprovider.PriceRequest) (*shopprovider.PriceResult, error) {
 	if req.Quantity <= 0 {
 		req.Quantity = 1
@@ -233,25 +196,17 @@ func (c *Client) Price(ctx context.Context, target shopprovider.Target, req shop
 	var data struct {
 		OriginalAmount float64 `json:"original_amount"`
 		TotalAmount    float64 `json:"total_amount"`
-		Fee            float64 `json:"fee"`
-		FeePayer       int     `json:"fee_payer"`
 	}
-	body := map[string]any{
+	raw, err := c.post(ctx, target, "/shopApi/Shop/getGoodsPrice", map[string]any{
 		"goods_key": req.GoodsKey,
 		"quantity":  req.Quantity,
-	}
-	if req.ChannelID != 0 {
-		body["channel_id"] = req.ChannelID
-	}
-	raw, err := c.post(ctx, target, "/shopApi/Shop/getGoodsPrice", body, &data)
+	}, &data)
 	if err != nil {
 		return nil, err
 	}
 	return &shopprovider.PriceResult{
 		OriginalAmount: data.OriginalAmount,
 		TotalAmount:    data.TotalAmount,
-		Fee:            data.Fee,
-		FeePayer:       data.FeePayer,
 		RawJSON:        string(raw),
 	}, nil
 }

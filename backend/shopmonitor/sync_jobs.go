@@ -12,10 +12,7 @@ import (
 )
 
 const (
-	// Payment quotes are collected serially under the configured upstream
-	// request interval; ten minutes covers the verified large-shop run with
-	// headroom without leaving a stalled job around for an excessive period.
-	shopSyncJobTimeout     = 10 * time.Minute
+	shopSyncJobTimeout     = 2 * time.Minute
 	shopSyncJobConcurrency = 2
 )
 
