@@ -5,14 +5,16 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { DataPagination } from "@/components/ui/data-pagination"
 import { Input } from "@/components/ui/input"
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { apiFetch } from "@/lib/api"
 import { useShopGoodsOverview, useShopGoodsTargetOptions } from "@/lib/queries"
 import { money, relativeTime } from "@/lib/format"
 import {
   readAllShopGoodsPreferences,
+  readAllShopGoodsSearchHistory,
+  rememberAllShopGoodsSearchQuery,
   type ShopGoodsStatusFilter,
   writeAllShopGoodsPreferences,
 } from "@/lib/shop-goods-preferences"
@@ -42,41 +44,78 @@ function shopName(row: ShopGoodsListItem) {
   return row.target_name?.trim() || row.target_last_shop_name?.trim() || `店铺 #${row.target_id}`
 }
 
+function normalizeTextFilter(value: string) {
+  return value.trim()
+}
+
 export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boolean }) {
   const targets = useShopGoodsTargetOptions(publicMode)
   const [initialPreferences] = useState(readAllShopGoodsPreferences)
+  const initialKeyword = normalizeTextFilter(initialPreferences.keyword)
+  const initialExcludeKeyword = normalizeTextFilter(initialPreferences.excludeKeyword)
+  const initialCategoryName = normalizeTextFilter(initialPreferences.categoryName)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(initialPreferences.pageSize)
   const [targetID, setTargetID] = useState<number | null>(initialPreferences.targetID)
   const [status, setStatus] = useState<GoodsStatusFilter>(initialPreferences.status)
   const [inStockOnly, setInStockOnly] = useState(initialPreferences.inStockOnly)
   const [sort, setSort] = useState<ShopGoodsSort>(initialPreferences.sort)
-  const [keyword, setKeyword] = useState(initialPreferences.keyword)
-  const [categoryName, setCategoryName] = useState(initialPreferences.categoryName)
-  const debouncedKeyword = useDebouncedValue(keyword)
-  const debouncedCategoryName = useDebouncedValue(categoryName)
+  const [keyword, setKeyword] = useState(initialKeyword)
+  const [excludeKeyword, setExcludeKeyword] = useState(initialExcludeKeyword)
+  const [categoryName, setCategoryName] = useState(initialCategoryName)
+  const [appliedKeyword, setAppliedKeyword] = useState(initialKeyword)
+  const [appliedExcludeKeyword, setAppliedExcludeKeyword] = useState(initialExcludeKeyword)
+  const [appliedCategoryName, setAppliedCategoryName] = useState(initialCategoryName)
+  const [searchHistory, setSearchHistory] = useState(readAllShopGoodsSearchHistory)
   const [refreshingGoodsKey, setRefreshingGoodsKey] = useState<string | null>(null)
 
   const filters = useMemo(
     () => ({
       target_id: targetID ?? undefined,
-      category_name: debouncedCategoryName.trim() || undefined,
+      category_name: appliedCategoryName.trim() || undefined,
       status: inStockOnly ? "in_stock" as ShopGoodsStatus : status,
-      keyword: debouncedKeyword,
+      keyword: appliedKeyword,
+      exclude_keyword: appliedExcludeKeyword,
       sort,
     }),
-    [debouncedCategoryName, debouncedKeyword, inStockOnly, sort, status, targetID],
+    [appliedCategoryName, appliedExcludeKeyword, appliedKeyword, inStockOnly, sort, status, targetID],
   )
-  const goodsSearchPending = keyword !== debouncedKeyword || categoryName !== debouncedCategoryName
-  const goods = useShopGoodsOverview(page, pageSize, filters, !goodsSearchPending, publicMode)
+  const textFiltersDirty = normalizeTextFilter(keyword) !== appliedKeyword
+    || normalizeTextFilter(excludeKeyword) !== appliedExcludeKeyword
+    || normalizeTextFilter(categoryName) !== appliedCategoryName
+  const goods = useShopGoodsOverview(page, pageSize, filters, true, publicMode)
   const rows = goods.data?.items ?? []
   const total = goods.data?.total ?? 0
   const pages = goods.data?.pages ?? 1
-  const activeFilters = targetID !== null || status !== "all" || sort !== "category" || keyword.trim() !== "" || categoryName.trim() !== ""
+  const activeFilters = targetID !== null
+    || status !== "all"
+    || sort !== "category"
+    || appliedKeyword.trim() !== ""
+    || appliedExcludeKeyword.trim() !== ""
+    || appliedCategoryName.trim() !== ""
 
   useEffect(() => {
-    writeAllShopGoodsPreferences({ targetID, status, inStockOnly, sort, keyword, categoryName, pageSize })
-  }, [categoryName, inStockOnly, keyword, pageSize, sort, status, targetID])
+    writeAllShopGoodsPreferences({
+      targetID,
+      status,
+      inStockOnly,
+      sort,
+      keyword: appliedKeyword,
+      excludeKeyword: appliedExcludeKeyword,
+      categoryName: appliedCategoryName,
+      pageSize,
+    })
+  }, [appliedCategoryName, appliedExcludeKeyword, appliedKeyword, inStockOnly, pageSize, sort, status, targetID])
+
+  useEffect(() => {
+    if (!goods.data || goods.error) return
+    if (!filters.category_name?.trim() && !filters.keyword?.trim() && !filters.exclude_keyword?.trim()) return
+    setSearchHistory(rememberAllShopGoodsSearchQuery({
+      categoryName: filters.category_name,
+      keyword: filters.keyword,
+      excludeKeyword: filters.exclude_keyword,
+    }))
+  }, [filters.category_name, filters.exclude_keyword, filters.keyword, goods.data, goods.error])
 
   function resetPage(next: () => void) {
     next()
@@ -86,6 +125,23 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
   function changePageSize(nextPageSize: number) {
     setPageSize(nextPageSize)
     setPage(1)
+  }
+
+  function applyTextFilters(nextValues?: Partial<{ categoryName: string; keyword: string; excludeKeyword: string }>) {
+    const nextCategoryName = normalizeTextFilter(nextValues?.categoryName ?? categoryName)
+    const nextKeyword = normalizeTextFilter(nextValues?.keyword ?? keyword)
+    const nextExcludeKeyword = normalizeTextFilter(nextValues?.excludeKeyword ?? excludeKeyword)
+    const changed = nextCategoryName !== appliedCategoryName
+      || nextKeyword !== appliedKeyword
+      || nextExcludeKeyword !== appliedExcludeKeyword
+    setCategoryName(nextCategoryName)
+    setKeyword(nextKeyword)
+    setExcludeKeyword(nextExcludeKeyword)
+    setAppliedCategoryName(nextCategoryName)
+    setAppliedKeyword(nextKeyword)
+    setAppliedExcludeKeyword(nextExcludeKeyword)
+    setPage(1)
+    if (!changed && page === 1) goods.refetch()
   }
 
   async function refreshGoodsStock(row: ShopGoodsListItem) {
@@ -157,9 +213,9 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
           <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <Filter className="size-3.5" />
             <span>{"筛选和排序"}</span>
-            {goods.loading || goodsSearchPending ? <span>{"加载中..."}</span> : null}
+            {goods.loading ? <span>{"加载中..."}</span> : textFiltersDirty ? <span>{"有未应用搜索条件"}</span> : null}
           </div>
-          <div className="grid gap-2 md:grid-cols-[minmax(160px,220px)_minmax(140px,180px)_minmax(140px,180px)_auto_minmax(180px,1fr)_minmax(180px,1fr)]">
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[max-content_max-content_max-content_max-content_minmax(170px,1fr)_minmax(190px,1fr)_minmax(190px,1fr)_2.25rem]">
             <Select value={targetID == null ? "all" : String(targetID)} onValueChange={(value) => resetPage(() => setTargetID(value === "all" ? null : Number(value)))}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -196,16 +252,39 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
             </Button>
             <ClearableInput
               value={categoryName}
-              onChange={(value) => resetPage(() => setCategoryName(value))}
-              onClear={() => resetPage(() => setCategoryName(""))}
+              onChange={setCategoryName}
+              onClear={() => applyTextFilters({ categoryName: "" })}
+              onSubmit={applyTextFilters}
               placeholder="按分类名称筛选"
+              history={searchHistory.categoryName}
             />
             <ClearableInput
               value={keyword}
-              onChange={(value) => resetPage(() => setKeyword(value))}
-              onClear={() => resetPage(() => setKeyword(""))}
-              placeholder="搜索商品名或 Key"
+              onChange={setKeyword}
+              onClear={() => applyTextFilters({ keyword: "" })}
+              onSubmit={applyTextFilters}
+              placeholder="包含商品名或 Key"
+              history={searchHistory.keyword}
             />
+            <ClearableInput
+              value={excludeKeyword}
+              onChange={setExcludeKeyword}
+              onClear={() => applyTextFilters({ excludeKeyword: "" })}
+              onSubmit={applyTextFilters}
+              placeholder="排除商品名或 Key"
+              history={searchHistory.excludeKeyword}
+            />
+            <Button
+              type="button"
+              variant={textFiltersDirty ? "default" : "outline"}
+              size="icon"
+              className="justify-self-start"
+              onClick={() => applyTextFilters()}
+              aria-label="搜索"
+              title="搜索"
+            >
+              <Search className="size-4" />
+            </Button>
           </div>
         </div>
 
@@ -359,27 +438,80 @@ function ClearableInput({
   value,
   onChange,
   onClear,
+  onSubmit,
   placeholder,
+  history = [],
 }: {
   value: string
   onChange: (value: string) => void
   onClear: () => void
+  onSubmit: () => void
   placeholder: string
+  history?: string[]
 }) {
+  const [open, setOpen] = useState(false)
+  const showHistory = open && history.length > 0
+
   return (
-    <div className="relative">
-      <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-      <Input value={value} onChange={(event) => onChange(event.target.value)} className="pl-9 pr-10" placeholder={placeholder} />
-      {value.trim() ? (
-        <button
-          type="button"
-          onClick={onClear}
-          className="absolute right-2 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
-          aria-label="清除"
-        >
-          <X className="size-4" />
-        </button>
-      ) : null}
-    </div>
+    <Popover open={showHistory} onOpenChange={setOpen}>
+      <PopoverAnchor asChild>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return
+              event.preventDefault()
+              setOpen(false)
+              onSubmit()
+            }}
+            onFocus={() => setOpen(true)}
+            onClick={() => setOpen(true)}
+            className="pl-9 pr-10"
+            placeholder={placeholder}
+            autoComplete="off"
+          />
+          {value.trim() ? (
+            <button
+              type="button"
+              onClick={() => {
+                onClear()
+                setOpen(false)
+              }}
+              className="absolute right-2 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+              aria-label="清除"
+            >
+              <X className="size-4" />
+            </button>
+          ) : null}
+        </div>
+      </PopoverAnchor>
+      <PopoverContent
+        align="start"
+        sideOffset={6}
+        className="w-[var(--radix-popover-trigger-width)] p-1"
+        onOpenAutoFocus={(event) => event.preventDefault()}
+      >
+        <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">最近查询</div>
+        <div className="max-h-56 overflow-y-auto">
+          {history.map((item, index) => (
+            <button
+              key={`${item}-${index}`}
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                onChange(item)
+                setOpen(false)
+              }}
+              className="block w-full truncate rounded-sm px-2 py-1.5 text-left text-sm transition hover:bg-accent hover:text-accent-foreground"
+              title={item}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }

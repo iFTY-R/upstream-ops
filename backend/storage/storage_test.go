@@ -727,6 +727,27 @@ func TestShopGoodsSnapshotCategoriesAndFilters(t *testing.T) {
 		t.Fatalf("keyword mismatch: total=%d list=%#v", total, keyword)
 	}
 
+	multiKeyword, total, err := goods.ListPageFiltered(1, 1, 20, ShopGoodsFilter{Keyword: "K12 live"})
+	if err != nil {
+		t.Fatalf("list multi keyword: %v", err)
+	}
+	if total != 1 || len(multiKeyword) != 1 || multiKeyword[0].GoodsKey != "k12-live" {
+		t.Fatalf("multi keyword mismatch: total=%d list=%#v", total, multiKeyword)
+	}
+
+	excludedKeyword, total, err := goods.ListPageFiltered(1, 1, 20, ShopGoodsFilter{ExcludeKeyword: "old，Category"})
+	if err != nil {
+		t.Fatalf("list excluded keyword: %v", err)
+	}
+	if total != 2 || len(excludedKeyword) != 2 {
+		t.Fatalf("excluded keyword mismatch: total=%d list=%#v", total, excludedKeyword)
+	}
+	for _, item := range excludedKeyword {
+		if item.GoodsKey == "gpt-old" || item.GoodsKey == "uncat-live" {
+			t.Fatalf("excluded item should not be returned: %#v", excludedKeyword)
+		}
+	}
+
 	defaultSorted, total, err := goods.ListPageFiltered(1, 1, 20, ShopGoodsFilter{})
 	if err != nil {
 		t.Fatalf("list default sort: %v", err)
@@ -827,6 +848,22 @@ func TestShopGoodsListAllPageFilteredIncludesTargetAndFilters(t *testing.T) {
 	}
 	if total != 2 || len(categoryGoods) != 2 {
 		t.Fatalf("category search should support partial matches: total=%d len=%d rows=%#v", total, len(categoryGoods), categoryGoods)
+	}
+
+	multiKeywordGoods, total, err := goods.ListAllPageFiltered(1, 20, ShopGoodsFilter{Keyword: "A Low"})
+	if err != nil {
+		t.Fatalf("list multi keyword goods: %v", err)
+	}
+	if total != 1 || len(multiKeywordGoods) != 1 || multiKeywordGoods[0].GoodsKey != "a-low" {
+		t.Fatalf("multi keyword goods mismatch: total=%d len=%d rows=%#v", total, len(multiKeywordGoods), multiKeywordGoods)
+	}
+
+	excludedKeywordGoods, total, err := goods.ListAllPageFiltered(1, 20, ShopGoodsFilter{ExcludeKeyword: "low"})
+	if err != nil {
+		t.Fatalf("list excluded keyword goods: %v", err)
+	}
+	if total != 1 || len(excludedKeywordGoods) != 1 || excludedKeywordGoods[0].GoodsKey != "a-ok" {
+		t.Fatalf("excluded keyword goods mismatch: total=%d len=%d rows=%#v", total, len(excludedKeywordGoods), excludedKeywordGoods)
 	}
 
 	keywordGoods, total, err := goods.ListAllPageFiltered(1, 20, ShopGoodsFilter{Keyword: "GPT"})

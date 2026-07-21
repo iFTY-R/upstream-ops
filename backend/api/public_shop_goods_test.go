@@ -98,6 +98,22 @@ func TestPublicShopGoodsEndpointsExposeOnlyAllowedFields(t *testing.T) {
 	if limitCount != 5 {
 		t.Fatalf("limit_count = %d, want 5", limitCount)
 	}
+
+	excludedResponse := performRequest(router, http.MethodGet, "/api/public/shop-goods?keyword=Public%20Goods&exclude_keyword=goods-1")
+	if excludedResponse.Code != http.StatusOK {
+		t.Fatalf("excluded goods status = %d, body = %s", excludedResponse.Code, excludedResponse.Body.String())
+	}
+	var excludedBody struct {
+		Data struct {
+			Total int `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(excludedResponse.Body.Bytes(), &excludedBody); err != nil {
+		t.Fatalf("decode excluded goods: %v", err)
+	}
+	if excludedBody.Data.Total != 0 {
+		t.Fatalf("excluded goods total = %d, want 0", excludedBody.Data.Total)
+	}
 }
 
 func TestPublicShopGoodsRoutesDoNotOpenManagementEndpoints(t *testing.T) {

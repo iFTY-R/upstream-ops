@@ -4,6 +4,8 @@ export type ShopGoodsStatusFilter = Exclude<ShopGoodsStatus, "in_stock">
 
 const allShopGoodsPreferencesKey = "upstream-ops:shop-goods-preferences:v1"
 const shopsGoodsPreferencesKey = "upstream-ops:shops-goods-preferences:v1"
+const allShopGoodsSearchHistoryKey = "upstream-ops:shop-goods-search-history:v2"
+const searchHistoryLimit = 30
 
 const validStatuses = new Set<ShopGoodsStatusFilter>([
   "all",
@@ -28,8 +30,17 @@ export interface AllShopGoodsPreferences {
   inStockOnly: boolean
   sort: ShopGoodsSort
   keyword: string
+  excludeKeyword: string
   categoryName: string
   pageSize: number
+}
+
+export type AllShopGoodsSearchHistoryField = "categoryName" | "keyword" | "excludeKeyword"
+
+export interface AllShopGoodsSearchHistory {
+  categoryName: string[]
+  keyword: string[]
+  excludeKeyword: string[]
 }
 
 export interface ShopsGoodsPreferences {
@@ -37,6 +48,7 @@ export interface ShopsGoodsPreferences {
   status: ShopGoodsStatusFilter
   inStockOnly: boolean
   keyword: string
+  excludeKeyword: string
   categoryIDs: Record<string, number | null>
   sorts: Record<string, ShopGoodsSort>
 }
@@ -47,8 +59,15 @@ const defaultAllShopGoodsPreferences: AllShopGoodsPreferences = {
   inStockOnly: true,
   sort: "category",
   keyword: "",
+  excludeKeyword: "",
   categoryName: "",
   pageSize: 50,
+}
+
+const defaultAllShopGoodsSearchHistory: AllShopGoodsSearchHistory = {
+  categoryName: [],
+  keyword: [],
+  excludeKeyword: [],
 }
 
 const defaultShopsGoodsPreferences: ShopsGoodsPreferences = {
@@ -56,6 +75,7 @@ const defaultShopsGoodsPreferences: ShopsGoodsPreferences = {
   status: "all",
   inStockOnly: true,
   keyword: "",
+  excludeKeyword: "",
   categoryIDs: {},
   sorts: {},
 }
@@ -101,6 +121,22 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value : ""
 }
 
+function asTextHistory(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    const text = asText(item).trim()
+    if (!text) continue
+    const key = text.toLocaleLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(text)
+    if (out.length >= searchHistoryLimit) break
+  }
+  return out
+}
+
 function asPageSize(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 10 && value <= 200
     ? value
@@ -137,6 +173,7 @@ export function readAllShopGoodsPreferences(): AllShopGoodsPreferences {
     inStockOnly: typeof value.inStockOnly === "boolean" ? value.inStockOnly : defaultAllShopGoodsPreferences.inStockOnly,
     sort: asSort(value.sort),
     keyword: asText(value.keyword),
+    excludeKeyword: asText(value.excludeKeyword),
     categoryName: asText(value.categoryName),
     pageSize: asPageSize(value.pageSize),
   }
@@ -144,6 +181,45 @@ export function readAllShopGoodsPreferences(): AllShopGoodsPreferences {
 
 export function writeAllShopGoodsPreferences(value: AllShopGoodsPreferences) {
   writeObject(allShopGoodsPreferencesKey, value)
+}
+
+export function readAllShopGoodsSearchHistory(): AllShopGoodsSearchHistory {
+  const value = readObject(allShopGoodsSearchHistoryKey)
+  if (!value) return { ...defaultAllShopGoodsSearchHistory }
+  return {
+    categoryName: asTextHistory(value.categoryName),
+    keyword: asTextHistory(value.keyword),
+    excludeKeyword: asTextHistory(value.excludeKeyword),
+  }
+}
+
+export function rememberAllShopGoodsSearchHistory(
+  field: AllShopGoodsSearchHistoryField,
+  value: string,
+): AllShopGoodsSearchHistory {
+  return rememberAllShopGoodsSearchQuery({ [field]: value })
+}
+
+export function rememberAllShopGoodsSearchQuery(
+  values: Partial<Record<AllShopGoodsSearchHistoryField, string | undefined>>,
+): AllShopGoodsSearchHistory {
+  let next = readAllShopGoodsSearchHistory()
+  let changed = false
+  for (const field of ["categoryName", "keyword", "excludeKeyword"] as const) {
+    const text = values[field]?.trim()
+    if (!text) continue
+    const normalized = text.toLocaleLowerCase()
+    next = {
+      ...next,
+      [field]: [
+        text,
+        ...next[field].filter((item) => item.toLocaleLowerCase() !== normalized),
+      ].slice(0, searchHistoryLimit),
+    }
+    changed = true
+  }
+  if (changed) writeObject(allShopGoodsSearchHistoryKey, next)
+  return next
 }
 
 export function readShopsGoodsPreferences(): ShopsGoodsPreferences {
@@ -154,6 +230,7 @@ export function readShopsGoodsPreferences(): ShopsGoodsPreferences {
     status: asStatus(value.status),
     inStockOnly: typeof value.inStockOnly === "boolean" ? value.inStockOnly : defaultShopsGoodsPreferences.inStockOnly,
     keyword: asText(value.keyword),
+    excludeKeyword: asText(value.excludeKeyword),
     categoryIDs: asCategoryIDs(value.categoryIDs),
     sorts: asSorts(value.sorts),
   }

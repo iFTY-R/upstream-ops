@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
 
 	"gorm.io/gorm"
 )
@@ -396,6 +397,7 @@ type ShopGoodsFilter struct {
 	CategoryName   string
 	Status         string
 	Keyword        string
+	ExcludeKeyword string
 	Sort           string
 	StockThreshold int
 	TargetID       uint
@@ -559,9 +561,13 @@ func applyShopGoodsFilterQualified(q *gorm.DB, filter ShopGoodsFilter, alias str
 		like := "%" + filter.CategoryName + "%"
 		q = q.Where(col("category_name")+" LIKE ?", like)
 	}
-	if filter.Keyword != "" {
-		like := "%" + filter.Keyword + "%"
+	for _, term := range splitShopGoodsSearchTerms(filter.Keyword) {
+		like := "%" + term + "%"
 		q = q.Where("("+col("name")+" LIKE ? OR "+col("goods_key")+" LIKE ?)", like, like)
+	}
+	for _, term := range splitShopGoodsSearchTerms(filter.ExcludeKeyword) {
+		like := "%" + term + "%"
+		q = q.Where("("+col("name")+" NOT LIKE ? AND "+col("goods_key")+" NOT LIKE ?)", like, like)
 	}
 	switch filter.Status {
 	case "active":
@@ -585,6 +591,30 @@ func applyShopGoodsFilterQualified(q *gorm.DB, filter ShopGoodsFilter, alias str
 		q = q.Where(col("removed_at") + " IS NULL AND " + col("stock_count") + " <= 0")
 	}
 	return q
+}
+
+func splitShopGoodsSearchTerms(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '，' || unicode.IsSpace(r)
+	})
+	out := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		key := strings.ToLower(part)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, part)
+	}
+	return out
 }
 
 func applyShopGoodsSort(q *gorm.DB, sort string) *gorm.DB {

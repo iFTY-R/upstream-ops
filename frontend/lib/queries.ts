@@ -301,6 +301,7 @@ export interface ShopGoodsFilters {
   category_name?: string
   status?: ShopGoodsStatus
   keyword?: string
+  exclude_keyword?: string
   sort?: ShopGoodsSort
 }
 
@@ -313,6 +314,7 @@ function shopGoodsQuery(page: number, pageSize: number, filters?: ShopGoodsFilte
   if (filters?.category_name) q.set("category_name", filters.category_name)
   if (filters?.status && filters.status !== "all") q.set("status", filters.status)
   if (filters?.keyword?.trim()) q.set("keyword", filters.keyword.trim())
+  if (filters?.exclude_keyword?.trim()) q.set("exclude_keyword", filters.exclude_keyword.trim())
   if (filters?.sort && filters.sort !== "category") q.set("sort", filters.sort)
   return q.toString()
 }

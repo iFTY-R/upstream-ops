@@ -29,7 +29,6 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ShopWatchRulesDrawer, type ShopWatchSeed } from "@/components/monitor/shop-watch-rules-drawer"
-import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { apiFetch } from "@/lib/api"
 import { useShopChangeLogs, useShopGoods, useShopMonitorLogs, useShopSnapshotCategories, useShopTargets, useShopWatchRules } from "@/lib/queries"
 import { useTriggerRefresh } from "@/lib/refresh-context"
@@ -172,6 +171,10 @@ function csv(raw: string): string[] {
   return raw.split(/[,\n]/).map((s) => s.trim()).filter(Boolean)
 }
 
+function normalizeTextFilter(value: string) {
+  return value.trim()
+}
+
 function csvNumbers(raw: string): number[] {
   return csv(raw).map(Number).filter((n) => Number.isFinite(n))
 }
@@ -285,6 +288,8 @@ export default function ShopsPage() {
   const targets = useShopTargets()
   const refresh = useTriggerRefresh()
   const [initialGoodsPreferences] = useState(readShopsGoodsPreferences)
+  const initialGoodsKeyword = normalizeTextFilter(initialGoodsPreferences.keyword)
+  const initialGoodsExcludeKeyword = normalizeTextFilter(initialGoodsPreferences.excludeKeyword)
   const [selectedID, setSelectedID] = useState<number | null>(initialGoodsPreferences.selectedTargetID)
   const [editing, setEditing] = useState<ShopTarget | null>(null)
   const [formOpen, setFormOpen] = useState(false)
@@ -303,10 +308,12 @@ export default function ShopsPage() {
     const targetID = initialGoodsPreferences.selectedTargetID
     return targetID == null ? "category" : initialGoodsPreferences.sorts[String(targetID)] ?? "category"
   })
-  const [goodsKeyword, setGoodsKeyword] = useState(initialGoodsPreferences.keyword)
+  const [goodsKeyword, setGoodsKeyword] = useState(initialGoodsKeyword)
+  const [goodsExcludeKeyword, setGoodsExcludeKeyword] = useState(initialGoodsExcludeKeyword)
+  const [appliedGoodsKeyword, setAppliedGoodsKeyword] = useState(initialGoodsKeyword)
+  const [appliedGoodsExcludeKeyword, setAppliedGoodsExcludeKeyword] = useState(initialGoodsExcludeKeyword)
   const [categoryIDs, setCategoryIDs] = useState(initialGoodsPreferences.categoryIDs)
   const [sorts, setSorts] = useState(initialGoodsPreferences.sorts)
-  const debouncedGoodsKeyword = useDebouncedValue(goodsKeyword)
   const [highlightedGoodsKey, setHighlightedGoodsKey] = useState<string | null>(null)
   const [watchRulesOpen, setWatchRulesOpen] = useState(false)
   const [watchSeed, setWatchSeed] = useState<ShopWatchSeed | null>(null)
@@ -320,13 +327,16 @@ export default function ShopsPage() {
     () => ({
       category_id: selectedCategoryID ?? undefined,
       status: inStockOnly ? "in_stock" as ShopGoodsStatus : goodsStatus,
-      keyword: debouncedGoodsKeyword,
+      keyword: appliedGoodsKeyword,
+      exclude_keyword: appliedGoodsExcludeKeyword,
       sort: goodsSort,
     }),
-    [debouncedGoodsKeyword, goodsSort, goodsStatus, inStockOnly, selectedCategoryID],
+    [appliedGoodsExcludeKeyword, appliedGoodsKeyword, goodsSort, goodsStatus, inStockOnly, selectedCategoryID],
   )
-  const goodsSearchPending = goodsKeyword !== debouncedGoodsKeyword
-  const goods = useShopGoods(selectedID, goodsPage, 25, goodsFilters, !goodsSearchPending)
+  const goodsSearchDirty = normalizeTextFilter(goodsKeyword) !== appliedGoodsKeyword
+    || normalizeTextFilter(goodsExcludeKeyword) !== appliedGoodsExcludeKeyword
+  const goodsSearchActive = appliedGoodsKeyword.trim() !== "" || appliedGoodsExcludeKeyword.trim() !== ""
+  const goods = useShopGoods(selectedID, goodsPage, 25, goodsFilters, true)
   const snapshotCategories = useShopSnapshotCategories(selectedID)
   const watchRules = useShopWatchRules(selectedID)
   const changes = useShopChangeLogs(selectedID, changesPage, 20)
@@ -355,11 +365,12 @@ export default function ShopsPage() {
       selectedTargetID: selectedID,
       status: goodsStatus,
       inStockOnly,
-      keyword: goodsKeyword,
+      keyword: appliedGoodsKeyword,
+      excludeKeyword: appliedGoodsExcludeKeyword,
       categoryIDs,
       sorts,
     })
-  }, [categoryIDs, goodsKeyword, goodsStatus, inStockOnly, selectedID, sorts])
+  }, [appliedGoodsExcludeKeyword, appliedGoodsKeyword, categoryIDs, goodsStatus, inStockOnly, selectedID, sorts])
 
   function refreshShopData() {
     targets.refetch()
@@ -458,13 +469,18 @@ export default function ShopsPage() {
     const preferenceKey = selectedID == null ? "" : String(selectedID)
     setSelectedCategoryID(categoryIDs[preferenceKey] ?? null)
     setGoodsSort((sorts[preferenceKey] ?? selected?.goods_sort) || "category")
-    if (preserveLookup) setGoodsKeyword(pendingLookup.goodsKey)
-    if (preserveLookup) pendingGoodsLookupRef.current = null
+    if (preserveLookup) {
+      setGoodsKeyword(pendingLookup.goodsKey)
+      setAppliedGoodsKeyword(pendingLookup.goodsKey)
+      setGoodsExcludeKeyword("")
+      setAppliedGoodsExcludeKeyword("")
+      pendingGoodsLookupRef.current = null
+    }
   }, [categoryIDs, selectedID, selected?.goods_sort, sorts])
 
   useEffect(() => {
     setGoodsPage(1)
-  }, [goodsKeyword, goodsSort, goodsStatus, inStockOnly, selectedCategoryID])
+  }, [appliedGoodsExcludeKeyword, appliedGoodsKeyword, goodsSort, goodsStatus, inStockOnly, selectedCategoryID])
 
   useEffect(() => {
     if (!highlightedGoodsKey) return
@@ -642,22 +658,17 @@ export default function ShopsPage() {
     }
   }
 
-  async function saveGoodsSortAsDefault() {
-    if (!selected || goodsSort === (selected.goods_sort || "category")) return
-    setBusy(`goods-sort:${selected.id}`)
-    try {
-      const next = await apiFetch<ShopTarget>(`/shop-targets/${selected.id}`, {
-        method: "PUT",
-        body: JSON.stringify(shopTargetUpdateBody(selected, { goods_sort: goodsSort })),
-      })
-      targets.setData((targets.data ?? []).map((item) => (item.id === next.id ? { ...next, watch_rule_count: item.watch_rule_count } : item)))
-      toast.success(`已保存默认排序：${goodsSortLabels[goodsSort]}`)
-      refresh()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "保存默认排序失败")
-    } finally {
-      setBusy(null)
-    }
+  function applyGoodsSearch(nextValues?: Partial<{ keyword: string; excludeKeyword: string }>) {
+    const nextKeyword = normalizeTextFilter(nextValues?.keyword ?? goodsKeyword)
+    const nextExcludeKeyword = normalizeTextFilter(nextValues?.excludeKeyword ?? goodsExcludeKeyword)
+    const changed = nextKeyword !== appliedGoodsKeyword || nextExcludeKeyword !== appliedGoodsExcludeKeyword
+    setGoodsKeyword(nextKeyword)
+    setGoodsExcludeKeyword(nextExcludeKeyword)
+    setAppliedGoodsKeyword(nextKeyword)
+    setAppliedGoodsExcludeKeyword(nextExcludeKeyword)
+    setGoodsPage(1)
+    if (changed) setHighlightedGoodsKey(null)
+    if (!changed && goodsPage === 1) goods.refetch()
   }
 
   function openWatchRules(target: ShopTarget) {
@@ -816,6 +827,9 @@ export default function ShopsPage() {
       setSelectedID(row.target_id)
     } else {
       setGoodsKeyword(key)
+      setAppliedGoodsKeyword(key)
+      setGoodsExcludeKeyword("")
+      setAppliedGoodsExcludeKeyword("")
     }
     updateSelectedCategory(null)
     setGoodsStatus("all")
@@ -823,12 +837,6 @@ export default function ShopsPage() {
     setGoodsPage(1)
     setHighlightedGoodsKey(key)
     toast.info(`正在定位商品：${row.goods_name || key}`)
-  }
-
-  function clearGoodsSearch() {
-    setGoodsKeyword("")
-    setGoodsPage(1)
-    setHighlightedGoodsKey(null)
   }
 
   return (
@@ -905,7 +913,7 @@ export default function ShopsPage() {
         <div className="min-w-0 space-y-4">
           <GoodsPanel
             target={selected}
-            loading={goods.loading || goodsSearchPending}
+            loading={goods.loading}
             categories={snapshotCategories.data ?? []}
             categoriesLoading={snapshotCategories.loading}
             rows={goods.data?.items ?? []}
@@ -916,8 +924,10 @@ export default function ShopsPage() {
             status={goodsStatus}
             inStockOnly={inStockOnly}
             sort={goodsSort}
-            savingDefaultSort={selected ? busy === `goods-sort:${selected.id}` : false}
             keyword={goodsKeyword}
+            excludeKeyword={goodsExcludeKeyword}
+            searchDirty={goodsSearchDirty}
+            searchActive={goodsSearchActive}
             refreshingKey={busy?.startsWith("refresh-goods:") ? busy.slice("refresh-goods:".length) : null}
             highlightedGoodsKey={highlightedGoodsKey}
             watchedGoodsKeys={watchedGoodsKeys}
@@ -926,12 +936,11 @@ export default function ShopsPage() {
             onStatus={setGoodsStatus}
             onInStockOnly={setInStockOnly}
             onSort={updateGoodsSort}
-            onSaveDefaultSort={saveGoodsSortAsDefault}
             onKeyword={(keyword) => {
               setGoodsKeyword(keyword)
-              setGoodsPage(1)
             }}
-            onClearSearch={clearGoodsSearch}
+            onExcludeKeyword={setGoodsExcludeKeyword}
+            onApplySearch={applyGoodsSearch}
             onRefreshGoods={refreshGoodsStock}
             onWatchGoods={watchGoods}
             onPage={setGoodsPage}
@@ -1306,8 +1315,10 @@ function GoodsPanel({
   status,
   inStockOnly,
   sort,
-  savingDefaultSort,
   keyword,
+  excludeKeyword,
+  searchDirty,
+  searchActive,
   refreshingKey,
   highlightedGoodsKey,
   watchedGoodsKeys,
@@ -1316,9 +1327,9 @@ function GoodsPanel({
   onStatus,
   onInStockOnly,
   onSort,
-  onSaveDefaultSort,
   onKeyword,
-  onClearSearch,
+  onExcludeKeyword,
+  onApplySearch,
   onRefreshGoods,
   onWatchGoods,
   onPage,
@@ -1335,8 +1346,10 @@ function GoodsPanel({
   status: GoodsStatusFilter
   inStockOnly: boolean
   sort: ShopGoodsSort
-  savingDefaultSort: boolean
   keyword: string
+  excludeKeyword: string
+  searchDirty: boolean
+  searchActive: boolean
   refreshingKey: string | null
   highlightedGoodsKey: string | null
   watchedGoodsKeys: Set<string>
@@ -1345,19 +1358,20 @@ function GoodsPanel({
   onStatus: (status: GoodsStatusFilter) => void
   onInStockOnly: (enabled: boolean) => void
   onSort: (sort: ShopGoodsSort) => void
-  onSaveDefaultSort: () => void
   onKeyword: (keyword: string) => void
-  onClearSearch: () => void
+  onExcludeKeyword: (keyword: string) => void
+  onApplySearch: (nextValues?: Partial<{ keyword: string; excludeKeyword: string }>) => void
   onRefreshGoods: (row: ShopGoodsSnapshot) => void
   onWatchGoods: (row: ShopGoodsSnapshot) => void
   onPage: (page: number) => void
 }) {
   const allCount = categories.reduce((sum, category) => sum + category.goods_count, 0)
-  const activeFilters = selectedCategoryID !== null || status !== "all" || sort !== "category" || keyword.trim() !== ""
+  const activeFilters = selectedCategoryID !== null || status !== "all" || sort !== "category" || searchActive
   const selectedCategory = categories.find((category) => category.category_id === selectedCategoryID)
   const selectedCategoryName = selectedCategory ? categoryLabel(selectedCategory) : "全部分类"
   const displayName = shopDisplayName(target)
-  const canClearSearch = keyword.trim() !== ""
+  const canClearKeyword = keyword.trim() !== ""
+  const canClearExcludeKeyword = excludeKeyword.trim() !== ""
 
   return (
     <Card className="min-w-0 overflow-hidden">
@@ -1375,6 +1389,7 @@ function GoodsPanel({
           <ListFilter className="size-3.5" />
           <span>按分类查看</span>
           {categoriesLoading ? <Loader2 className="size-3 animate-spin" /> : null}
+          {searchDirty ? <span>有未应用搜索条件</span> : null}
         </div>
         <div className="flex min-w-0 flex-wrap gap-2">
           <CategoryButton
@@ -1400,7 +1415,7 @@ function GoodsPanel({
             <span className="rounded-full border border-dashed border-border px-3 py-1.5 text-xs text-muted-foreground">同步后会显示分类</span>
           ) : null}
         </div>
-        <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(140px,180px)_minmax(220px,280px)_auto_minmax(220px,1fr)]">
+        <div className="grid min-w-0 gap-2 md:grid-cols-2 xl:grid-cols-[max-content_max-content_max-content_minmax(180px,1fr)_minmax(180px,1fr)_2.25rem]">
           <Select value={status} onValueChange={(value) => onStatus(value as GoodsStatusFilter)}>
             <SelectTrigger>
               <SelectValue />
@@ -1411,24 +1426,16 @@ function GoodsPanel({
               ))}
             </SelectContent>
           </Select>
-          <div className="flex min-w-0 gap-2">
-            <Select value={sort} onValueChange={(value) => onSort(value as ShopGoodsSort)}>
-              <SelectTrigger className="min-w-0 flex-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(goodsSortLabels).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>{label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {target && sort !== (target.goods_sort || "category") ? (
-              <Button type="button" variant="outline" onClick={onSaveDefaultSort} disabled={savingDefaultSort} className="shrink-0">
-                {savingDefaultSort ? <Loader2 className="mr-1 size-3 animate-spin" /> : null}
-                {"设为默认"}
-              </Button>
-            ) : null}
-          </div>
+          <Select value={sort} onValueChange={(value) => onSort(value as ShopGoodsSort)}>
+            <SelectTrigger className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(goodsSortLabels).map(([value, label]) => (
+                <SelectItem key={value} value={value}>{label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button
             type="button"
             variant={inStockOnly ? "default" : "outline"}
@@ -1443,21 +1450,62 @@ function GoodsPanel({
             <Input
               value={keyword}
               onChange={(event) => onKeyword(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return
+                event.preventDefault()
+                onApplySearch()
+              }}
               className="pl-9 pr-10"
-              placeholder={`在 ${selectedCategoryName} 中搜索商品名或 Key`}
+              placeholder={`包含商品名或 Key（${selectedCategoryName}，空格/逗号多词）`}
             />
-            {canClearSearch ? (
+            {canClearKeyword ? (
               <button
                 type="button"
-                onClick={onClearSearch}
+                onClick={() => onApplySearch({ keyword: "" })}
                 className="absolute right-2 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                aria-label="清除搜索"
-                title="清除搜索"
+                aria-label="清除包含搜索"
+                title="清除包含搜索"
               >
                 <X className="size-4" />
               </button>
             ) : null}
           </div>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={excludeKeyword}
+              onChange={(event) => onExcludeKeyword(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return
+                event.preventDefault()
+                onApplySearch()
+              }}
+              className="pl-9 pr-10"
+              placeholder="排除商品名或 Key（空格/逗号多词）"
+            />
+            {canClearExcludeKeyword ? (
+              <button
+                type="button"
+                onClick={() => onApplySearch({ excludeKeyword: "" })}
+                className="absolute right-2 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                aria-label="清除排除搜索"
+                title="清除排除搜索"
+              >
+                <X className="size-4" />
+              </button>
+            ) : null}
+          </div>
+          <Button
+            type="button"
+            variant={searchDirty ? "default" : "outline"}
+            size="icon"
+            className="justify-self-start"
+            onClick={() => onApplySearch()}
+            aria-label="搜索商品"
+            title="搜索商品"
+          >
+            <Search className="size-4" />
+          </Button>
         </div>
       </div>
       <div className="overflow-x-auto">
