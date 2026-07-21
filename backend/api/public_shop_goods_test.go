@@ -33,21 +33,34 @@ func TestPublicShopGoodsEndpointsExposeOnlyAllowedFields(t *testing.T) {
 		t.Fatalf("create target: %v", err)
 	}
 	now := time.Now().UTC().Truncate(time.Second)
+	channelName := "支付宝"
+	quoteQuantity := 5
+	originalAmount := 62.5
+	fee := 1.88
+	feePayer := 1
+	totalAmount := 64.38
 	snapshot := &storage.ShopGoodsSnapshot{
-		TargetID:     target.ID,
-		GoodsKey:     "goods-1",
-		GoodsType:    "card",
-		Name:         "Public Goods",
-		CategoryID:   7,
-		CategoryName: "AI",
-		Link:         "https://pay.ldxp.cn/buy/goods-1",
-		Price:        12.5,
-		MarketPrice:  20,
-		StockCount:   3,
-		LimitCount:   5,
-		RawJSON:      `{"credential":"must-not-leak"}`,
-		FirstSeenAt:  now,
-		LastSeenAt:   now,
+		TargetID:              target.ID,
+		GoodsKey:              "goods-1",
+		GoodsType:             "card",
+		Name:                  "Public Goods",
+		CategoryID:            7,
+		CategoryName:          "AI",
+		Link:                  "https://pay.ldxp.cn/buy/goods-1",
+		Price:                 12.5,
+		MarketPrice:           20,
+		StockCount:            3,
+		LimitCount:            5,
+		PaymentChannelName:    &channelName,
+		PaymentQuoteQuantity:  &quoteQuantity,
+		PaymentOriginalAmount: &originalAmount,
+		PaymentFee:            &fee,
+		PaymentFeePayer:       &feePayer,
+		PaymentTotalAmount:    &totalAmount,
+		PaymentQuotedAt:       &now,
+		RawJSON:               `{"credential":"must-not-leak"}`,
+		FirstSeenAt:           now,
+		LastSeenAt:            now,
 	}
 	if err := db.Create(snapshot).Error; err != nil {
 		t.Fatalf("create snapshot: %v", err)
@@ -88,7 +101,9 @@ func TestPublicShopGoodsEndpointsExposeOnlyAllowedFields(t *testing.T) {
 	}
 	assertOnlyJSONKeys(t, goodsBody.Data.Items[0],
 		"id", "target_id", "goods_key", "name", "category_name", "link", "price",
-		"stock_count", "limit_count", "last_seen_at", "removed_at", "target_name",
+		"stock_count", "limit_count", "payment_channel_name", "payment_quote_quantity",
+		"payment_original_amount", "payment_fee", "payment_fee_payer", "payment_total_amount",
+		"payment_quoted_at", "last_seen_at", "removed_at", "target_name",
 		"target_last_shop_name", "target_site_url", "target_stock_threshold",
 	)
 	var limitCount int
@@ -97,6 +112,37 @@ func TestPublicShopGoodsEndpointsExposeOnlyAllowedFields(t *testing.T) {
 	}
 	if limitCount != 5 {
 		t.Fatalf("limit_count = %d, want 5", limitCount)
+	}
+	var publicFee float64
+	if err := json.Unmarshal(goodsBody.Data.Items[0]["payment_fee"], &publicFee); err != nil {
+		t.Fatalf("decode payment_fee: %v", err)
+	}
+	if publicFee != fee {
+		t.Fatalf("payment_fee = %v, want %v", publicFee, fee)
+	}
+}
+
+func TestPublicShopGoodsQuoteFieldsAreNullWhenUnavailable(t *testing.T) {
+	payload, err := json.Marshal(publicShopGoodsItem{})
+	if err != nil {
+		t.Fatalf("marshal public goods item: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatalf("decode public goods item: %v", err)
+	}
+	for _, field := range []string{
+		"payment_channel_name",
+		"payment_quote_quantity",
+		"payment_original_amount",
+		"payment_fee",
+		"payment_fee_payer",
+		"payment_total_amount",
+		"payment_quoted_at",
+	} {
+		if got := string(fields[field]); got != "null" {
+			t.Fatalf("%s = %s, want null", field, got)
+		}
 	}
 }
 

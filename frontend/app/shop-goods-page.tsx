@@ -38,6 +38,49 @@ const sortLabels: Record<ShopGoodsSort, string> = {
   last_seen_desc: "最近出现",
 }
 
+const moneyTolerance = 0.005
+
+function sameMoney(left: number, right: number) {
+  return Math.abs(left - right) <= moneyTolerance
+}
+
+function minimumQuantity(limitCount: number) {
+  return limitCount > 0 ? limitCount : 1
+}
+
+function paymentPriceDetail(row: ShopGoodsListItem) {
+  const quantity = minimumQuantity(row.limit_count)
+  const hasQuote = Boolean(
+    row.payment_quoted_at
+    && row.payment_channel_name != null
+    && row.payment_quote_quantity != null
+    && row.payment_original_amount != null
+    && row.payment_fee != null
+    && row.payment_fee_payer != null
+    && row.payment_total_amount != null
+    && row.payment_quote_quantity === quantity,
+  )
+  if (!hasQuote) {
+    return quantity > 1 ? `×${quantity} = ${money(row.price * quantity)}` : null
+  }
+
+  const originalAmount = row.payment_original_amount as number
+  const fee = row.payment_fee as number
+  const totalAmount = row.payment_total_amount as number
+  const unitTotalMatches = sameMoney(row.price * quantity, originalAmount)
+  const buyerPaysFee = row.payment_fee_payer === 1 && fee > 0
+  if (buyerPaysFee) {
+    if (unitTotalMatches && sameMoney(originalAmount + fee, totalAmount)) {
+      return `×${quantity} + ${money(fee)} = ${money(totalAmount)}`
+    }
+    return `×${quantity} · 含手续费 ${money(fee)} · 应付 ${money(totalAmount)}`
+  }
+  if (unitTotalMatches && sameMoney(originalAmount, totalAmount)) {
+    return quantity > 1 ? `×${quantity} = ${money(totalAmount)}` : null
+  }
+  return `×${quantity} · 应付 ${money(totalAmount)}`
+}
+
 function shopName(row: ShopGoodsListItem) {
   return row.target_name?.trim() || row.target_last_shop_name?.trim() || `店铺 #${row.target_id}`
 }
@@ -214,9 +257,9 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
             <TableHeader>
               <TableRow>
                 <TableHead className="w-[13%]">店铺</TableHead>
-                <TableHead className="w-[29%]">商品</TableHead>
-                <TableHead className="w-[18%]">分组 / 分类</TableHead>
-                <TableHead className="w-[10%]">价格</TableHead>
+                <TableHead className="w-[28%]">商品</TableHead>
+                <TableHead className="w-[17%]">分组 / 分类</TableHead>
+                <TableHead className="w-[12%]">价格</TableHead>
                 <TableHead className="w-[7%]">库存</TableHead>
                 <TableHead className="w-[7%]">状态</TableHead>
                 <TableHead className="w-[9%]">最近出现</TableHead>
@@ -273,6 +316,7 @@ function GoodsRow({
 }) {
   const canBuy = !row.removed_at && row.stock_count > 0 && row.link
   const low = !row.removed_at && row.target_stock_threshold > 0 && row.stock_count <= row.target_stock_threshold
+  const priceDetail = paymentPriceDetail(row)
   return (
     <TableRow className={cn(row.removed_at && "opacity-50")}>
       <TableCell>
@@ -301,8 +345,8 @@ function GoodsRow({
       <TableCell>
         <div className="whitespace-nowrap tabular-nums">
           <div>{money(row.price)}</div>
-          {row.limit_count > 1 ? (
-            <div className="mt-0.5 text-xs text-muted-foreground">{`×${row.limit_count} = ${money(row.price * row.limit_count)}`}</div>
+          {priceDetail ? (
+            <div className="mt-0.5 text-xs text-muted-foreground" title={row.payment_channel_name || undefined}>{priceDetail}</div>
           ) : null}
         </div>
       </TableCell>

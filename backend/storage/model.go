@@ -376,27 +376,36 @@ type ShopWatchRule struct {
 func (ShopWatchRule) TableName() string { return "shop_watch_rules" }
 
 type ShopGoodsSnapshot struct {
-	ID            uint       `gorm:"primaryKey" json:"id"`
-	TargetID      uint       `gorm:"not null;uniqueIndex:idx_shop_goods_target_key;index" json:"target_id"`
-	GoodsKey      string     `gorm:"size:128;not null;uniqueIndex:idx_shop_goods_target_key" json:"goods_key"`
-	GoodsType     string     `gorm:"size:32;not null;index" json:"goods_type"`
-	Name          string     `gorm:"size:512;not null" json:"name"`
-	CategoryID    int64      `gorm:"index" json:"category_id"`
-	CategoryName  string     `gorm:"size:256" json:"category_name"`
-	Link          string     `gorm:"size:512" json:"link"`
-	Price         float64    `gorm:"not null" json:"price"`
-	MarketPrice   float64    `json:"market_price"`
-	StockCount    int        `json:"stock_count"`
-	LimitCount    int        `json:"limit_count"`
-	SendOrder     int        `json:"send_order"`
-	ContactFormat string     `gorm:"size:64" json:"contact_format"`
-	RawJSON       string     `gorm:"type:text" json:"raw_json,omitempty"`
-	FirstSeenAt   time.Time  `gorm:"not null;index" json:"first_seen_at"`
-	LastSeenAt    time.Time  `gorm:"not null;index" json:"last_seen_at"`
-	LastChangedAt *time.Time `json:"last_changed_at,omitempty"`
-	RemovedAt     *time.Time `gorm:"index" json:"removed_at,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID                    uint       `gorm:"primaryKey" json:"id"`
+	TargetID              uint       `gorm:"not null;uniqueIndex:idx_shop_goods_target_key;index" json:"target_id"`
+	GoodsKey              string     `gorm:"size:128;not null;uniqueIndex:idx_shop_goods_target_key" json:"goods_key"`
+	GoodsType             string     `gorm:"size:32;not null;index" json:"goods_type"`
+	Name                  string     `gorm:"size:512;not null" json:"name"`
+	CategoryID            int64      `gorm:"index" json:"category_id"`
+	CategoryName          string     `gorm:"size:256" json:"category_name"`
+	Link                  string     `gorm:"size:512" json:"link"`
+	Price                 float64    `gorm:"not null" json:"price"`
+	MarketPrice           float64    `json:"market_price"`
+	StockCount            int        `json:"stock_count"`
+	LimitCount            int        `json:"limit_count"`
+	SendOrder             int        `json:"send_order"`
+	ContactFormat         string     `gorm:"size:64" json:"contact_format"`
+	PaymentChannelID      *int64     `json:"payment_channel_id,omitempty"`
+	PaymentChannelName    *string    `gorm:"size:128" json:"payment_channel_name,omitempty"`
+	PaymentChannelRate    *float64   `json:"payment_channel_rate,omitempty"`
+	PaymentQuoteQuantity  *int       `json:"payment_quote_quantity,omitempty"`
+	PaymentOriginalAmount *float64   `json:"payment_original_amount,omitempty"`
+	PaymentFee            *float64   `json:"payment_fee,omitempty"`
+	PaymentFeePayer       *int       `json:"payment_fee_payer,omitempty"`
+	PaymentTotalAmount    *float64   `json:"payment_total_amount,omitempty"`
+	PaymentQuotedAt       *time.Time `json:"payment_quoted_at,omitempty"`
+	RawJSON               string     `gorm:"type:text" json:"raw_json,omitempty"`
+	FirstSeenAt           time.Time  `gorm:"not null;index" json:"first_seen_at"`
+	LastSeenAt            time.Time  `gorm:"not null;index" json:"last_seen_at"`
+	LastChangedAt         *time.Time `json:"last_changed_at,omitempty"`
+	RemovedAt             *time.Time `gorm:"index" json:"removed_at,omitempty"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
 }
 
 func (ShopGoodsSnapshot) TableName() string { return "shop_goods_snapshots" }

@@ -22,21 +22,28 @@ type publicShopTarget struct {
 }
 
 type publicShopGoodsItem struct {
-	ID                   uint       `json:"id"`
-	TargetID             uint       `json:"target_id"`
-	GoodsKey             string     `json:"goods_key"`
-	Name                 string     `json:"name"`
-	CategoryName         string     `json:"category_name"`
-	Link                 string     `json:"link"`
-	Price                float64    `json:"price"`
-	StockCount           int        `json:"stock_count"`
-	LimitCount           int        `json:"limit_count"`
-	LastSeenAt           time.Time  `json:"last_seen_at"`
-	RemovedAt            *time.Time `json:"removed_at"`
-	TargetName           string     `json:"target_name"`
-	TargetLastShopName   string     `json:"target_last_shop_name"`
-	TargetSiteURL        string     `json:"target_site_url"`
-	TargetStockThreshold int        `json:"target_stock_threshold"`
+	ID                    uint       `json:"id"`
+	TargetID              uint       `json:"target_id"`
+	GoodsKey              string     `json:"goods_key"`
+	Name                  string     `json:"name"`
+	CategoryName          string     `json:"category_name"`
+	Link                  string     `json:"link"`
+	Price                 float64    `json:"price"`
+	StockCount            int        `json:"stock_count"`
+	LimitCount            int        `json:"limit_count"`
+	PaymentChannelName    *string    `json:"payment_channel_name"`
+	PaymentQuoteQuantity  *int       `json:"payment_quote_quantity"`
+	PaymentOriginalAmount *float64   `json:"payment_original_amount"`
+	PaymentFee            *float64   `json:"payment_fee"`
+	PaymentFeePayer       *int       `json:"payment_fee_payer"`
+	PaymentTotalAmount    *float64   `json:"payment_total_amount"`
+	PaymentQuotedAt       *time.Time `json:"payment_quoted_at"`
+	LastSeenAt            time.Time  `json:"last_seen_at"`
+	RemovedAt             *time.Time `json:"removed_at"`
+	TargetName            string     `json:"target_name"`
+	TargetLastShopName    string     `json:"target_last_shop_name"`
+	TargetSiteURL         string     `json:"target_site_url"`
+	TargetStockThreshold  int        `json:"target_stock_threshold"`
 }
 
 func registerPublicShopGoods(g *gin.RouterGroup, d *Deps) {
@@ -92,21 +99,28 @@ func listPublicShopGoods(c *gin.Context, d *Deps) {
 	out := make([]publicShopGoodsItem, 0, len(list))
 	for _, item := range list {
 		out = append(out, publicShopGoodsItem{
-			ID:                   item.ID,
-			TargetID:             item.TargetID,
-			GoodsKey:             item.GoodsKey,
-			Name:                 item.Name,
-			CategoryName:         item.CategoryName,
-			Link:                 safePublicShopURL(item.Link),
-			Price:                item.Price,
-			StockCount:           item.StockCount,
-			LimitCount:           item.LimitCount,
-			LastSeenAt:           item.LastSeenAt,
-			RemovedAt:            item.RemovedAt,
-			TargetName:           item.TargetName,
-			TargetLastShopName:   item.TargetLastShopName,
-			TargetSiteURL:        safePublicShopURL(item.TargetSiteURL),
-			TargetStockThreshold: item.TargetStockThreshold,
+			ID:                    item.ID,
+			TargetID:              item.TargetID,
+			GoodsKey:              item.GoodsKey,
+			Name:                  item.Name,
+			CategoryName:          item.CategoryName,
+			Link:                  safePublicShopURL(item.Link),
+			Price:                 item.Price,
+			StockCount:            item.StockCount,
+			LimitCount:            item.LimitCount,
+			PaymentChannelName:    item.PaymentChannelName,
+			PaymentQuoteQuantity:  item.PaymentQuoteQuantity,
+			PaymentOriginalAmount: item.PaymentOriginalAmount,
+			PaymentFee:            item.PaymentFee,
+			PaymentFeePayer:       item.PaymentFeePayer,
+			PaymentTotalAmount:    item.PaymentTotalAmount,
+			PaymentQuotedAt:       item.PaymentQuotedAt,
+			LastSeenAt:            item.LastSeenAt,
+			RemovedAt:             item.RemovedAt,
+			TargetName:            item.TargetName,
+			TargetLastShopName:    item.TargetLastShopName,
+			TargetSiteURL:         safePublicShopURL(item.TargetSiteURL),
+			TargetStockThreshold:  item.TargetStockThreshold,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": pageData(out, total, page, pageSize)})
