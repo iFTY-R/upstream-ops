@@ -16,8 +16,9 @@ operations private.
   `site_url`.
 - `/api/public/shop-goods` keeps the existing page envelope and returns items
   containing only `id`, `target_id`, `goods_key`, `name`, `category_name`,
-  `link`, `price`, `stock_count`, `last_seen_at`, `removed_at`, `target_name`,
-  `target_last_shop_name`, `target_site_url`, and `target_stock_threshold`.
+  `link`, `price`, `stock_count`, `limit_count`, `last_seen_at`, `removed_at`,
+  `target_name`, `target_last_shop_name`, `target_site_url`, and
+  `target_stock_threshold`.
 - Never expose shop tokens, upstream base URLs, proxy settings, monitor flags,
   sync errors, raw upstream JSON, logs, retention data, or write operations.
 
@@ -38,7 +39,13 @@ The route renderer selects one of two explicit branches:
   keyword, stock, sorting, pagination, shop-page, and purchase-link behavior.
   The default filter remains "in stock".
 - Authenticated `/shop-goods` renders the existing application providers,
-  `AppShell`, protected queries, and management page unchanged.
+  `AppShell`, protected queries, and management page.
+
+Both views share the same goods rows. Goods and category names use up to two
+lines before truncation. Products whose `limit_count` is greater than one show
+`×quantity = minimum total` beneath the unit price; products without a minimum
+quantity keep the single-line price display. Apart from these shared display
+enhancements, the authenticated management experience remains unchanged.
 
 Authenticated users keep the current application shell and protected queries,
 including the single-product stock refresh action. Anonymous users never see or
@@ -68,6 +75,9 @@ generic JSON error rather than serializing repository or SQL details.
 - Browser verification while signed out proves `/shop-goods` renders at desktop
   and mobile widths, its network traffic stays under `/api/public`, refresh is
   absent, and filters, sorting, pagination, shop links, and purchase links work.
+- Browser verification proves long goods and category names are limited to two
+  lines, `limit_count > 1` shows the correct `price × limit_count` total, and
+  `limit_count <= 1` does not render a second price line.
 - Browser verification while signed out proves another route still shows login.
 - Browser verification while signed in proves `/shop-goods` retains the current
   application shell, protected queries, and stock-refresh action.

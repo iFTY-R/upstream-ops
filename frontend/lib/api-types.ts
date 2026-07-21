@@ -244,6 +244,7 @@ export interface ShopGoodsListItem {
   link: string
   price: number
   stock_count: number
+  limit_count: number
   last_seen_at: string
   removed_at?: string | null
   target_name: string

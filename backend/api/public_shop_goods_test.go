@@ -44,6 +44,7 @@ func TestPublicShopGoodsEndpointsExposeOnlyAllowedFields(t *testing.T) {
 		Price:        12.5,
 		MarketPrice:  20,
 		StockCount:   3,
+		LimitCount:   5,
 		RawJSON:      `{"credential":"must-not-leak"}`,
 		FirstSeenAt:  now,
 		LastSeenAt:   now,
@@ -87,9 +88,16 @@ func TestPublicShopGoodsEndpointsExposeOnlyAllowedFields(t *testing.T) {
 	}
 	assertOnlyJSONKeys(t, goodsBody.Data.Items[0],
 		"id", "target_id", "goods_key", "name", "category_name", "link", "price",
-		"stock_count", "last_seen_at", "removed_at", "target_name",
+		"stock_count", "limit_count", "last_seen_at", "removed_at", "target_name",
 		"target_last_shop_name", "target_site_url", "target_stock_threshold",
 	)
+	var limitCount int
+	if err := json.Unmarshal(goodsBody.Data.Items[0]["limit_count"], &limitCount); err != nil {
+		t.Fatalf("decode limit_count: %v", err)
+	}
+	if limitCount != 5 {
+		t.Fatalf("limit_count = %d, want 5", limitCount)
+	}
 }
 
 func TestPublicShopGoodsRoutesDoNotOpenManagementEndpoints(t *testing.T) {

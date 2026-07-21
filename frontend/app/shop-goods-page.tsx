@@ -213,13 +213,13 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
           <Table className="min-w-[1260px] table-fixed">
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[17%]">店铺</TableHead>
-                <TableHead className="w-[27%]">商品</TableHead>
-                <TableHead className="w-[15%]">分组 / 分类</TableHead>
-                <TableHead className="w-[8%]">价格</TableHead>
-                <TableHead className="w-[8%]">库存</TableHead>
-                <TableHead className="w-[8%]">状态</TableHead>
-                <TableHead className="w-[10%]">最近出现</TableHead>
+                <TableHead className="w-[13%]">店铺</TableHead>
+                <TableHead className="w-[29%]">商品</TableHead>
+                <TableHead className="w-[18%]">分组 / 分类</TableHead>
+                <TableHead className="w-[10%]">价格</TableHead>
+                <TableHead className="w-[7%]">库存</TableHead>
+                <TableHead className="w-[7%]">状态</TableHead>
+                <TableHead className="w-[9%]">最近出现</TableHead>
                 <TableHead className="w-[7%]">操作</TableHead>
               </TableRow>
             </TableHeader>
@@ -287,14 +287,25 @@ function GoodsRow({
       </TableCell>
       <TableCell>
         <div className="min-w-0">
-          <div className="truncate font-medium" title={row.name}>{row.name}</div>
+          <div className="line-clamp-2 whitespace-normal break-words font-medium leading-5" title={row.name}>{row.name}</div>
           <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
             <span className="shrink-0">{row.goods_key}</span>
           </div>
         </div>
       </TableCell>
-      <TableCell className="truncate" title={row.category_name || undefined}>{row.category_name || "未分组"}</TableCell>
-      <TableCell>{money(row.price)}</TableCell>
+      <TableCell>
+        <div className="line-clamp-2 whitespace-normal break-words leading-5" title={row.category_name || undefined}>
+          {row.category_name || "未分组"}
+        </div>
+      </TableCell>
+      <TableCell>
+        <div className="whitespace-nowrap tabular-nums">
+          <div>{money(row.price)}</div>
+          {row.limit_count > 1 ? (
+            <div className="mt-0.5 text-xs text-muted-foreground">{`×${row.limit_count} = ${money(row.price * row.limit_count)}`}</div>
+          ) : null}
+        </div>
+      </TableCell>
       <TableCell>
         {onRefreshStock ? (
           <button

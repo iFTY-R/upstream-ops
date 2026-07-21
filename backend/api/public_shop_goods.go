@@ -30,6 +30,7 @@ type publicShopGoodsItem struct {
 	Link                 string     `json:"link"`
 	Price                float64    `json:"price"`
 	StockCount           int        `json:"stock_count"`
+	LimitCount           int        `json:"limit_count"`
 	LastSeenAt           time.Time  `json:"last_seen_at"`
 	RemovedAt            *time.Time `json:"removed_at"`
 	TargetName           string     `json:"target_name"`
@@ -99,6 +100,7 @@ func listPublicShopGoods(c *gin.Context, d *Deps) {
 			Link:                 safePublicShopURL(item.Link),
 			Price:                item.Price,
 			StockCount:           item.StockCount,
+			LimitCount:           item.LimitCount,
 			LastSeenAt:           item.LastSeenAt,
 			RemovedAt:            item.RemovedAt,
 			TargetName:           item.TargetName,
