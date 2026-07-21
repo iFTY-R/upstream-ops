@@ -1,13 +1,16 @@
 package shopprovider
 
 import (
-	"context"
-	"errors"
-	"fmt"
-	"net/url"
-	"strings"
-	"sync"
-	"time"
+    "bytes"
+    "context"
+    "encoding/json"
+    "errors"
+    "fmt"
+    "net/http"
+    "net/url"
+    "strings"
+    "sync"
+    "time"
 
 	"github.com/ifty-r/upstream-ops/backend/storage"
 )
@@ -153,30 +156,103 @@ func For(platform storage.ShopPlatform) (Provider, error) {
 }
 
 type ParsedURL struct {
-	Platform  storage.ShopPlatform `json:"platform"`
-	BaseURL   string               `json:"base_url"`
-	Token     string               `json:"token"`
-	Name      string               `json:"name,omitempty"`
-	NameError string               `json:"name_error,omitempty"`
+    Platform  storage.ShopPlatform `json:"platform"`
+    SiteURL   string               `json:"site_url"`
+    BaseURL   string               `json:"base_url"`
+    Token     string               `json:"token"`
+    Name      string               `json:"name,omitempty"`
+    NameError string               `json:"name_error,omitempty"`
 }
 
 func ParseShopURL(raw string) (*ParsedURL, error) {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return nil, err
-	}
-	if parsed.Scheme == "" || parsed.Host == "" {
-		return nil, fmt.Errorf("invalid shop url")
-	}
-	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-	for i := 0; i < len(parts)-1; i++ {
-		if strings.EqualFold(parts[i], "shop") && strings.TrimSpace(parts[i+1]) != "" {
-			return &ParsedURL{
-				Platform: storage.ShopPlatformLDXP,
-				BaseURL:  parsed.Scheme + "://" + parsed.Host,
-				Token:    strings.TrimSpace(parts[i+1]),
-			}, nil
-		}
-	}
-	return nil, fmt.Errorf("unsupported shop url")
+    return ParseShopURLContext(context.Background(), raw)
+}
+
+func ParseShopURLContext(ctx context.Context, raw string) (*ParsedURL, error) {
+    parsed, err := url.Parse(strings.TrimSpace(raw))
+    if err != nil {
+        return nil, err
+    }
+    if parsed.Scheme == "" || parsed.Host == "" {
+        return nil, fmt.Errorf("invalid shop url")
+    }
+    baseURL := parsed.Scheme + "://" + parsed.Host
+    parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+    for i := 0; i < len(parts)-1; i++ {
+        if strings.EqualFold(parts[i], "shop") && strings.TrimSpace(parts[i+1]) != "" {
+            return &ParsedURL{
+                Platform: storage.ShopPlatformLDXP,
+                SiteURL:  baseURL + "/shop/" + strings.TrimSpace(parts[i+1]),
+                BaseURL:  baseURL,
+                Token:    strings.TrimSpace(parts[i+1]),
+            }, nil
+        }
+        if strings.EqualFold(parts[i], "item") && strings.TrimSpace(parts[i+1]) != "" {
+            return resolveLDXPItemURL(ctx, baseURL, strings.TrimSpace(parts[i+1]))
+        }
+    }
+    return nil, fmt.Errorf("unsupported shop url")
+}
+
+func resolveLDXPItemURL(ctx context.Context, baseURL, goodsKey string) (*ParsedURL, error) {
+    if strings.TrimSpace(goodsKey) == "" {
+        return nil, fmt.Errorf("unsupported shop url")
+    }
+    payload, err := json.Marshal(map[string]string{"goods_key": goodsKey})
+    if err != nil {
+        return nil, fmt.Errorf("encode goods info request: %w", err)
+    }
+    req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/shopApi/Shop/goodsInfo", bytes.NewReader(payload))
+    if err != nil {
+        return nil, fmt.Errorf("build goods info request: %w", err)
+    }
+    req.Header.Set("Accept", "application/json")
+    req.Header.Set("Content-Type", "application/json")
+    req.Header.Set("Origin", baseURL)
+    req.Header.Set("Referer", strings.TrimRight(baseURL, "/")+"/item/"+goodsKey)
+    req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36")
+    client := &http.Client{Timeout: 10 * time.Second}
+    resp, err := client.Do(req)
+    if err != nil {
+        return nil, fmt.Errorf("resolve item url: %w", err)
+    }
+    defer resp.Body.Close()
+    if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+        return nil, fmt.Errorf("resolve item url: http %d", resp.StatusCode)
+    }
+    var envelope struct {
+        Code int    `json:"code"`
+        Msg  string `json:"msg"`
+        Data struct {
+            User struct {
+                Nickname string `json:"nickname"`
+                Token    string `json:"token"`
+                Link     string `json:"link"`
+            } `json:"user"`
+        } `json:"data"`
+    }
+    if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+        return nil, fmt.Errorf("decode goods info response: %w", err)
+    }
+    if envelope.Code != 1 {
+        if strings.TrimSpace(envelope.Msg) == "" {
+            envelope.Msg = "goods info lookup failed"
+        }
+        return nil, fmt.Errorf("resolve item url: %s", envelope.Msg)
+    }
+    token := strings.TrimSpace(envelope.Data.User.Token)
+    if token == "" {
+        return nil, fmt.Errorf("resolve item url: shop token not found")
+    }
+    siteURL := strings.TrimSpace(envelope.Data.User.Link)
+    if siteURL == "" {
+        siteURL = strings.TrimRight(baseURL, "/") + "/shop/" + token
+    }
+    return &ParsedURL{
+        Platform: storage.ShopPlatformLDXP,
+        SiteURL:  siteURL,
+        BaseURL:  strings.TrimRight(baseURL, "/"),
+        Token:    token,
+        Name:     strings.TrimSpace(envelope.Data.User.Nickname),
+    }, nil
 }

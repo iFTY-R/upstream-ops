@@ -525,13 +525,14 @@ export default function ShopsPage() {
     }
     setBusy("parse")
     try {
-      const parsed = await apiFetch<{ platform: "ldxp"; base_url: string; token: string; name?: string; name_error?: string }>("/shop-targets/parse-url", {
+      const parsed = await apiFetch<{ platform: "ldxp"; site_url: string; base_url: string; token: string; name?: string; name_error?: string }>("/shop-targets/parse-url", {
         method: "POST",
         body: JSON.stringify({ site_url: form.site_url }),
       })
       setForm((f) => ({
         ...f,
         platform: parsed.platform,
+        site_url: parsed.site_url || f.site_url,
         base_url: parsed.base_url,
         token: parsed.token,
         name: parsed.name || (f.name === parsed.token ? "" : f.name),
@@ -566,14 +567,24 @@ export default function ShopsPage() {
       })
       setSelectedID(saved.id)
       setFormOpen(false)
-      toast.success(editing ? "店铺已更新" : "店铺已添加")
       targets.refetch()
       refresh()
+      if (editing) {
+        toast.success("店铺已更新")
+      } else {
+        await startTargetSync(saved.id)
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "保存失败")
     } finally {
       setBusy(null)
     }
+  }
+
+  async function startTargetSync(targetID: number) {
+    const result = await apiFetch<ShopSyncJobStartResult>(`/shop-targets/${targetID}/sync`, { method: "POST" })
+    setSyncJobs((current) => ({ ...current, [targetID]: result.job }))
+    toast.success(result.reused ? "店铺已添加，同步任务仍在运行" : "店铺已添加，已开始自动同步")
   }
 
   async function updateShopNotify(target: ShopTarget, enabled: boolean) {
@@ -678,11 +689,11 @@ export default function ShopsPage() {
   }
 
   async function syncTarget(target: ShopTarget) {
-	setBusy(`sync:${target.id}`)
-	try {
-		const result = await apiFetch<ShopSyncJobStartResult>(`/shop-targets/${target.id}/sync`, { method: "POST" })
-		setSyncJobs((current) => ({ ...current, [target.id]: result.job }))
-		toast.message(result.reused ? "同步任务仍在运行" : "已开始同步店铺")
+    setBusy(`sync:${target.id}`)
+    try {
+      const result = await apiFetch<ShopSyncJobStartResult>(`/shop-targets/${target.id}/sync`, { method: "POST" })
+      setSyncJobs((current) => ({ ...current, [target.id]: result.job }))
+      toast.message(result.reused ? "同步任务仍在运行" : "已开始同步店铺")
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "同步失败")
     } finally {
@@ -959,7 +970,7 @@ export default function ShopsPage() {
             </Field>
             <Field label="店铺 URL">
               <div className="flex gap-2">
-                <Input value={form.site_url} onChange={(e) => setForm({ ...form, site_url: e.target.value })} placeholder="https://pay.ldxp.cn/shop/7FCVUA4X" />
+                <Input value={form.site_url} onChange={(e) => setForm({ ...form, site_url: e.target.value })} placeholder="https://pay.ldxp.cn/shop/7FCVUA4X 或 https://www.ldxp.cn/item/9l814h" />
                 <Button type="button" variant="outline" onClick={parseURL} disabled={busy === "parse"}>
                   {busy === "parse" ? <Loader2 className="size-4 animate-spin" /> : "解析"}
                 </Button>

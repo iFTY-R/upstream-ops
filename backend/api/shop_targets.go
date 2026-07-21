@@ -372,7 +372,7 @@ func parseShopURL(c *gin.Context, d *Deps) {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
-	parsed, err := shopprovider.ParseShopURL(in.SiteURL)
+    parsed, err := shopprovider.ParseShopURLContext(c.Request.Context(), in.SiteURL)
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
@@ -383,12 +383,12 @@ func parseShopURL(c *gin.Context, d *Deps) {
 		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 		defer cancel()
-		info, err := provider.Info(ctx, shopprovider.Target{
-			Platform: parsed.Platform,
-			SiteURL:  strings.TrimSpace(in.SiteURL),
-			BaseURL:  parsed.BaseURL,
-			Token:    parsed.Token,
-		})
+        info, err := provider.Info(ctx, shopprovider.Target{
+            Platform: parsed.Platform,
+            SiteURL:  parsed.SiteURL,
+            BaseURL:  parsed.BaseURL,
+            Token:    parsed.Token,
+        })
 		if err != nil {
 			parsed.NameError = err.Error()
 		} else if info != nil {
@@ -692,16 +692,19 @@ func buildShopTarget(in shopTargetInput, current *storage.ShopTarget) (*storage.
 	}
 	target.Name = strings.TrimSpace(in.Name)
 	target.Platform = in.Platform
-	target.SiteURL = strings.TrimSpace(in.SiteURL)
+    target.SiteURL = strings.TrimSpace(in.SiteURL)
 	target.BaseURL = strings.TrimRight(strings.TrimSpace(in.BaseURL), "/")
 	target.Token = strings.TrimSpace(in.Token)
 	if target.SiteURL == "" {
 		return nil, fmt.Errorf("site_url is required")
 	}
-	if parsed, err := shopprovider.ParseShopURL(target.SiteURL); err == nil {
-		if target.Platform == "" {
-			target.Platform = parsed.Platform
-		}
+    if parsed, err := shopprovider.ParseShopURL(target.SiteURL); err == nil {
+        if parsed.SiteURL != "" {
+            target.SiteURL = parsed.SiteURL
+        }
+        if target.Platform == "" {
+            target.Platform = parsed.Platform
+        }
 		if target.BaseURL == "" {
 			target.BaseURL = parsed.BaseURL
 		}
