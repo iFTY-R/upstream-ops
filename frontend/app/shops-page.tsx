@@ -19,7 +19,6 @@ import {
   Star,
   Store,
   Trash2,
-  X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -29,12 +28,15 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ShopWatchRulesDrawer, type ShopWatchSeed } from "@/components/monitor/shop-watch-rules-drawer"
+import { SearchHistoryInput } from "@/components/search-history-input"
 import { apiFetch } from "@/lib/api"
 import { useShopChangeLogs, useShopGoods, useShopMonitorLogs, useShopSnapshotCategories, useShopTargets, useShopWatchRules } from "@/lib/queries"
 import { useTriggerRefresh } from "@/lib/refresh-context"
 import { money, relativeTime } from "@/lib/format"
 import {
+  readAllShopGoodsSearchHistory,
   readShopsGoodsPreferences,
+  rememberAllShopGoodsSearchQuery,
   type ShopGoodsStatusFilter,
   writeShopsGoodsPreferences,
 } from "@/lib/shop-goods-preferences"
@@ -325,6 +327,7 @@ export default function ShopsPage() {
   const [goodsExcludeKeyword, setGoodsExcludeKeyword] = useState(initialGoodsExcludeKeyword)
   const [appliedGoodsKeyword, setAppliedGoodsKeyword] = useState(initialGoodsKeyword)
   const [appliedGoodsExcludeKeyword, setAppliedGoodsExcludeKeyword] = useState(initialGoodsExcludeKeyword)
+  const [goodsSearchHistory, setGoodsSearchHistory] = useState(readAllShopGoodsSearchHistory)
   const [categoryIDs, setCategoryIDs] = useState(initialGoodsPreferences.categoryIDs)
   const [sorts, setSorts] = useState(initialGoodsPreferences.sorts)
   const [highlightedGoodsKey, setHighlightedGoodsKey] = useState<string | null>(null)
@@ -390,6 +393,15 @@ export default function ShopsPage() {
       shopListScrollTop: shopListScrollTopRef.current,
     })
   }, [appliedGoodsExcludeKeyword, appliedGoodsKeyword, categoryIDs, goodsStatus, inStockOnly, selectedID, sorts])
+
+  useEffect(() => {
+    if (!goods.data || goods.error) return
+    if (!appliedGoodsKeyword.trim() && !appliedGoodsExcludeKeyword.trim()) return
+    setGoodsSearchHistory(rememberAllShopGoodsSearchQuery({
+      keyword: appliedGoodsKeyword,
+      excludeKeyword: appliedGoodsExcludeKeyword,
+    }))
+  }, [appliedGoodsExcludeKeyword, appliedGoodsKeyword, goods.data, goods.error])
 
   function refreshShopData() {
     targets.refetch()
@@ -1028,6 +1040,8 @@ export default function ShopsPage() {
             sort={goodsSort}
             keyword={goodsKeyword}
             excludeKeyword={goodsExcludeKeyword}
+            keywordHistory={goodsSearchHistory.keyword}
+            excludeKeywordHistory={goodsSearchHistory.excludeKeyword}
             searchDirty={goodsSearchDirty}
             searchActive={goodsSearchActive}
             refreshingKey={busy?.startsWith("refresh-goods:") ? busy.slice("refresh-goods:".length) : null}
@@ -1438,6 +1452,8 @@ function GoodsPanel({
   sort,
   keyword,
   excludeKeyword,
+  keywordHistory,
+  excludeKeywordHistory,
   searchDirty,
   searchActive,
   refreshingKey,
@@ -1469,6 +1485,8 @@ function GoodsPanel({
   sort: ShopGoodsSort
   keyword: string
   excludeKeyword: string
+  keywordHistory: string[]
+  excludeKeywordHistory: string[]
   searchDirty: boolean
   searchActive: boolean
   refreshingKey: string | null
@@ -1491,8 +1509,6 @@ function GoodsPanel({
   const selectedCategory = categories.find((category) => category.category_id === selectedCategoryID)
   const selectedCategoryName = selectedCategory ? categoryLabel(selectedCategory) : "全部分类"
   const displayName = shopDisplayName(target)
-  const canClearKeyword = keyword.trim() !== ""
-  const canClearExcludeKeyword = excludeKeyword.trim() !== ""
 
   return (
     <Card className="min-w-0 overflow-hidden">
@@ -1566,56 +1582,24 @@ function GoodsPanel({
             <CheckCircle2 className="size-4" />
             {"有库存"}
           </Button>
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={keyword}
-              onChange={(event) => onKeyword(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return
-                event.preventDefault()
-                onApplySearch()
-              }}
-              className="pl-9 pr-10"
-              placeholder={`包含商品名或 Key（${selectedCategoryName}，空格/逗号多词）`}
-            />
-            {canClearKeyword ? (
-              <button
-                type="button"
-                onClick={() => onApplySearch({ keyword: "" })}
-                className="absolute right-2 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                aria-label="清除包含搜索"
-                title="清除包含搜索"
-              >
-                <X className="size-4" />
-              </button>
-            ) : null}
-          </div>
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={excludeKeyword}
-              onChange={(event) => onExcludeKeyword(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return
-                event.preventDefault()
-                onApplySearch()
-              }}
-              className="pl-9 pr-10"
-              placeholder="排除商品名或 Key（空格/逗号多词）"
-            />
-            {canClearExcludeKeyword ? (
-              <button
-                type="button"
-                onClick={() => onApplySearch({ excludeKeyword: "" })}
-                className="absolute right-2 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                aria-label="清除排除搜索"
-                title="清除排除搜索"
-              >
-                <X className="size-4" />
-              </button>
-            ) : null}
-          </div>
+          <SearchHistoryInput
+            value={keyword}
+            onChange={onKeyword}
+            onClear={() => onApplySearch({ keyword: "" })}
+            onSubmit={() => onApplySearch()}
+            onHistorySelect={(value) => onApplySearch({ keyword: value })}
+            placeholder={`包含商品名或 Key（${selectedCategoryName}，空格/逗号多词）`}
+            history={keywordHistory}
+          />
+          <SearchHistoryInput
+            value={excludeKeyword}
+            onChange={onExcludeKeyword}
+            onClear={() => onApplySearch({ excludeKeyword: "" })}
+            onSubmit={() => onApplySearch()}
+            onHistorySelect={(value) => onApplySearch({ excludeKeyword: value })}
+            placeholder="排除商品名或 Key（空格/逗号多词）"
+            history={excludeKeywordHistory}
+          />
           <Button
             type="button"
             variant={searchDirty ? "default" : "outline"}

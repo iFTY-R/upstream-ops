@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { toast } from "sonner"
-import { ExternalLink, Filter, ListTree, Loader2, PackageSearch, Plus, RefreshCw, Search, ShoppingCart, X } from "lucide-react"
+import { ExternalLink, Filter, ListTree, Loader2, PackageSearch, Plus, RefreshCw, Search, ShoppingCart } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -8,10 +8,10 @@ import { DataPagination } from "@/components/ui/data-pagination"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { SearchHistoryInput } from "@/components/search-history-input"
 import { apiFetch } from "@/lib/api"
 import { useLatestShopSyncBatch, useShopGoodsOverview, useShopGoodsTargetOptions, useShopSyncBatchDetails } from "@/lib/queries"
 import { dateTime, money, relativeTime } from "@/lib/format"
@@ -543,27 +543,30 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
             </div>
           </div>
           <div className="grid gap-2 md:grid-cols-[repeat(3,minmax(0,1fr))_2.5rem]">
-            <ClearableInput
+            <SearchHistoryInput
               value={categoryName}
               onChange={setCategoryName}
               onClear={() => applyTextFilters({ categoryName: "" })}
               onSubmit={applyTextFilters}
+              onHistorySelect={(value) => applyTextFilters({ categoryName: value })}
               placeholder="按分类名称筛选"
               history={searchHistory.categoryName}
             />
-            <ClearableInput
+            <SearchHistoryInput
               value={keyword}
               onChange={setKeyword}
               onClear={() => applyTextFilters({ keyword: "" })}
               onSubmit={applyTextFilters}
+              onHistorySelect={(value) => applyTextFilters({ keyword: value })}
               placeholder="包含商品名或 Key"
               history={searchHistory.keyword}
             />
-            <ClearableInput
+            <SearchHistoryInput
               value={excludeKeyword}
               onChange={setExcludeKeyword}
               onClear={() => applyTextFilters({ excludeKeyword: "" })}
               onSubmit={applyTextFilters}
+              onHistorySelect={(value) => applyTextFilters({ excludeKeyword: value })}
               placeholder="排除商品名或 Key"
               history={searchHistory.excludeKeyword}
             />
@@ -1149,87 +1152,5 @@ function CheckRow({
         {label}
       </label>
     </div>
-  )
-}
-
-function ClearableInput({
-  value,
-  onChange,
-  onClear,
-  onSubmit,
-  placeholder,
-  history = [],
-}: {
-  value: string
-  onChange: (value: string) => void
-  onClear: () => void
-  onSubmit: () => void
-  placeholder: string
-  history?: string[]
-}) {
-  const [open, setOpen] = useState(false)
-  const showHistory = open && history.length > 0
-
-  return (
-    <Popover open={showHistory} onOpenChange={setOpen}>
-      <PopoverAnchor asChild>
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter") return
-              event.preventDefault()
-              setOpen(false)
-              onSubmit()
-            }}
-            onFocus={() => setOpen(true)}
-            onClick={() => setOpen(true)}
-            className="pl-9 pr-10"
-            placeholder={placeholder}
-            autoComplete="off"
-          />
-          {value.trim() ? (
-            <button
-              type="button"
-              onClick={() => {
-                onClear()
-                setOpen(false)
-              }}
-              className="absolute right-2 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
-              aria-label="清除"
-            >
-              <X className="size-4" />
-            </button>
-          ) : null}
-        </div>
-      </PopoverAnchor>
-      <PopoverContent
-        align="start"
-        sideOffset={6}
-        className="w-[var(--radix-popover-trigger-width)] p-1"
-        onOpenAutoFocus={(event) => event.preventDefault()}
-      >
-        <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">最近查询</div>
-        <div className="max-h-56 overflow-y-auto">
-          {history.map((item, index) => (
-            <button
-              key={`${item}-${index}`}
-              type="button"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => {
-                onChange(item)
-                setOpen(false)
-              }}
-              className="block w-full truncate rounded-sm px-2 py-1.5 text-left text-sm transition hover:bg-accent hover:text-accent-foreground"
-              title={item}
-            >
-              {item}
-            </button>
-          ))}
-        </div>
-      </PopoverContent>
-    </Popover>
   )
 }
