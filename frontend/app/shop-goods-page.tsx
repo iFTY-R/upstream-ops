@@ -107,6 +107,10 @@ function syncBatchStatusText(batch: ShopSyncBatch | null) {
   return "同步中"
 }
 
+function syncBatchSourceText(batch: ShopSyncBatch) {
+  return batch.source === "cron" ? "定时同步" : "手动同步"
+}
+
 function syncBatchDetail(batch: ShopSyncBatch) {
   const durationLabel = batch.status === "running" ? "已耗时" : "耗时"
   const parts = [`${durationLabel} ${durationText(batch.duration_ms)}`, `成功 ${batch.succeeded}/${batch.total}`]
@@ -802,7 +806,7 @@ function LatestSyncSummary({
       (running || batch?.status === "partial") && "bg-warning/5",
     )}>
       <div className="flex items-center justify-between gap-2">
-        <div className="text-xs text-muted-foreground">{"上一次同步全部"}</div>
+        <div className="text-xs text-muted-foreground">{"最近一次全量同步"}</div>
         {running ? (
           <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-[10px] text-warning">
             <Loader2 className="size-3 animate-spin" />
@@ -819,8 +823,15 @@ function LatestSyncSummary({
           </span>
         )}
       </div>
-      <div className="mt-1 text-sm font-medium">
-        {batch ? relativeTime(batch.finished_at || batch.started_at) : loading ? "加载中..." : "暂无记录"}
+      <div className="mt-1 flex min-w-0 items-center gap-1.5 text-sm font-medium">
+        {batch ? (
+          <>
+            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+              {syncBatchSourceText(batch)}
+            </span>
+            <span className="min-w-0 truncate">{relativeTime(batch.finished_at || batch.started_at)}</span>
+          </>
+        ) : loading ? "加载中..." : "暂无记录"}
       </div>
       <div className="mt-1 flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
         <span className="min-w-0 truncate">{batch ? syncBatchDetail(batch) : "完成一次同步全部后会显示耗时"}</span>
@@ -924,7 +935,7 @@ function SyncBatchDetailsDialog({
             {"同步全部明细"}
           </DialogTitle>
           <DialogDescription>
-            {batch ? `${dateTime(batch.started_at)} 开始 · ${syncBatchStatusText(batch)}` : "查看各店铺的排队、同步和接口请求耗时。"}
+            {batch ? `${dateTime(batch.started_at)} 开始 · ${syncBatchSourceText(batch)} · ${syncBatchStatusText(batch)}` : "查看各店铺的排队、同步和接口请求耗时。"}
           </DialogDescription>
         </DialogHeader>
 

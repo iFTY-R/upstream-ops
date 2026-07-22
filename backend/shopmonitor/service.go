@@ -143,6 +143,11 @@ type syncAllUpstreamState struct {
 	blockedReason string
 }
 
+type syncAllHooks struct {
+	beforeTarget func(context.Context, int, storage.ShopTarget) context.Context
+	afterTarget  func(int, storage.ShopTarget, *SyncResult, error, bool)
+}
+
 func (s *Service) ParseURL(siteURL string) (*shopprovider.ParsedURL, error) {
 	return shopprovider.ParseShopURL(siteURL)
 }
@@ -242,17 +247,22 @@ func (s *Service) SyncAll(ctx context.Context) *SyncAllResult {
 // SyncAllWithConcurrency scans independent shops with bounded parallelism.
 // Results retain the configured target order so callers can display a stable summary.
 func (s *Service) SyncAllWithConcurrency(ctx context.Context, concurrency int) *SyncAllResult {
-	out := &SyncAllResult{}
 	list, err := s.targets.ListMonitorEnabled()
 	if err != nil {
-		if s.log != nil {
-			s.log.Warn("list shop targets failed", "err", err)
-		}
-		out.Failed = 1
-		out.Targets = append(out.Targets, SyncAllTargetResult{Error: err.Error()})
-		return out
+		return s.syncAllListError(err)
 	}
-	out.Total = len(list)
+	return s.syncTargetsWithConcurrency(ctx, list, concurrency, nil)
+}
+
+func (s *Service) syncAllListError(err error) *SyncAllResult {
+	if s.log != nil {
+		s.log.Warn("list shop targets failed", "err", err)
+	}
+	return &SyncAllResult{Failed: 1, Targets: []SyncAllTargetResult{{Error: err.Error()}}}
+}
+
+func (s *Service) syncTargetsWithConcurrency(ctx context.Context, list []storage.ShopTarget, concurrency int, hooks *syncAllHooks) *SyncAllResult {
+	out := &SyncAllResult{Total: len(list)}
 	if concurrency <= 0 {
 		concurrency = 1
 	}
@@ -281,17 +291,27 @@ func (s *Service) SyncAllWithConcurrency(ctx context.Context, concurrency int) *
 				target := list[index]
 				upstream := upstreams[syncAllUpstreamKey(target)]
 				upstream.mu.Lock()
+				targetCtx := ctx
+				if hooks != nil && hooks.beforeTarget != nil {
+					if observedCtx := hooks.beforeTarget(ctx, index, target); observedCtx != nil {
+						targetCtx = observedCtx
+					}
+				}
 				if upstream.blockedReason != "" {
-					out.Targets[index] = SyncAllTargetResult{
+					item := SyncAllTargetResult{
 						TargetID: target.ID,
 						Name:     target.Name,
 						Error:    fmt.Sprintf("本批次已跳过：同一店铺上游不可用（%s）", upstream.blockedReason),
 						Skipped:  true,
 					}
+					out.Targets[index] = item
 					upstream.mu.Unlock()
+					if hooks != nil && hooks.afterTarget != nil {
+						hooks.afterTarget(index, target, nil, errors.New(item.Error), true)
+					}
 					continue
 				}
-				result, syncErr := s.Sync(ctx, &target)
+				result, syncErr := s.Sync(targetCtx, &target)
 				item := SyncAllTargetResult{TargetID: target.ID, Name: target.Name, Result: result}
 				if syncErr != nil {
 					item.Error = syncErr.Error()
@@ -306,6 +326,9 @@ func (s *Service) SyncAllWithConcurrency(ctx context.Context, concurrency int) *
 				}
 				out.Targets[index] = item
 				upstream.mu.Unlock()
+				if hooks != nil && hooks.afterTarget != nil {
+					hooks.afterTarget(index, target, result, syncErr, item.Skipped)
+				}
 			}
 		}()
 	}

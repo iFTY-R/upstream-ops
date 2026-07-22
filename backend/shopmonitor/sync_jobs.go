@@ -107,8 +107,97 @@ func (r *SyncJobRunner) Latest(targetID uint) (*storage.ShopSyncJob, error) {
 	return r.jobs.FindLatestByTarget(targetID)
 }
 
+// SyncAllScheduled records a cron-triggered sync with the same durable batch
+// details as a manual sync while retaining the scheduler's synchronous flow,
+// concurrency, and timeout context. Recording failures do not block the sync.
+func (r *SyncJobRunner) SyncAllScheduled(ctx context.Context, concurrency int) *SyncAllResult {
+	if r == nil || r.monitor == nil {
+		return &SyncAllResult{Failed: 1, Targets: []SyncAllTargetResult{{Error: "shop sync job runner is unavailable"}}}
+	}
+	list, err := r.monitor.targets.ListMonitorEnabled()
+	if err != nil {
+		return r.monitor.syncAllListError(err)
+	}
+	if r.jobs == nil {
+		return r.monitor.syncTargetsWithConcurrency(ctx, list, concurrency, nil)
+	}
+
+	startedAt := time.Now()
+	batch := &storage.ShopSyncBatch{
+		Status:      storage.ShopSyncBatchRunning,
+		Source:      storage.ShopSyncBatchSourceCron,
+		TotalCount:  len(list),
+		QueuedCount: len(list),
+		StartedAt:   startedAt,
+	}
+	items := make([]storage.ShopSyncBatchItem, len(list))
+	for i := range list {
+		items[i] = storage.ShopSyncBatchItem{TargetID: list[i].ID, TargetName: list[i].Name}
+	}
+	jobs, err := r.jobs.CreateBatchWithQueuedJobs(batch, items)
+	if err != nil {
+		if r.log != nil {
+			r.log.Warn("create scheduled shop sync batch failed", "err", err)
+		}
+		return r.monitor.syncTargetsWithConcurrency(ctx, list, concurrency, nil)
+	}
+
+	jobStartedAt := make([]time.Time, len(jobs))
+	stats := make([]*shopprovider.RequestStats, len(jobs))
+	hooks := &syncAllHooks{
+		beforeTarget: func(parent context.Context, index int, _ storage.ShopTarget) context.Context {
+			jobStartedAt[index] = time.Now()
+			if err := r.jobs.MarkRunning(jobs[index].ID, jobStartedAt[index]); err != nil && r.log != nil {
+				r.log.Warn("mark scheduled shop sync running failed", "job_id", jobs[index].ID, "err", err)
+			}
+			observedCtx, requestStats := shopprovider.WithRequestStats(parent)
+			stats[index] = requestStats
+			r.requestStats.Store(jobs[index].ID, requestStats)
+			return observedCtx
+		},
+		afterTarget: func(index int, target storage.ShopTarget, result *SyncResult, syncErr error, skipped bool) {
+			finishedAt := time.Now()
+			status := storage.ShopSyncJobSucceeded
+			errorMessage := ""
+			if syncErr != nil {
+				errorMessage = syncErr.Error()
+				if skipped || isSkippedSyncError(syncErr) {
+					status = storage.ShopSyncJobSkipped
+				} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					status = storage.ShopSyncJobTimedOut
+				} else {
+					status = storage.ShopSyncJobFailed
+				}
+			}
+			goodsCount, changedCount := 0, 0
+			events := map[string]int{}
+			if result != nil {
+				goodsCount = result.GoodsCount
+				changedCount = result.ChangedCount
+				events = result.Events
+			}
+			metrics := stats[index].Snapshot()
+			if err := r.jobs.CompleteWithMetrics(jobs[index].ID, status, goodsCount, changedCount, events, errorMessage, jobStartedAt[index], finishedAt, metrics.Count, metrics.DurationMS); err != nil && r.log != nil {
+				r.log.Warn("complete scheduled shop sync job failed", "job_id", jobs[index].ID, "target_id", target.ID, "err", err)
+			}
+			r.requestStats.Delete(jobs[index].ID)
+			r.mu.Lock()
+			if r.active[target.ID] == jobs[index].ID {
+				delete(r.active, target.ID)
+			}
+			r.mu.Unlock()
+		},
+	}
+
+	result := r.monitor.syncTargetsWithConcurrency(ctx, list, concurrency, hooks)
+	if _, err := r.refreshBatch(batch); err != nil && r.log != nil {
+		r.log.Warn("complete scheduled shop sync batch failed", "batch_id", batch.ID, "err", err)
+	}
+	return result
+}
+
 func (r *SyncJobRunner) CreateBatch(total, queued, reused, startFailed int, jobIDs []uint, startedAt time.Time) (*storage.ShopSyncBatch, error) {
-	return r.createBatch(total, queued, reused, startFailed, jobIDs, nil, startedAt)
+	return r.createBatch(storage.ShopSyncBatchSourceManual, total, queued, reused, startFailed, jobIDs, nil, startedAt)
 }
 
 func (r *SyncJobRunner) CreateBatchWithItems(total, queued, reused, startFailed int, items []storage.ShopSyncBatchItem, startedAt time.Time) (*storage.ShopSyncBatch, error) {
@@ -118,10 +207,10 @@ func (r *SyncJobRunner) CreateBatchWithItems(total, queued, reused, startFailed 
 			jobIDs = append(jobIDs, items[i].JobID)
 		}
 	}
-	return r.createBatch(total, queued, reused, startFailed, jobIDs, items, startedAt)
+	return r.createBatch(storage.ShopSyncBatchSourceManual, total, queued, reused, startFailed, jobIDs, items, startedAt)
 }
 
-func (r *SyncJobRunner) createBatch(total, queued, reused, startFailed int, jobIDs []uint, items []storage.ShopSyncBatchItem, startedAt time.Time) (*storage.ShopSyncBatch, error) {
+func (r *SyncJobRunner) createBatch(source storage.ShopSyncBatchSource, total, queued, reused, startFailed int, jobIDs []uint, items []storage.ShopSyncBatchItem, startedAt time.Time) (*storage.ShopSyncBatch, error) {
 	if r == nil || r.jobs == nil {
 		return nil, fmt.Errorf("shop sync job runner is unavailable")
 	}
@@ -132,6 +221,7 @@ func (r *SyncJobRunner) createBatch(total, queued, reused, startFailed int, jobI
 	}
 	batch := &storage.ShopSyncBatch{
 		Status:           storage.ShopSyncBatchRunning,
+		Source:           source,
 		TotalCount:       total,
 		QueuedCount:      queued,
 		ReusedCount:      reused,

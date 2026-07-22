@@ -344,10 +344,12 @@ export interface ShopSyncAllResult {
 export type ShopSyncJobStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "skipped"
 
 export type ShopSyncBatchStatus = "running" | "succeeded" | "partial" | "failed"
+export type ShopSyncBatchSource = "manual" | "cron"
 
 export interface ShopSyncBatch {
   id: number
   status: ShopSyncBatchStatus
+  source: ShopSyncBatchSource
   total: number
   queued: number
   reused: number

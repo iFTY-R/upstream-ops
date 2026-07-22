@@ -133,7 +133,9 @@ func main() {
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
 		shopMonitorSvc.UpdateProxyConfig(pcfg)
-		return scheduler.New(scfg, monitorSvc, shopMonitorSvc, autoGroupSvc, monLogs, rates, notifies, announcements, shopGoods, shopSyncJobs, captchas, cipher, pcfg, log)
+		sch := scheduler.New(scfg, monitorSvc, shopMonitorSvc, autoGroupSvc, monLogs, rates, notifies, announcements, shopGoods, shopSyncJobs, captchas, cipher, pcfg, log)
+		sch.SetShopSyncRunner(shopSyncRunner)
+		return sch
 	}
 	sch := schedulerFactory(cfg.Scheduler, cfg.Proxy)
 	if err := sch.Start(); err != nil {

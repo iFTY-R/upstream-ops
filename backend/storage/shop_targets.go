@@ -787,6 +787,44 @@ func (r *ShopSyncJobs) CreateBatchWithItems(batch *ShopSyncBatch, items []ShopSy
 	})
 }
 
+// CreateBatchWithQueuedJobs atomically creates the durable records used to
+// observe a synchronous cron run without changing how that run is executed.
+func (r *ShopSyncJobs) CreateBatchWithQueuedJobs(batch *ShopSyncBatch, items []ShopSyncBatchItem) ([]ShopSyncJob, error) {
+	jobs := make([]ShopSyncJob, len(items))
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		for i := range items {
+			jobs[i] = ShopSyncJob{TargetID: items[i].TargetID, Status: ShopSyncJobQueued}
+		}
+		if len(jobs) > 0 {
+			if err := tx.Create(&jobs).Error; err != nil {
+				return err
+			}
+		}
+		jobIDs := make([]uint, len(jobs))
+		for i := range jobs {
+			jobIDs[i] = jobs[i].ID
+		}
+		encoded, err := json.Marshal(jobIDs)
+		if err != nil {
+			return err
+		}
+		batch.JobIDsJSON = string(encoded)
+		if err := tx.Create(batch).Error; err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			return nil
+		}
+		for i := range items {
+			items[i].ID = 0
+			items[i].BatchID = batch.ID
+			items[i].JobID = jobs[i].ID
+		}
+		return tx.Create(&items).Error
+	})
+	return jobs, err
+}
+
 func (r *ShopSyncJobs) FindBatchByID(id uint) (*ShopSyncBatch, error) {
 	var batch ShopSyncBatch
 	if err := r.db.First(&batch, id).Error; err != nil {

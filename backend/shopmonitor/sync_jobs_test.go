@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ifty-r/upstream-ops/backend/config"
 	"github.com/ifty-r/upstream-ops/backend/shopprovider"
 	"github.com/ifty-r/upstream-ops/backend/storage"
 )
@@ -28,6 +29,9 @@ func TestSyncBatchDurationCoversAllJobs(t *testing.T) {
 	}
 	if batch.Status != storage.ShopSyncBatchRunning {
 		t.Fatalf("initial batch status = %s", batch.Status)
+	}
+	if batch.Source != storage.ShopSyncBatchSourceManual {
+		t.Fatalf("batch source = %s, want manual", batch.Source)
 	}
 
 	firstStartedAt := batchStartedAt.Add(time.Second)
@@ -53,6 +57,41 @@ func TestSyncBatchDurationCoversAllJobs(t *testing.T) {
 	}
 	if latest.DurationMS != 7000 {
 		t.Fatalf("batch duration_ms = %d, want 7000", latest.DurationMS)
+	}
+}
+
+func TestScheduledSyncCreatesReadableCronBatch(t *testing.T) {
+	platform := storage.ShopPlatform("scheduled-sync-batch-test")
+	shopprovider.Register(platform, func() shopprovider.Provider {
+		return fakeShopProvider{goods: []shopprovider.Goods{{GoodsKey: "cron-item", Name: "Cron Item", StockCount: 3}}}
+	})
+
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	target := createRefreshTarget(t, targets, platform)
+	monitor := NewService(targets, storage.NewShopWatchRules(db), storage.NewShopGoods(db), nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	runner := NewSyncJobRunner(monitor, storage.NewShopSyncJobs(db), nil)
+
+	result := runner.SyncAllScheduled(context.Background(), 1)
+	if result.Total != 1 || result.Success != 1 || result.Failed != 0 {
+		t.Fatalf("scheduled sync result = %#v", result)
+	}
+	batch, err := runner.LatestBatch()
+	if err != nil {
+		t.Fatalf("latest scheduled batch: %v", err)
+	}
+	if batch.Source != storage.ShopSyncBatchSourceCron || batch.Status != storage.ShopSyncBatchSucceeded {
+		t.Fatalf("scheduled batch = %#v", batch)
+	}
+	details, err := runner.BatchDetails(batch.ID)
+	if err != nil {
+		t.Fatalf("scheduled batch details: %v", err)
+	}
+	if len(details.Items) != 1 || details.Items[0].TargetID != target.ID || details.Items[0].Job == nil {
+		t.Fatalf("scheduled batch details = %#v", details)
+	}
+	if details.Items[0].Job.Status != storage.ShopSyncJobSucceeded {
+		t.Fatalf("scheduled job = %#v", details.Items[0].Job)
 	}
 }
 

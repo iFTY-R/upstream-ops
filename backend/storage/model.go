@@ -476,19 +476,24 @@ type ShopSyncJob struct {
 func (ShopSyncJob) TableName() string { return "shop_sync_jobs" }
 
 type ShopSyncBatchStatus string
+type ShopSyncBatchSource string
 
 const (
 	ShopSyncBatchRunning   ShopSyncBatchStatus = "running"
 	ShopSyncBatchSucceeded ShopSyncBatchStatus = "succeeded"
 	ShopSyncBatchPartial   ShopSyncBatchStatus = "partial"
 	ShopSyncBatchFailed    ShopSyncBatchStatus = "failed"
+
+	ShopSyncBatchSourceManual ShopSyncBatchSource = "manual"
+	ShopSyncBatchSourceCron   ShopSyncBatchSource = "cron"
 )
 
-// ShopSyncBatch records one manual "sync all" operation. Job IDs are stored
+// ShopSyncBatch records one "sync all" operation. Job IDs are stored
 // separately from the aggregate counters so reused jobs can belong to a new batch.
 type ShopSyncBatch struct {
 	ID               uint                `gorm:"primaryKey" json:"id"`
 	Status           ShopSyncBatchStatus `gorm:"size:32;not null;index" json:"status"`
+	Source           ShopSyncBatchSource `gorm:"size:16;not null;default:manual;index" json:"source"`
 	TotalCount       int                 `json:"total"`
 	QueuedCount      int                 `json:"queued"`
 	ReusedCount      int                 `json:"reused"`
@@ -507,7 +512,7 @@ type ShopSyncBatch struct {
 func (ShopSyncBatch) TableName() string { return "shop_sync_batches" }
 
 // ShopSyncBatchItem keeps the target snapshot and job association for every
-// target selected by one manual sync-all operation.
+// target selected by one sync-all operation.
 type ShopSyncBatchItem struct {
 	ID         uint      `gorm:"primaryKey" json:"id"`
 	BatchID    uint      `gorm:"not null;uniqueIndex:idx_shop_sync_batch_target;index" json:"batch_id"`

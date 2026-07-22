@@ -18,21 +18,22 @@ import (
 )
 
 type Scheduler struct {
-	cfg           config.SchedulerConfig
-	log           *slog.Logger
-	cron          *cron.Cron
-	monitor       *monitor.Service
-	shopMonitor   *shopmonitor.Service
-	autoGroup     *autogroup.Service
-	monLogs       *storage.MonitorLogs
-	rates         *storage.Rates
-	notifies      *storage.Notifications
-	announcements *storage.UpstreamAnnouncements
-	shopGoods     *storage.ShopGoods
-	shopSyncJobs  *storage.ShopSyncJobs
-	captchas      *storage.Captchas
-	cipher        *crypto.Cipher
-	proxy         config.ProxyConfig
+	cfg            config.SchedulerConfig
+	log            *slog.Logger
+	cron           *cron.Cron
+	monitor        *monitor.Service
+	shopMonitor    *shopmonitor.Service
+	shopSyncRunner *shopmonitor.SyncJobRunner
+	autoGroup      *autogroup.Service
+	monLogs        *storage.MonitorLogs
+	rates          *storage.Rates
+	notifies       *storage.Notifications
+	announcements  *storage.UpstreamAnnouncements
+	shopGoods      *storage.ShopGoods
+	shopSyncJobs   *storage.ShopSyncJobs
+	captchas       *storage.Captchas
+	cipher         *crypto.Cipher
+	proxy          config.ProxyConfig
 }
 
 // retentionExecutionMu spans scheduler instances so a hot reload cannot start
@@ -83,6 +84,10 @@ func New(
 		cipher:        cipher,
 		proxy:         proxy,
 	}
+}
+
+func (s *Scheduler) SetShopSyncRunner(runner *shopmonitor.SyncJobRunner) {
+	s.shopSyncRunner = runner
 }
 
 func (s *Scheduler) Start() error {
@@ -173,6 +178,10 @@ func (s *Scheduler) runShops() {
 	concurrency := s.cfg.Concurrency
 	if concurrency <= 0 {
 		concurrency = 1
+	}
+	if s.shopSyncRunner != nil {
+		s.shopSyncRunner.SyncAllScheduled(ctx, concurrency)
+		return
 	}
 	s.shopMonitor.SyncAllWithConcurrency(ctx, concurrency)
 }
