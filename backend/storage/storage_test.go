@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"fmt"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -189,6 +190,15 @@ func TestShopHistoryRetentionKeepsRecentAndActiveRecords(t *testing.T) {
 			t.Fatalf("create sync job: %v", err)
 		}
 	}
+	for i, batch := range []*ShopSyncBatch{
+		{Status: ShopSyncBatchSucceeded, TotalCount: 1, SucceededCount: 1, StartedAt: oldFinishedAt.Add(-time.Second), FinishedAt: &oldFinishedAt},
+		{Status: ShopSyncBatchSucceeded, TotalCount: 1, SucceededCount: 1, StartedAt: recentFinishedAt.Add(-time.Second), FinishedAt: &recentFinishedAt},
+		{Status: ShopSyncBatchRunning, TotalCount: 1, StartedAt: oldFinishedAt.Add(-time.Second), FinishedAt: &oldFinishedAt},
+	} {
+		if err := jobs.CreateBatchWithItems(batch, []ShopSyncBatchItem{{TargetID: uint(i + 1), TargetName: fmt.Sprintf("batch-shop-%d", i+1)}}); err != nil {
+			t.Fatalf("create sync batch: %v", err)
+		}
+	}
 	deleted, err = jobs.DeleteFinishedBefore(now.AddDate(0, 0, -30))
 	if err != nil || deleted != 1 {
 		t.Fatalf("delete finished sync jobs = %d, err = %v", deleted, err)
@@ -199,6 +209,20 @@ func TestShopHistoryRetentionKeepsRecentAndActiveRecords(t *testing.T) {
 	}
 	if remainingJobs != 2 {
 		t.Fatalf("remaining jobs = %d", remainingJobs)
+	}
+	var remainingBatches int64
+	if err := db.Model(&ShopSyncBatch{}).Count(&remainingBatches).Error; err != nil {
+		t.Fatalf("count remaining batches: %v", err)
+	}
+	if remainingBatches != 2 {
+		t.Fatalf("remaining batches = %d", remainingBatches)
+	}
+	var remainingBatchItems int64
+	if err := db.Model(&ShopSyncBatchItem{}).Count(&remainingBatchItems).Error; err != nil {
+		t.Fatalf("count remaining batch items: %v", err)
+	}
+	if remainingBatchItems != 2 {
+		t.Fatalf("remaining batch items = %d", remainingBatchItems)
 	}
 }
 

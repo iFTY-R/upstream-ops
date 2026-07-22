@@ -457,21 +457,69 @@ const (
 // ShopSyncJob keeps manual shop synchronization independent from the request
 // that started it, so reverse-proxy timeouts cannot interrupt the work.
 type ShopSyncJob struct {
-	ID           uint              `gorm:"primaryKey" json:"id"`
-	TargetID     uint              `gorm:"not null;index" json:"target_id"`
-	Status       ShopSyncJobStatus `gorm:"size:32;not null;index" json:"status"`
-	ErrorMessage string            `gorm:"type:text" json:"error_message,omitempty"`
-	GoodsCount   int               `json:"goods_count"`
-	ChangedCount int               `json:"changed_count"`
-	EventsJSON   string            `gorm:"type:text" json:"events_json,omitempty"`
-	StartedAt    *time.Time        `json:"started_at,omitempty"`
-	FinishedAt   *time.Time        `json:"finished_at,omitempty"`
-	DurationMS   int64             `json:"duration_ms"`
-	CreatedAt    time.Time         `json:"created_at"`
-	UpdatedAt    time.Time         `json:"updated_at"`
+	ID                uint              `gorm:"primaryKey" json:"id"`
+	TargetID          uint              `gorm:"not null;index" json:"target_id"`
+	Status            ShopSyncJobStatus `gorm:"size:32;not null;index" json:"status"`
+	ErrorMessage      string            `gorm:"type:text" json:"error_message,omitempty"`
+	GoodsCount        int               `json:"goods_count"`
+	ChangedCount      int               `json:"changed_count"`
+	EventsJSON        string            `gorm:"type:text" json:"events_json,omitempty"`
+	StartedAt         *time.Time        `json:"started_at,omitempty"`
+	FinishedAt        *time.Time        `json:"finished_at,omitempty"`
+	DurationMS        int64             `json:"duration_ms"`
+	RequestCount      int               `json:"request_count"`
+	RequestDurationMS int64             `json:"request_duration_ms"`
+	CreatedAt         time.Time         `json:"created_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
 }
 
 func (ShopSyncJob) TableName() string { return "shop_sync_jobs" }
+
+type ShopSyncBatchStatus string
+
+const (
+	ShopSyncBatchRunning   ShopSyncBatchStatus = "running"
+	ShopSyncBatchSucceeded ShopSyncBatchStatus = "succeeded"
+	ShopSyncBatchPartial   ShopSyncBatchStatus = "partial"
+	ShopSyncBatchFailed    ShopSyncBatchStatus = "failed"
+)
+
+// ShopSyncBatch records one manual "sync all" operation. Job IDs are stored
+// separately from the aggregate counters so reused jobs can belong to a new batch.
+type ShopSyncBatch struct {
+	ID               uint                `gorm:"primaryKey" json:"id"`
+	Status           ShopSyncBatchStatus `gorm:"size:32;not null;index" json:"status"`
+	TotalCount       int                 `json:"total"`
+	QueuedCount      int                 `json:"queued"`
+	ReusedCount      int                 `json:"reused"`
+	StartFailedCount int                 `json:"start_failed"`
+	SucceededCount   int                 `json:"succeeded"`
+	FailedCount      int                 `json:"failed"`
+	SkippedCount     int                 `json:"skipped"`
+	JobIDsJSON       string              `gorm:"type:text" json:"-"`
+	StartedAt        time.Time           `gorm:"not null;index" json:"started_at"`
+	FinishedAt       *time.Time          `json:"finished_at,omitempty"`
+	DurationMS       int64               `json:"duration_ms"`
+	CreatedAt        time.Time           `json:"created_at"`
+	UpdatedAt        time.Time           `json:"updated_at"`
+}
+
+func (ShopSyncBatch) TableName() string { return "shop_sync_batches" }
+
+// ShopSyncBatchItem keeps the target snapshot and job association for every
+// target selected by one manual sync-all operation.
+type ShopSyncBatchItem struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	BatchID    uint      `gorm:"not null;uniqueIndex:idx_shop_sync_batch_target;index" json:"batch_id"`
+	TargetID   uint      `gorm:"not null;uniqueIndex:idx_shop_sync_batch_target;index" json:"target_id"`
+	TargetName string    `gorm:"size:128;not null" json:"target_name"`
+	JobID      uint      `gorm:"index" json:"job_id,omitempty"`
+	Reused     bool      `gorm:"not null;default:false" json:"reused"`
+	StartError string    `gorm:"type:text" json:"start_error,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+func (ShopSyncBatchItem) TableName() string { return "shop_sync_batch_items" }
 
 type AutoGroupPolicy struct {
 	ID                            uint       `gorm:"primaryKey" json:"id"`

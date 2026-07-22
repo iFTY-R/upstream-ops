@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { toast } from "sonner"
-import { ExternalLink, Filter, Loader2, PackageSearch, Plus, RefreshCw, Search, ShoppingCart, X } from "lucide-react"
+import { ExternalLink, Filter, ListTree, Loader2, PackageSearch, Plus, RefreshCw, Search, ShoppingCart, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -11,9 +11,10 @@ import { Label } from "@/components/ui/label"
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { apiFetch } from "@/lib/api"
-import { useLatestShopMonitorLog, useShopGoodsOverview, useShopGoodsTargetOptions } from "@/lib/queries"
-import { money, relativeTime } from "@/lib/format"
+import { useLatestShopSyncBatch, useShopGoodsOverview, useShopGoodsTargetOptions, useShopSyncBatchDetails } from "@/lib/queries"
+import { dateTime, money, relativeTime } from "@/lib/format"
 import { useTriggerRefresh } from "@/lib/refresh-context"
 import {
   readAllShopGoodsPreferences,
@@ -27,9 +28,11 @@ import type {
   ShopGoodsListItem,
   ShopGoodsSort,
   ShopGoodsStatus,
-  ShopMonitorLog,
   ShopRefreshGoodsResult,
   ShopSyncAllResult,
+  ShopSyncBatch,
+  ShopSyncBatchDetails,
+  ShopSyncBatchItem,
   ShopSyncJob,
   ShopSyncJobStartResult,
   ShopTarget,
@@ -87,8 +90,8 @@ function isActiveSyncJob(job: ShopSyncJob) {
 }
 
 function durationText(ms?: number | null) {
-  if (ms == null || !Number.isFinite(ms) || ms <= 0) return "—"
-  if (ms < 1000) return `${Math.round(ms)} 毫秒`
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return "—"
+  if (ms < 1000) return "不足 1 秒"
   const totalSeconds = Math.max(1, Math.round(ms / 1000))
   if (totalSeconds < 60) return `${totalSeconds} 秒`
   const minutes = Math.floor(totalSeconds / 60)
@@ -96,14 +99,27 @@ function durationText(ms?: number | null) {
   return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`
 }
 
-function monitorLogStatusText(log: ShopMonitorLog | null) {
-  if (!log) return "暂无同步记录"
-  return log.success ? "同步成功" : "同步失败"
+function syncBatchStatusText(batch: ShopSyncBatch | null) {
+  if (!batch) return "暂无同步记录"
+  if (batch.status === "succeeded") return "全部成功"
+  if (batch.status === "partial") return "部分完成"
+  if (batch.status === "failed") return "同步失败"
+  return "同步中"
+}
+
+function syncBatchDetail(batch: ShopSyncBatch) {
+  const durationLabel = batch.status === "running" ? "已耗时" : "耗时"
+  const parts = [`${durationLabel} ${durationText(batch.duration_ms)}`, `成功 ${batch.succeeded}/${batch.total}`]
+  if (batch.failed > 0) parts.push(`失败 ${batch.failed}`)
+  if (batch.skipped > 0) parts.push(`跳过 ${batch.skipped}`)
+  return parts.join(" · ")
 }
 
 export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boolean }) {
   const targets = useShopGoodsTargetOptions(publicMode)
-  const latestSync = useLatestShopMonitorLog(!publicMode)
+  const latestSyncBatch = useLatestShopSyncBatch(!publicMode)
+  const [syncDetailsOpen, setSyncDetailsOpen] = useState(false)
+  const syncBatchDetails = useShopSyncBatchDetails(latestSyncBatch.data?.id ?? null, !publicMode && syncDetailsOpen)
   const triggerRefresh = useTriggerRefresh()
   const [initialPreferences] = useState(readAllShopGoodsPreferences)
   const initialKeyword = normalizeTextFilter(initialPreferences.keyword)
@@ -153,12 +169,7 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
     [syncJobs],
   )
   const activeSyncJobKey = activeSyncJobs.map((job) => `${job.id}:${job.status}`).join(",")
-  const latestSyncTargetName = useMemo(() => {
-    const log = latestSync.data
-    if (!log) return ""
-    const target = (targets.data ?? []).find((item) => item.id === log.target_id)
-    return target?.name?.trim() || target?.last_shop_name?.trim() || (log.target_id ? `店铺 #${log.target_id}` : "")
-  }, [latestSync.data, targets.data])
+  const latestSyncBatchStatus = latestSyncBatch.data?.status
   const activeFilters = targetID !== null
     || status !== "all"
     || sort !== "category"
@@ -189,6 +200,18 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
       excludeKeyword: filters.exclude_keyword,
     }))
   }, [filters.category_name, filters.exclude_keyword, filters.keyword, goods.data, goods.error])
+
+  useEffect(() => {
+    if (publicMode || syncDetailsOpen || latestSyncBatchStatus !== "running") return
+    const timer = window.setInterval(() => latestSyncBatch.refetch(), 2000)
+    return () => window.clearInterval(timer)
+  }, [latestSyncBatchStatus, publicMode, syncDetailsOpen])
+
+  useEffect(() => {
+    if (!syncDetailsOpen || syncBatchDetails.data?.batch.status !== "running") return
+    const timer = window.setInterval(() => syncBatchDetails.refetch(), 2000)
+    return () => window.clearInterval(timer)
+  }, [syncBatchDetails.data?.batch.status, syncDetailsOpen])
 
   useEffect(() => {
     if (publicMode || activeSyncJobs.length === 0) return
@@ -266,7 +289,7 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
   function refreshShopData() {
     targets.refetch()
     goods.refetch()
-    latestSync.refetch()
+    latestSyncBatch.refetch()
     triggerRefresh()
   }
 
@@ -365,6 +388,7 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
     setBusy("sync-all")
     try {
       const result = await apiFetch<ShopSyncAllResult>("/shop-targets/sync-all", { method: "POST" })
+      latestSyncBatch.setData(result.batch)
       const jobs = result.targets.flatMap((item) => item.job ? [item.job] : [])
       if (jobs.length > 0) {
         setSyncJobs((current) => {
@@ -483,10 +507,9 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
         )}>
           {!publicMode ? (
             <LatestSyncSummary
-              log={latestSync.data}
-              targetName={latestSyncTargetName}
-              loading={latestSync.loading}
-              activeCount={activeSyncJobs.length}
+              batch={latestSyncBatch.data}
+              loading={latestSyncBatch.loading}
+              onOpenDetails={() => setSyncDetailsOpen(true)}
             />
           ) : null}
           <Summary label="店铺" value={summary.shops} />
@@ -642,15 +665,24 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
       </Card>
 
       {!publicMode ? (
-        <AddShopDialog
-          open={addShopOpen}
-          form={addShopForm}
-          busy={busy}
-          onOpenChange={setAddShopOpen}
-          onFormChange={setAddShopForm}
-          onParseURL={parseAddShopURL}
-          onSave={saveAddShop}
-        />
+        <>
+          <SyncBatchDetailsDialog
+            open={syncDetailsOpen}
+            details={syncBatchDetails.data}
+            loading={syncBatchDetails.loading}
+            error={syncBatchDetails.error}
+            onOpenChange={setSyncDetailsOpen}
+          />
+          <AddShopDialog
+            open={addShopOpen}
+            form={addShopForm}
+            busy={busy}
+            onOpenChange={setAddShopOpen}
+            onFormChange={setAddShopForm}
+            onParseURL={parseAddShopURL}
+            onSave={saveAddShop}
+          />
+        </>
       ) : null}
     </section>
   )
@@ -754,44 +786,231 @@ function Summary({ label, value, warn }: { label: string; value: number; warn?: 
 }
 
 function LatestSyncSummary({
-  log,
-  targetName,
+  batch,
   loading,
-  activeCount,
+  onOpenDetails,
 }: {
-  log: ShopMonitorLog | null
-  targetName: string
+  batch: ShopSyncBatch | null
   loading: boolean
-  activeCount: number
+  onOpenDetails: () => void
 }) {
+  const running = batch?.status === "running"
   return (
     <div className={cn(
       "min-w-0 bg-card p-3",
-      log && !log.success && "bg-danger/5",
-      activeCount > 0 && "bg-warning/5",
+      batch?.status === "failed" && "bg-danger/5",
+      (running || batch?.status === "partial") && "bg-warning/5",
     )}>
       <div className="flex items-center justify-between gap-2">
-        <div className="text-xs text-muted-foreground">{"上一次同步"}</div>
-        {activeCount > 0 ? (
+        <div className="text-xs text-muted-foreground">{"上一次同步全部"}</div>
+        {running ? (
           <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-[10px] text-warning">
             <Loader2 className="size-3 animate-spin" />
-            {`同步中 ${activeCount}`}
+            {"同步中"}
           </span>
         ) : (
-          <span className={cn("rounded-full px-2 py-0.5 text-[10px]", log?.success === false ? "bg-danger/10 text-danger" : "bg-muted text-muted-foreground")}>
-            {loading ? "加载中" : monitorLogStatusText(log)}
+          <span className={cn(
+            "rounded-full px-2 py-0.5 text-[10px]",
+            batch?.status === "failed" && "bg-danger/10 text-danger",
+            batch?.status === "partial" && "bg-warning/10 text-warning",
+            (!batch || batch.status === "succeeded") && "bg-muted text-muted-foreground",
+          )}>
+            {loading ? "加载中" : syncBatchStatusText(batch)}
           </span>
         )}
       </div>
       <div className="mt-1 text-sm font-medium">
-        {log ? relativeTime(log.finished_at || log.started_at) : loading ? "加载中..." : "暂无记录"}
+        {batch ? relativeTime(batch.finished_at || batch.started_at) : loading ? "加载中..." : "暂无记录"}
       </div>
-      <div className="mt-1 text-xs text-muted-foreground">
-        {log ? `耗时 ${durationText(log.duration_ms)}${targetName ? ` · ${targetName}` : ""}` : "同步完成后会显示耗时"}
+      <div className="mt-1 flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+        <span className="min-w-0 truncate">{batch ? syncBatchDetail(batch) : "完成一次同步全部后会显示耗时"}</span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-6 shrink-0"
+              onClick={onOpenDetails}
+              disabled={!batch}
+              aria-label="查看同步全部明细"
+            >
+              <ListTree className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{"查看各店铺同步耗时"}</TooltipContent>
+        </Tooltip>
       </div>
-      {log && !log.success && log.error_message ? (
-        <div className="mt-1 line-clamp-2 text-xs text-danger">{log.error_message}</div>
-      ) : null}
+    </div>
+  )
+}
+
+function syncItemStatus(item: ShopSyncBatchItem) {
+  if (item.start_error) return "启动失败"
+  switch (item.job?.status) {
+    case "queued": return "排队中"
+    case "running": return "同步中"
+    case "succeeded": return "成功"
+    case "failed": return "失败"
+    case "timed_out": return "超时"
+    case "skipped": return "已跳过"
+    default: return "无任务"
+  }
+}
+
+function syncItemStatusClass(item: ShopSyncBatchItem) {
+  if (item.start_error || item.job?.status === "failed" || item.job?.status === "timed_out") return "text-danger"
+  if (item.job?.status === "succeeded") return "text-emerald-700"
+  if (item.job?.status === "running") return "text-blue-700"
+  if (item.job?.status === "queued") return "text-warning"
+  return "text-muted-foreground"
+}
+
+function syncQueueDuration(item: ShopSyncBatchItem, batch: ShopSyncBatch, now: number) {
+  const job = item.job
+  if (!job) return null
+  const batchStartedAt = new Date(batch.started_at).getTime()
+  if (!Number.isFinite(batchStartedAt)) return null
+  if (job.started_at) {
+    const jobStartedAt = new Date(job.started_at).getTime()
+    if (!Number.isFinite(jobStartedAt)) return null
+    return Math.max(0, jobStartedAt - batchStartedAt)
+  }
+  if (job.status === "queued") return Math.max(0, now - batchStartedAt)
+  return null
+}
+
+function syncRunDuration(item: ShopSyncBatchItem, now: number) {
+  const job = item.job
+  if (!job?.started_at) return null
+  if (job.status !== "queued" && job.status !== "running") return job.duration_ms
+  const startedAt = new Date(job.started_at).getTime()
+  return Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : null
+}
+
+function requestLatencyText(ms: number | null) {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return "—"
+  if (ms < 1) return "< 1 ms"
+  if (ms < 1000) return `${Math.round(ms)} ms`
+  return `${(ms / 1000).toFixed(2)} 秒`
+}
+
+function SyncBatchDetailsDialog({
+  open,
+  details,
+  loading,
+  error,
+  onOpenChange,
+}: {
+  open: boolean
+  details: ShopSyncBatchDetails | null
+  loading: boolean
+  error: string | null
+  onOpenChange: (open: boolean) => void
+}) {
+  const batch = details?.batch ?? null
+  const items = details?.items ?? []
+  const now = Date.now()
+  const requestCount = items.reduce((total, item) => total + (item.job?.request_count ?? 0), 0)
+  const requestDuration = items.reduce((total, item) => total + (item.job?.request_duration_ms ?? 0), 0)
+  const averageRequestDuration = requestCount > 0 ? requestDuration / requestCount : null
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[90vh] w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
+        <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12 text-left">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <ListTree className="size-4 text-blue-600" />
+            {"同步全部明细"}
+          </DialogTitle>
+          <DialogDescription>
+            {batch ? `${dateTime(batch.started_at)} 开始 · ${syncBatchStatusText(batch)}` : "查看各店铺的排队、同步和接口请求耗时。"}
+          </DialogDescription>
+        </DialogHeader>
+
+        {batch ? (
+          <div className="grid shrink-0 grid-cols-2 divide-x divide-y divide-border border-b border-border bg-muted/20 sm:grid-cols-4 sm:divide-y-0">
+            <SyncDetailMetric label="店铺" value={`${items.length}/${batch.total}`} />
+            <SyncDetailMetric label={batch.status === "running" ? "已耗时" : "总耗时"} value={durationText(batch.duration_ms)} />
+            <SyncDetailMetric label="接口请求" value={`${requestCount} 次`} />
+            <SyncDetailMetric label="平均接口耗时" value={requestLatencyText(averageRequestDuration)} />
+          </div>
+        ) : null}
+
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {loading && !details ? (
+            <div className="flex h-40 items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              {"加载同步明细中"}
+            </div>
+          ) : error && !details ? (
+            <div className="flex h-40 items-center justify-center px-6 text-center text-sm text-danger">
+              {`同步明细加载失败：${error}`}
+            </div>
+          ) : !details || items.length === 0 ? (
+            <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">{"该批次暂无店铺明细"}</div>
+          ) : (
+            <Table className="min-w-[940px]">
+              <TableHeader className="sticky top-0 z-10 bg-background">
+                <TableRow>
+                  <TableHead className="w-[190px] pl-5">{"店铺"}</TableHead>
+                  <TableHead>{"状态"}</TableHead>
+                  <TableHead className="text-right">{"排队耗时"}</TableHead>
+                  <TableHead className="text-right">{"同步耗时"}</TableHead>
+                  <TableHead className="text-right">{"请求总数"}</TableHead>
+                  <TableHead className="text-right">{"平均接口耗时"}</TableHead>
+                  <TableHead>{"完成时间"}</TableHead>
+                  <TableHead className="w-[240px] pr-5">{"结果"}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {items.map((item) => {
+                  const queueDuration = syncQueueDuration(item, details.batch, now)
+                  const runDuration = syncRunDuration(item, now)
+                  const averageDuration = item.job?.request_count
+                    ? item.job.request_duration_ms / item.job.request_count
+                    : null
+                  const result = item.start_error || item.job?.error_message || "—"
+                  const reusedBeforeBatch = Boolean(item.reused && item.job?.started_at && new Date(item.job.started_at).getTime() <= new Date(details.batch.started_at).getTime())
+                  return (
+                    <TableRow key={item.id || `${item.batch_id}:${item.target_id}`}>
+                      <TableCell className="pl-5">
+                        <div className="max-w-[180px] truncate font-medium" title={item.target_name}>{item.target_name}</div>
+                        <div className="mt-0.5 text-[11px] text-muted-foreground">{`#${item.target_id}${item.reused ? " · 复用任务" : ""}`}</div>
+                      </TableCell>
+                      <TableCell>
+                        <span className={cn("inline-flex items-center gap-1.5 text-xs font-medium", syncItemStatusClass(item))}>
+                          {item.job?.status === "running" ? <Loader2 className="size-3 animate-spin" /> : <span className="size-1.5 rounded-full bg-current" />}
+                          {syncItemStatus(item)}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right text-xs tabular-nums">
+                        {reusedBeforeBatch ? "已在执行" : durationText(queueDuration)}
+                      </TableCell>
+                      <TableCell className="text-right text-xs tabular-nums">{durationText(runDuration)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{item.job?.request_count ?? 0}</TableCell>
+                      <TableCell className="text-right text-xs tabular-nums">{requestLatencyText(averageDuration)}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{dateTime(item.job?.finished_at)}</TableCell>
+                      <TableCell className="max-w-[240px] whitespace-normal pr-5 text-xs text-muted-foreground" title={result === "—" ? undefined : result}>
+                        <span className="line-clamp-2 break-words">{result}</span>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function SyncDetailMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 px-4 py-3">
+      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="mt-0.5 truncate text-sm font-semibold tabular-nums" title={value}>{value}</div>
     </div>
   )
 }

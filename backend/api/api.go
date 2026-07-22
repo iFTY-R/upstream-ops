@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/ifty-r/upstream-ops/backend/autogroup"
@@ -56,6 +57,9 @@ type shopSyncJobRunner interface {
 	Get(targetID, jobID uint) (*storage.ShopSyncJob, error)
 	GetMany(jobIDs []uint) ([]storage.ShopSyncJob, error)
 	Latest(targetID uint) (*storage.ShopSyncJob, error)
+	CreateBatchWithItems(total, queued, reused, startFailed int, items []storage.ShopSyncBatchItem, startedAt time.Time) (*storage.ShopSyncBatch, error)
+	LatestBatch() (*storage.ShopSyncBatch, error)
+	BatchDetails(batchID uint) (*shopmonitor.SyncBatchDetails, error)
 }
 
 type upstreamAPIKeyService interface {

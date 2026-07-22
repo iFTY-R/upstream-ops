@@ -353,7 +353,10 @@ func (c *Client) doRequest(ctx context.Context, send func() (*resty.Response, er
 		}
 	}
 	c.lastRequestAt = time.Now()
-	return send()
+	startedAt := time.Now()
+	resp, err := send()
+	shopprovider.ObserveRequest(ctx, time.Since(startedAt))
+	return resp, err
 }
 
 func (c *Client) rememberCookie(endpoint, raw string) {

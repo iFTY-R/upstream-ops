@@ -85,6 +85,24 @@ func TestClientReadsInfoCategoriesGoodsAndPrice(t *testing.T) {
 	}
 }
 
+func TestClientRecordsActualHTTPRequests(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeEnvelope(t, w, map[string]any{"nickname": "统计店铺"})
+	}))
+	defer server.Close()
+
+	client := New()
+	ctx, stats := shopprovider.WithRequestStats(context.Background())
+	if _, err := client.Info(ctx, shopprovider.Target{BaseURL: server.URL, Token: "TOKEN"}); err != nil {
+		t.Fatalf("info: %v", err)
+	}
+
+	snapshot := stats.Snapshot()
+	if snapshot.Count != 1 {
+		t.Fatalf("request count = %d, want 1", snapshot.Count)
+	}
+}
+
 func TestClientRetriesACWSCV2Challenge(t *testing.T) {
 	const arg1 = "82AD28C760AEED5D15E41628E2A744590DAAA028"
 	value, ok := acwSCV2Value(arg1)

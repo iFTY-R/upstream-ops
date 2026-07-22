@@ -29,6 +29,8 @@ import type {
   ShopGoodsTargetOption,
   ShopMonitorLog,
   ShopSnapshotCategory,
+  ShopSyncBatch,
+  ShopSyncBatchDetails,
   ShopTarget,
   ShopWatchRule,
   SystemConfigResponse,
@@ -352,4 +354,12 @@ export function useShopMonitorLogs(targetID: number | null, page = 1, pageSize =
 
 export function useLatestShopMonitorLog(enabled = true) {
   return useApi<ShopMonitorLog | null>(enabled ? "/shop-targets/monitor-logs/latest" : null)
+}
+
+export function useLatestShopSyncBatch(enabled = true) {
+  return useApi<ShopSyncBatch | null>(enabled ? "/shop-targets/sync-batches/latest" : null)
+}
+
+export function useShopSyncBatchDetails(batchID: number | null, enabled = true) {
+  return useApi<ShopSyncBatchDetails>(enabled && batchID != null ? `/shop-targets/sync-batches/${batchID}` : null, false)
 }

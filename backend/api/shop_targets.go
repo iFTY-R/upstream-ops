@@ -24,6 +24,8 @@ func registerShopTargets(g *gin.RouterGroup, d *Deps) {
 	gp.POST("/parse-url", func(c *gin.Context) { parseShopURL(c, d) })
 	gp.POST("/sync-all", func(c *gin.Context) { syncAllShopTargets(c, d) })
 	gp.POST("/sync-jobs/status", func(c *gin.Context) { getShopSyncJobsStatus(c, d) })
+	gp.GET("/sync-batches/latest", func(c *gin.Context) { getLatestShopSyncBatch(c, d) })
+	gp.GET("/sync-batches/:batch_id", func(c *gin.Context) { getShopSyncBatchDetails(c, d) })
 	gp.GET("/monitor-logs/latest", func(c *gin.Context) { getLatestShopMonitorLog(c, d) })
 	gp.POST("/reorder", func(c *gin.Context) { reorderShopTargets(c, d) })
 	gp.POST("/bulk-notification", func(c *gin.Context) { bulkConfigureShopNotifications(c, d) })
@@ -112,6 +114,7 @@ type shopSyncAllJobsResult struct {
 	Queued  int                    `json:"queued"`
 	Reused  int                    `json:"reused"`
 	Failed  int                    `json:"failed"`
+	Batch   *storage.ShopSyncBatch `json:"batch"`
 	Targets []shopSyncAllJobResult `json:"targets"`
 }
 
@@ -515,27 +518,75 @@ func syncAllShopTargets(c *gin.Context, d *Deps) {
 	if !shopSyncRunnerReady(c, d) {
 		return
 	}
+	startedAt := time.Now()
 	list, err := d.ShopTargets.ListMonitorEnabled()
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
 	result := shopSyncAllJobsResult{Total: len(list), Targets: make([]shopSyncAllJobResult, 0, len(list))}
+	batchItems := make([]storage.ShopSyncBatchItem, 0, len(list))
 	for i := range list {
 		target := list[i]
 		job, reused, startErr := d.ShopSyncRunner.Start(target.ID)
 		item := shopSyncAllJobResult{TargetID: target.ID, Name: target.Name, Job: job, Reused: reused}
+		batchItem := storage.ShopSyncBatchItem{TargetID: target.ID, TargetName: target.Name, Reused: reused}
 		if startErr != nil {
 			item.Error = startErr.Error()
+			batchItem.StartError = item.Error
 			result.Failed++
 		} else if reused {
 			result.Reused++
+			batchItem.JobID = job.ID
 		} else {
 			result.Queued++
+			batchItem.JobID = job.ID
 		}
 		result.Targets = append(result.Targets, item)
+		batchItems = append(batchItems, batchItem)
+	}
+	result.Batch, err = d.ShopSyncRunner.CreateBatchWithItems(result.Total, result.Queued, result.Reused, result.Failed, batchItems, startedAt)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"data": result})
+}
+
+func getLatestShopSyncBatch(c *gin.Context, d *Deps) {
+	if !shopSyncRunnerReady(c, d) {
+		return
+	}
+	batch, err := d.ShopSyncRunner.LatestBatch()
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusOK, gin.H{"data": nil})
+		return
+	}
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": batch})
+}
+
+func getShopSyncBatchDetails(c *gin.Context, d *Deps) {
+	if !shopSyncRunnerReady(c, d) {
+		return
+	}
+	batchID, ok := parseUintParam(c, "batch_id")
+	if !ok {
+		return
+	}
+	details, err := d.ShopSyncRunner.BatchDetails(batchID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		fail(c, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": details})
 }
 
 func getLatestShopMonitorLog(c *gin.Context, d *Deps) {

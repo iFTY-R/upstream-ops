@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/ifty-r/upstream-ops/backend/shopmonitor"
 	"github.com/ifty-r/upstream-ops/backend/storage"
 	"gorm.io/gorm"
 )
@@ -460,9 +461,11 @@ func TestListAllShopGoodsReturnsTargetMetadata(t *testing.T) {
 }
 
 type fakeShopSyncJobRunner struct {
-	job     *storage.ShopSyncJob
-	reused  bool
-	started []uint
+	job        *storage.ShopSyncJob
+	batch      *storage.ShopSyncBatch
+	batchItems []storage.ShopSyncBatchItem
+	reused     bool
+	started    []uint
 }
 
 func (r *fakeShopSyncJobRunner) Start(targetID uint) (*storage.ShopSyncJob, bool, error) {
@@ -497,6 +500,46 @@ func (r *fakeShopSyncJobRunner) GetMany(jobIDs []uint) ([]storage.ShopSyncJob, e
 		}
 	}
 	return nil, nil
+}
+
+func (r *fakeShopSyncJobRunner) CreateBatchWithItems(total, queued, reused, startFailed int, items []storage.ShopSyncBatchItem, startedAt time.Time) (*storage.ShopSyncBatch, error) {
+	r.batch = &storage.ShopSyncBatch{
+		ID:               31,
+		Status:           storage.ShopSyncBatchRunning,
+		TotalCount:       total,
+		QueuedCount:      queued,
+		ReusedCount:      reused,
+		StartFailedCount: startFailed,
+		FailedCount:      startFailed,
+		StartedAt:        startedAt,
+	}
+	r.batchItems = append([]storage.ShopSyncBatchItem(nil), items...)
+	for i := range r.batchItems {
+		r.batchItems[i].BatchID = r.batch.ID
+	}
+	return r.batch, nil
+}
+
+func (r *fakeShopSyncJobRunner) LatestBatch() (*storage.ShopSyncBatch, error) {
+	if r.batch == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return r.batch, nil
+}
+
+func (r *fakeShopSyncJobRunner) BatchDetails(batchID uint) (*shopmonitor.SyncBatchDetails, error) {
+	if r.batch == nil || r.batch.ID != batchID {
+		return nil, gorm.ErrRecordNotFound
+	}
+	details := &shopmonitor.SyncBatchDetails{Batch: r.batch, Items: make([]shopmonitor.SyncBatchItemDetail, 0, len(r.batchItems))}
+	for i := range r.batchItems {
+		item := shopmonitor.SyncBatchItemDetail{ShopSyncBatchItem: r.batchItems[i]}
+		if r.job != nil && r.job.ID == r.batchItems[i].JobID && r.job.TargetID == r.batchItems[i].TargetID {
+			item.Job = r.job
+		}
+		details.Items = append(details.Items, item)
+	}
+	return details, nil
 }
 
 func TestShopSyncJobEndpointsStartAndReadJob(t *testing.T) {
@@ -627,14 +670,38 @@ func TestSyncAllShopTargetsQueuesBackgroundJobs(t *testing.T) {
 	}
 	var resp struct {
 		Data struct {
-			Total  int `json:"total"`
-			Queued int `json:"queued"`
+			Total  int                   `json:"total"`
+			Queued int                   `json:"queued"`
+			Batch  storage.ShopSyncBatch `json:"batch"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.Data.Total != 2 || resp.Data.Queued != 2 {
+	if resp.Data.Total != 2 || resp.Data.Queued != 2 || resp.Data.Batch.ID != 31 || resp.Data.Batch.TotalCount != 2 {
 		t.Fatalf("response = %#v", resp.Data)
+	}
+
+	latestReq := httptest.NewRequest(http.MethodGet, "/api/shop-targets/sync-batches/latest", nil)
+	latestRec := httptest.NewRecorder()
+	router.ServeHTTP(latestRec, latestReq)
+	if latestRec.Code != http.StatusOK {
+		t.Fatalf("latest batch status = %d, body = %s", latestRec.Code, latestRec.Body.String())
+	}
+
+	detailsReq := httptest.NewRequest(http.MethodGet, "/api/shop-targets/sync-batches/31", nil)
+	detailsRec := httptest.NewRecorder()
+	router.ServeHTTP(detailsRec, detailsReq)
+	if detailsRec.Code != http.StatusOK {
+		t.Fatalf("batch details status = %d, body = %s", detailsRec.Code, detailsRec.Body.String())
+	}
+	var detailsResp struct {
+		Data shopmonitor.SyncBatchDetails `json:"data"`
+	}
+	if err := json.Unmarshal(detailsRec.Body.Bytes(), &detailsResp); err != nil {
+		t.Fatalf("decode batch details: %v", err)
+	}
+	if len(detailsResp.Data.Items) != 2 || detailsResp.Data.Items[0].TargetName != "shop-a" || detailsResp.Data.Items[1].TargetName != "shop-b" {
+		t.Fatalf("batch details = %#v", detailsResp.Data)
 	}
 }

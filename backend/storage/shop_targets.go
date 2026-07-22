@@ -767,6 +767,61 @@ func (r *ShopSyncJobs) Create(job *ShopSyncJob) error {
 	return r.db.Create(job).Error
 }
 
+func (r *ShopSyncJobs) CreateBatch(batch *ShopSyncBatch) error {
+	return r.CreateBatchWithItems(batch, nil)
+}
+
+func (r *ShopSyncJobs) CreateBatchWithItems(batch *ShopSyncBatch, items []ShopSyncBatchItem) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(batch).Error; err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			return nil
+		}
+		for i := range items {
+			items[i].ID = 0
+			items[i].BatchID = batch.ID
+		}
+		return tx.Create(&items).Error
+	})
+}
+
+func (r *ShopSyncJobs) FindBatchByID(id uint) (*ShopSyncBatch, error) {
+	var batch ShopSyncBatch
+	if err := r.db.First(&batch, id).Error; err != nil {
+		return nil, err
+	}
+	return &batch, nil
+}
+
+func (r *ShopSyncJobs) FindLatestBatch() (*ShopSyncBatch, error) {
+	var batch ShopSyncBatch
+	if err := r.db.Order("id DESC").First(&batch).Error; err != nil {
+		return nil, err
+	}
+	return &batch, nil
+}
+
+func (r *ShopSyncJobs) FindBatchItems(batchID uint) ([]ShopSyncBatchItem, error) {
+	var items []ShopSyncBatchItem
+	if err := r.db.Where("batch_id = ?", batchID).Order("id ASC").Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (r *ShopSyncJobs) CompleteBatch(batch *ShopSyncBatch) error {
+	return r.db.Model(&ShopSyncBatch{}).Where("id = ?", batch.ID).Updates(map[string]any{
+		"status":          batch.Status,
+		"succeeded_count": batch.SucceededCount,
+		"failed_count":    batch.FailedCount,
+		"skipped_count":   batch.SkippedCount,
+		"finished_at":     batch.FinishedAt,
+		"duration_ms":     batch.DurationMS,
+	}).Error
+}
+
 func (r *ShopSyncJobs) FindByTargetAndID(targetID, id uint) (*ShopSyncJob, error) {
 	var job ShopSyncJob
 	if err := r.db.Where("target_id = ? AND id = ?", targetID, id).First(&job).Error; err != nil {
@@ -816,11 +871,17 @@ func (r *ShopSyncJobs) MarkRunning(id uint, startedAt time.Time) error {
 }
 
 func (r *ShopSyncJobs) Complete(id uint, status ShopSyncJobStatus, goodsCount, changedCount int, events map[string]int, errorMessage string, startedAt, finishedAt time.Time) error {
+	return r.CompleteWithMetrics(id, status, goodsCount, changedCount, events, errorMessage, startedAt, finishedAt, 0, 0)
+}
+
+func (r *ShopSyncJobs) CompleteWithMetrics(id uint, status ShopSyncJobStatus, goodsCount, changedCount int, events map[string]int, errorMessage string, startedAt, finishedAt time.Time, requestCount int, requestDurationMS int64) error {
 	updates := map[string]any{
-		"status":        status,
-		"error_message": errorMessage,
-		"finished_at":   finishedAt,
-		"duration_ms":   finishedAt.Sub(startedAt).Milliseconds(),
+		"status":              status,
+		"error_message":       errorMessage,
+		"finished_at":         finishedAt,
+		"duration_ms":         finishedAt.Sub(startedAt).Milliseconds(),
+		"request_count":       requestCount,
+		"request_duration_ms": requestDurationMS,
 	}
 	updates["goods_count"] = goodsCount
 	updates["changed_count"] = changedCount
@@ -844,9 +905,32 @@ func (r *ShopSyncJobs) MarkInterrupted() error {
 // DeleteFinishedBefore keeps queued and running jobs even if malformed data
 // happens to contain a finished_at value.
 func (r *ShopSyncJobs) DeleteFinishedBefore(cutoff time.Time) (int64, error) {
-	result := r.db.
-		Where("finished_at IS NOT NULL AND finished_at < ?", cutoff).
-		Where("status NOT IN ?", []ShopSyncJobStatus{ShopSyncJobQueued, ShopSyncJobRunning}).
-		Delete(&ShopSyncJob{})
-	return result.RowsAffected, result.Error
+	var deleted int64
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var expiredBatchIDs []uint
+		if err := tx.Model(&ShopSyncBatch{}).
+			Where("finished_at IS NOT NULL AND finished_at < ?", cutoff).
+			Where("status <> ?", ShopSyncBatchRunning).
+			Pluck("id", &expiredBatchIDs).Error; err != nil {
+			return err
+		}
+		if len(expiredBatchIDs) > 0 {
+			if err := tx.Where("batch_id IN ?", expiredBatchIDs).Delete(&ShopSyncBatchItem{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.
+			Where("finished_at IS NOT NULL AND finished_at < ?", cutoff).
+			Where("status <> ?", ShopSyncBatchRunning).
+			Delete(&ShopSyncBatch{}).Error; err != nil {
+			return err
+		}
+		result := tx.
+			Where("finished_at IS NOT NULL AND finished_at < ?", cutoff).
+			Where("status NOT IN ?", []ShopSyncJobStatus{ShopSyncJobQueued, ShopSyncJobRunning}).
+			Delete(&ShopSyncJob{})
+		deleted = result.RowsAffected
+		return result.Error
+	})
+	return deleted, err
 }

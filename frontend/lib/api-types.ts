@@ -337,10 +337,47 @@ export interface ShopSyncAllResult {
   queued: number
   reused: number
   failed: number
+  batch: ShopSyncBatch
   targets: ShopSyncAllTargetResult[]
 }
 
 export type ShopSyncJobStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "skipped"
+
+export type ShopSyncBatchStatus = "running" | "succeeded" | "partial" | "failed"
+
+export interface ShopSyncBatch {
+  id: number
+  status: ShopSyncBatchStatus
+  total: number
+  queued: number
+  reused: number
+  start_failed: number
+  succeeded: number
+  failed: number
+  skipped: number
+  started_at: string
+  finished_at?: string | null
+  duration_ms: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ShopSyncBatchItem {
+  id: number
+  batch_id: number
+  target_id: number
+  target_name: string
+  job_id?: number
+  reused: boolean
+  start_error?: string
+  created_at: string
+  job?: ShopSyncJob
+}
+
+export interface ShopSyncBatchDetails {
+  batch: ShopSyncBatch
+  items: ShopSyncBatchItem[]
+}
 
 export interface ShopSyncJob {
 	id: number
@@ -351,9 +388,11 @@ export interface ShopSyncJob {
 	changed_count: number
 	events_json?: string
 	started_at?: string | null
-	finished_at?: string | null
-	duration_ms: number
-	created_at: string
+    finished_at?: string | null
+    duration_ms: number
+    request_count: number
+    request_duration_ms: number
+    created_at: string
 	updated_at: string
 }
 
