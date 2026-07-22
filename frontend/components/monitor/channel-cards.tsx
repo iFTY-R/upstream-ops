@@ -563,7 +563,8 @@ export function ChannelCards() {
   const visibleChannels = channelPage?.items ?? []
   const totalChannels = channelPage?.total ?? 0
   const pageSizeAll = pageSize === "all"
-  const totalPages = pageSizeAll ? 1 : (channelPage?.pages ?? 1)
+  const loadedTotalPages = channelPage?.pages
+  const totalPages = pageSizeAll ? 1 : Math.max(loadedTotalPages ?? page, 1)
   const currentPage = pageSizeAll ? 1 : Math.min(page, totalPages)
   const effectivePageSize = pageSizeAll ? Math.max(totalChannels, 1) : pageSize
   const rangeStart = totalChannels === 0 ? 0 : (currentPage - 1) * effectivePageSize + 1
@@ -598,8 +599,9 @@ export function ChannelCards() {
   }, [])
 
   useEffect(() => {
-    setPage((prev) => Math.min(prev, totalPages))
-  }, [totalPages])
+    if (pageSizeAll || loadedTotalPages == null) return
+    setPage((prev) => Math.min(prev, Math.max(loadedTotalPages, 1)))
+  }, [loadedTotalPages, pageSizeAll])
 
   function clearHideTimer(id: number) {
     const t = hideTimers.current.get(id)
@@ -816,9 +818,9 @@ export function ChannelCards() {
         </div>
       </div>
 
-      {pageQuery.loading && !channelPage ? (
+      {channelPage == null ? (
         <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-          {"加载中…"}
+          {pageQuery.error || "加载中…"}
         </p>
       ) : totalChannels === 0 ? (
         <div className="rounded-lg border border-dashed border-border px-4 py-10 text-center">
