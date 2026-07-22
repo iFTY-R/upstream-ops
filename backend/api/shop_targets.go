@@ -152,7 +152,13 @@ func createShopTarget(c *gin.Context, d *Deps) {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
+	if rejectDuplicateShopTarget(c, d, target) {
+		return
+	}
 	if err := d.ShopTargets.Create(target); err != nil {
+		if failShopTargetDuplicateOnConstraint(c, err) {
+			return
+		}
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -343,7 +349,13 @@ func updateShopTarget(c *gin.Context, d *Deps) {
 	next.LastGoodsCount = current.LastGoodsCount
 	next.LastLowStockGoods = current.LastLowStockGoods
 	next.LastChangedCount = current.LastChangedCount
+	if rejectDuplicateShopTarget(c, d, next) {
+		return
+	}
 	if err := d.ShopTargets.Update(next); err != nil {
+		if failShopTargetDuplicateOnConstraint(c, err) {
+			return
+		}
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -976,6 +988,58 @@ func mustJSON(value any) string {
 		return "[]"
 	}
 	return string(body)
+}
+
+func rejectDuplicateShopTarget(c *gin.Context, d *Deps, target *storage.ShopTarget) bool {
+	list, err := d.ShopTargets.List()
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return true
+	}
+	for _, existing := range list {
+		if target.ID != 0 && existing.ID == target.ID {
+			continue
+		}
+		if sameShopTargetName(existing, *target) || sameShopTargetIdentity(existing, *target) {
+			failShopTargetDuplicate(c)
+			return true
+		}
+	}
+	return false
+}
+
+func sameShopTargetName(a, b storage.ShopTarget) bool {
+	left := strings.TrimSpace(a.Name)
+	right := strings.TrimSpace(b.Name)
+	return left != "" && right != "" && strings.EqualFold(left, right)
+}
+
+func sameShopTargetIdentity(a, b storage.ShopTarget) bool {
+	leftBaseURL := strings.TrimRight(strings.TrimSpace(a.BaseURL), "/")
+	rightBaseURL := strings.TrimRight(strings.TrimSpace(b.BaseURL), "/")
+	leftToken := strings.TrimSpace(a.Token)
+	rightToken := strings.TrimSpace(b.Token)
+	return a.Platform == b.Platform && leftBaseURL != "" && strings.EqualFold(leftBaseURL, rightBaseURL) && leftToken != "" && strings.EqualFold(leftToken, rightToken)
+}
+
+func failShopTargetDuplicateOnConstraint(c *gin.Context, err error) bool {
+	if !isShopTargetUniqueConstraint(err) {
+		return false
+	}
+	failShopTargetDuplicate(c)
+	return true
+}
+
+func isShopTargetUniqueConstraint(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique") || strings.Contains(msg, "duplicate")
+}
+
+func failShopTargetDuplicate(c *gin.Context) {
+	fail(c, http.StatusConflict, fmt.Errorf("店铺已存在，请不要重复添加"))
 }
 
 func shopReposReady(c *gin.Context, d *Deps) bool {

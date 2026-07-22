@@ -223,6 +223,64 @@ func TestParseShopURLAPIResolvesLDXPItemURL(t *testing.T) {
 	}
 }
 
+func TestCreateShopTargetReturnsConflictWhenShopExists(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db := openTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	existing := &storage.ShopTarget{
+		Name:           "shop-a",
+		Platform:       storage.ShopPlatformLDXP,
+		SiteURL:        "https://pay.ldxp.cn/shop/A",
+		BaseURL:        "https://pay.ldxp.cn",
+		Token:          "A",
+		MonitorEnabled: true,
+		ScopeMode:      storage.ShopScopeAll,
+	}
+	if err := targets.Create(existing); err != nil {
+		t.Fatalf("create existing target: %v", err)
+	}
+
+	router := gin.New()
+	registerShopTargets(router.Group("/api"), &Deps{
+		ShopTargets: targets,
+		ShopGoods:   goods,
+	})
+
+	body := `{
+		"name":"shop-copy",
+		"platform":"ldxp",
+		"site_url":"https://pay.ldxp.cn/shop/A",
+		"base_url":"https://pay.ldxp.cn",
+		"token":"A"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/shop-targets", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !strings.Contains(resp.Error, "店铺已存在") {
+		t.Fatalf("error = %q", resp.Error)
+	}
+	list, err := targets.List()
+	if err != nil {
+		t.Fatalf("list targets: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("targets count = %d, want 1", len(list))
+	}
+}
+
 func TestBulkConfigureShopNotificationsUpsertsRules(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
