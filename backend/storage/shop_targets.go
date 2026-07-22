@@ -4,38 +4,97 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
 	"gorm.io/gorm"
 )
 
-type ShopTargets struct{ db *gorm.DB }
+var shopTargetOrderMu sync.Mutex
 
-func NewShopTargets(db *gorm.DB) *ShopTargets { return &ShopTargets{db: db} }
+type ShopTargets struct {
+	db      *gorm.DB
+	orderMu *sync.Mutex
+}
+
+func NewShopTargets(db *gorm.DB) *ShopTargets { return newShopTargets(db, &shopTargetOrderMu) }
+
+func newShopTargets(db *gorm.DB, orderMu *sync.Mutex) *ShopTargets {
+	return &ShopTargets{db: db, orderMu: orderMu}
+}
 
 func (r *ShopTargets) Create(target *ShopTarget) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if target.SortOrder <= 0 {
-			var maxSortOrder int
-			if err := tx.Model(&ShopTarget{}).Select("COALESCE(MAX(sort_order), 0)").Scan(&maxSortOrder).Error; err != nil {
+	return r.withOrderLock(func() error {
+		return r.db.Transaction(func(tx *gorm.DB) error {
+			orderedIDs, err := shopTargetOrderedIDs(tx)
+			if err != nil {
 				return err
 			}
-			target.SortOrder = maxSortOrder + 1
-		}
-		return tx.Create(target).Error
+			requestedPosition := target.SortOrder
+			target.SortOrder = len(orderedIDs) + 1
+			if err := tx.Create(target).Error; err != nil {
+				return err
+			}
+			targetIndex := len(orderedIDs)
+			if requestedPosition > 0 {
+				targetIndex = clampShopTargetIndex(requestedPosition, len(orderedIDs)+1)
+			}
+			orderedIDs = insertShopTargetID(orderedIDs, target.ID, targetIndex)
+			if err := applyShopTargetOrder(tx, orderedIDs); err != nil {
+				return err
+			}
+			target.SortOrder = targetIndex + 1
+			return nil
+		})
 	})
 }
 
 func (r *ShopTargets) Update(target *ShopTarget) error {
-	return r.db.Save(target).Error
+	return r.withOrderLock(func() error {
+		return r.db.Transaction(func(tx *gorm.DB) error {
+			current, err := r.findByID(tx, target.ID)
+			if err != nil {
+				return err
+			}
+			requestedPosition := target.SortOrder
+			target.SortOrder = current.SortOrder
+			if requestedPosition <= 0 {
+				return tx.Save(target).Error
+			}
+			orderedTargets, err := shopTargetOrderedTargets(tx)
+			if err != nil {
+				return err
+			}
+			orderedIDs := shopTargetIDs(orderedTargets)
+			currentIndex := indexOfShopTargetID(orderedIDs, target.ID)
+			if currentIndex < 0 {
+				return gorm.ErrRecordNotFound
+			}
+			targetIndex := clampShopTargetIndex(requestedPosition, len(orderedTargets))
+			if err := tx.Save(target).Error; err != nil {
+				return err
+			}
+			if targetIndex == currentIndex && shopTargetOrderIsContinuous(orderedTargets) {
+				return nil
+			}
+			if targetIndex != currentIndex {
+				orderedIDs = moveShopTargetID(orderedIDs, currentIndex, targetIndex)
+			}
+			if err := applyShopTargetOrder(tx, orderedIDs); err != nil {
+				return err
+			}
+			target.SortOrder = targetIndex + 1
+			return nil
+		})
+	})
 }
 
 // Transaction runs a multi-repository shop operation atomically.
 // Both repositories share the same transaction so target and rule updates cannot partially commit.
 func (r *ShopTargets) Transaction(fn func(targets *ShopTargets, rules *ShopWatchRules) error) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		return fn(NewShopTargets(tx), NewShopWatchRules(tx))
+		return fn(newShopTargets(tx, r.orderMu), NewShopWatchRules(tx))
 	})
 }
 
@@ -43,33 +102,44 @@ func (r *ShopTargets) UpdateSortOrders(orders map[uint]int) error {
 	if len(orders) == 0 {
 		return nil
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		for id, sortOrder := range orders {
-			if id == 0 {
-				continue
+	return r.withOrderLock(func() error {
+		return r.db.Transaction(func(tx *gorm.DB) error {
+			for id, sortOrder := range orders {
+				if id == 0 {
+					continue
+				}
+				if err := tx.Model(&ShopTarget{}).Where("id = ?", id).Update("sort_order", sortOrder).Error; err != nil {
+					return err
+				}
 			}
-			if err := tx.Model(&ShopTarget{}).Where("id = ?", id).Update("sort_order", sortOrder).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+			return nil
+		})
 	})
 }
 
 func (r *ShopTargets) Delete(id uint) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		for _, model := range []any{
-			&ShopWatchRule{},
-			&ShopGoodsSnapshot{},
-			&ShopGoodsChangeLog{},
-			&ShopMonitorLog{},
-			&ShopSyncJob{},
-		} {
-			if err := tx.Where("target_id = ?", id).Delete(model).Error; err != nil {
+	return r.withOrderLock(func() error {
+		return r.db.Transaction(func(tx *gorm.DB) error {
+			for _, model := range []any{
+				&ShopWatchRule{},
+				&ShopGoodsSnapshot{},
+				&ShopGoodsChangeLog{},
+				&ShopMonitorLog{},
+				&ShopSyncJob{},
+			} {
+				if err := tx.Where("target_id = ?", id).Delete(model).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Delete(&ShopTarget{}, id).Error; err != nil {
 				return err
 			}
-		}
-		return tx.Delete(&ShopTarget{}, id).Error
+			orderedIDs, err := shopTargetOrderedIDs(tx)
+			if err != nil {
+				return err
+			}
+			return applyShopTargetOrder(tx, orderedIDs)
+		})
 	})
 }
 
@@ -149,6 +219,105 @@ func normalizeShopTargetName(name string) string {
 		return string(runes[:128])
 	}
 	return name
+}
+
+func (r *ShopTargets) withOrderLock(fn func() error) error {
+	if r.orderMu == nil {
+		return fn()
+	}
+	r.orderMu.Lock()
+	defer r.orderMu.Unlock()
+	return fn()
+}
+
+func (r *ShopTargets) findByID(db *gorm.DB, id uint) (*ShopTarget, error) {
+	var target ShopTarget
+	if err := db.First(&target, id).Error; err != nil {
+		return nil, err
+	}
+	return &target, nil
+}
+
+func shopTargetOrderedIDs(db *gorm.DB) ([]uint, error) {
+	var ids []uint
+	if err := db.Model(&ShopTarget{}).Order("sort_order ASC").Order("id ASC").Pluck("id", &ids).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func shopTargetOrderedTargets(db *gorm.DB) ([]ShopTarget, error) {
+	var targets []ShopTarget
+	if err := db.Model(&ShopTarget{}).Select("id", "sort_order").Order("sort_order ASC").Order("id ASC").Find(&targets).Error; err != nil {
+		return nil, err
+	}
+	return targets, nil
+}
+
+func applyShopTargetOrder(db *gorm.DB, orderedIDs []uint) error {
+	for i, id := range orderedIDs {
+		if err := db.Model(&ShopTarget{}).Where("id = ?", id).Update("sort_order", i+1).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func clampShopTargetIndex(position, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	if position <= 1 {
+		return 0
+	}
+	if position > total {
+		return total - 1
+	}
+	return position - 1
+}
+
+func insertShopTargetID(ids []uint, id uint, index int) []uint {
+	ids = append(ids, 0)
+	copy(ids[index+1:], ids[index:])
+	ids[index] = id
+	return ids
+}
+
+func moveShopTargetID(ids []uint, from, to int) []uint {
+	id := ids[from]
+	if from < to {
+		copy(ids[from:to], ids[from+1:to+1])
+	} else {
+		copy(ids[to+1:from+1], ids[to:from])
+	}
+	ids[to] = id
+	return ids
+}
+
+func indexOfShopTargetID(ids []uint, id uint) int {
+	for i, itemID := range ids {
+		if itemID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func shopTargetIDs(targets []ShopTarget) []uint {
+	ids := make([]uint, 0, len(targets))
+	for _, target := range targets {
+		ids = append(ids, target.ID)
+	}
+	return ids
+}
+
+func shopTargetOrderIsContinuous(targets []ShopTarget) bool {
+	for i, target := range targets {
+		if target.SortOrder != i+1 {
+			return false
+		}
+	}
+	return true
 }
 
 type ShopWatchRules struct{ db *gorm.DB }

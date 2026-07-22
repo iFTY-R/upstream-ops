@@ -71,7 +71,7 @@ type shopTargetInput struct {
 	NewGoodsEnabled     *bool                 `json:"new_goods_enabled"`
 	RemovedGoodsEnabled *bool                 `json:"removed_goods_enabled"`
 	ProxyEnabled        *bool                 `json:"proxy_enabled"`
-	SortOrder           int                   `json:"sort_order"`
+	SortOrder           *int                  `json:"sort_order"`
 	GoodsSort           string                `json:"goods_sort"`
 }
 
@@ -843,16 +843,13 @@ func buildShopTarget(in shopTargetInput, current *storage.ShopTarget) (*storage.
 	target.NewGoodsEnabled = boolDefault(in.NewGoodsEnabled, newGoodsEnabled)
 	target.RemovedGoodsEnabled = boolDefault(in.RemovedGoodsEnabled, removedGoodsEnabled)
 	target.ProxyEnabled = boolDefault(in.ProxyEnabled, proxyEnabled)
-	target.SortOrder = in.SortOrder
+	target.SortOrder = 0
+	if in.SortOrder != nil {
+		target.SortOrder = *in.SortOrder
+	}
 	target.GoodsSort = normalizeShopGoodsSort(in.GoodsSort)
 	if current != nil && strings.TrimSpace(in.GoodsSort) == "" {
 		target.GoodsSort = current.GoodsSort
-	}
-	if current != nil && target.SortOrder == 0 {
-		target.SortOrder = current.SortOrder
-	}
-	if current != nil && target.SortOrder == 0 {
-		target.SortOrder = 1
 	}
 	return target, nil
 }

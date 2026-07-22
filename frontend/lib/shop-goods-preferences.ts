@@ -52,6 +52,7 @@ export interface ShopsGoodsPreferences {
   excludeKeyword: string
   categoryIDs: Record<string, number | null>
   sorts: Record<string, ShopGoodsSort>
+  shopListScrollTop: number
 }
 
 const defaultAllShopGoodsPreferences: AllShopGoodsPreferences = {
@@ -80,6 +81,7 @@ const defaultShopsGoodsPreferences: ShopsGoodsPreferences = {
   excludeKeyword: "",
   categoryIDs: {},
   sorts: {},
+  shopListScrollTop: 0,
 }
 
 function readObject(key: string): Record<string, unknown> | null {
@@ -143,6 +145,12 @@ function asPageSize(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 10 && value <= 200
     ? value
     : defaultAllShopGoodsPreferences.pageSize
+}
+
+function asScrollTop(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : defaultShopsGoodsPreferences.shopListScrollTop
 }
 
 function asCategoryIDs(value: unknown): Record<string, number | null> {
@@ -236,6 +244,7 @@ export function readShopsGoodsPreferences(): ShopsGoodsPreferences {
     excludeKeyword: asText(value.excludeKeyword),
     categoryIDs: asCategoryIDs(value.categoryIDs),
     sorts: asSorts(value.sorts),
+    shopListScrollTop: asScrollTop(value.shopListScrollTop),
   }
 }
 

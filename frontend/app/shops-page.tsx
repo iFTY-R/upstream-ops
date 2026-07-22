@@ -82,7 +82,7 @@ type ShopForm = {
   restock_enabled: boolean
   new_goods_enabled: boolean
   removed_goods_enabled: boolean
-  sort_order: number
+  sort_order: string
   goods_sort: ShopGoodsSort
 }
 
@@ -108,7 +108,7 @@ const emptyForm: ShopForm = {
   restock_enabled: true,
   new_goods_enabled: true,
   removed_goods_enabled: true,
-  sort_order: 0,
+  sort_order: "",
   goods_sort: "category",
 }
 
@@ -158,6 +158,8 @@ const goodsSortLabels: Record<ShopGoodsSort, string> = {
   last_seen_desc: "最近出现",
 }
 
+const emptyShopTargets: ShopTarget[] = []
+
 function parseJSONList(raw: string): string[] {
   try {
     const value = JSON.parse(raw)
@@ -203,7 +205,7 @@ function formFromTarget(target: ShopTarget): ShopForm {
     restock_enabled: target.restock_enabled,
     new_goods_enabled: target.new_goods_enabled,
     removed_goods_enabled: target.removed_goods_enabled,
-    sort_order: target.sort_order,
+    sort_order: String(target.sort_order),
     goods_sort: target.goods_sort || "category",
   }
 }
@@ -231,7 +233,6 @@ function shopTargetUpdateBody(target: ShopTarget, patch: Partial<ShopForm>) {
     restock_enabled: target.restock_enabled,
     new_goods_enabled: target.new_goods_enabled,
     removed_goods_enabled: target.removed_goods_enabled,
-    sort_order: target.sort_order,
     goods_sort: target.goods_sort || "category",
     ...patch,
   }
@@ -284,6 +285,18 @@ function shopDisplayName(target: ShopTarget | null) {
   return target.name?.trim() || target.last_shop_name?.trim() || `店铺 #${target.id}`
 }
 
+function clampListPosition(value: number, max: number) {
+  if (!Number.isFinite(value)) return 1
+  const normalized = Math.trunc(value)
+  if (normalized < 1) return 1
+  if (normalized > max) return max
+  return normalized
+}
+
+function normalizeListPositionInput(value: string, max: number) {
+  return String(clampListPosition(Number(value), max))
+}
+
 export default function ShopsPage() {
   const targets = useShopTargets()
   const refresh = useTriggerRefresh()
@@ -323,6 +336,9 @@ export default function ShopsPage() {
   const bulkSyncJobIDsRef = useRef<Set<number> | null>(null)
   const goodsRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({})
   const pendingGoodsLookupRef = useRef<{ targetID: number; goodsKey: string } | null>(null)
+  const shopListScrollRef = useRef<HTMLDivElement | null>(null)
+  const shopListScrollTopRef = useRef(initialGoodsPreferences.shopListScrollTop)
+  const shopListScrollSaveTimerRef = useRef<number | null>(null)
   const goodsFilters = useMemo(
     () => ({
       category_id: selectedCategoryID ?? undefined,
@@ -341,7 +357,9 @@ export default function ShopsPage() {
   const watchRules = useShopWatchRules(selectedID)
   const changes = useShopChangeLogs(selectedID, changesPage, 20)
   const monitorLogs = useShopMonitorLogs(selectedID, logsPage, 20)
-  const selected = targets.data?.find((t) => t.id === selectedID) ?? null
+  const shopList = targets.data ?? emptyShopTargets
+  const selected = shopList.find((target) => target.id === selectedID) ?? null
+  const selectedIndex = selected == null ? -1 : shopList.findIndex((target) => target.id === selected.id)
   const activeSyncJobs = useMemo(
     () => Object.values(syncJobs).filter((job) => job.status === "queued" || job.status === "running"),
     [syncJobs],
@@ -369,6 +387,7 @@ export default function ShopsPage() {
       excludeKeyword: appliedGoodsExcludeKeyword,
       categoryIDs,
       sorts,
+      shopListScrollTop: shopListScrollTopRef.current,
     })
   }, [appliedGoodsExcludeKeyword, appliedGoodsKeyword, categoryIDs, goodsStatus, inStockOnly, selectedID, sorts])
 
@@ -455,10 +474,26 @@ export default function ShopsPage() {
   }, [activeSyncJobKey])
 
   useEffect(() => {
-    const list = targets.data ?? []
-    if (list.length === 0 || (selectedID != null && list.some((target) => target.id === selectedID))) return
-    setSelectedID(list[0].id)
-  }, [selectedID, targets.data])
+    if (shopList.length === 0 || (selectedID != null && shopList.some((target) => target.id === selectedID))) return
+    setSelectedID(shopList[0].id)
+  }, [selectedID, shopList])
+
+  useEffect(() => {
+    const list = shopListScrollRef.current
+    if (!list) return
+    if (Math.abs(list.scrollTop - shopListScrollTopRef.current) <= 1) return
+    list.scrollTop = shopListScrollTopRef.current
+  }, [shopList.length])
+
+  useEffect(() => () => {
+    if (shopListScrollSaveTimerRef.current != null) {
+      window.clearTimeout(shopListScrollSaveTimerRef.current)
+    }
+    writeShopsGoodsPreferences({
+      ...readShopsGoodsPreferences(),
+      shopListScrollTop: shopListScrollTopRef.current,
+    })
+  }, [])
 
   useEffect(() => {
     const pendingLookup = pendingGoodsLookupRef.current
@@ -505,25 +540,24 @@ export default function ShopsPage() {
     return out
   }, [goods.data?.items, selectedWatchRules])
   const summary = useMemo(() => {
-    const list = targets.data ?? []
     return {
-      total: list.length,
-      enabled: list.filter((t) => t.monitor_enabled).length,
-      goods: list.reduce((sum, t) => sum + (t.last_goods_count || 0), 0),
-      low: list.reduce((sum, t) => sum + (t.last_low_stock_goods || 0), 0),
-      failed: list.filter((t) => t.last_error).length,
-      changed: list.reduce((sum, t) => sum + (t.last_changed_count || 0), 0),
+      total: shopList.length,
+      enabled: shopList.filter((t) => t.monitor_enabled).length,
+      goods: shopList.reduce((sum, t) => sum + (t.last_goods_count || 0), 0),
+      low: shopList.reduce((sum, t) => sum + (t.last_low_stock_goods || 0), 0),
+      failed: shopList.filter((t) => t.last_error).length,
+      changed: shopList.reduce((sum, t) => sum + (t.last_changed_count || 0), 0),
     }
-  }, [targets.data])
+  }, [shopList])
 
   function openCreate() {
     setEditing(null)
-    setForm(emptyForm)
+    setForm({ ...emptyForm, sort_order: String(shopList.length + 1) })
     setFormOpen(true)
   }
 
   function openBulkNotification() {
-    const ids = (targets.data ?? []).map((target) => target.id)
+    const ids = shopList.map((target) => target.id)
     setBulkForm({ ...defaultBulkNotificationForm, targetIDs: ids })
     setBulkOpen(true)
   }
@@ -568,8 +602,10 @@ export default function ShopsPage() {
   async function saveTarget() {
     setBusy("save")
     try {
+      const maxListPosition = editing ? Math.max(shopList.length, 1) : shopList.length + 1
       const body = {
         ...form,
+        sort_order: clampListPosition(Number(form.sort_order), maxListPosition),
         goods_types: csv(form.goods_types || "card"),
         category_ids: csvNumbers(form.category_ids),
         category_names: csv(form.category_names),
@@ -880,34 +916,100 @@ export default function ShopsPage() {
         <Summary label="失败" value={summary.failed} danger={summary.failed > 0} />
       </div>
 
-      <div className="grid min-w-0 gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
-        <div className="min-w-0 space-y-3">
-          {(targets.data ?? []).map((target, index, list) => (
-              <ShopCard
-                key={target.id}
-                target={target}
-                active={target.id === selectedID}
-                busy={busy}
-				syncJob={syncJobs[target.id]}
-              canMoveUp={index > 0}
-              canMoveDown={index < list.length - 1}
-              onSelect={() => setSelectedID(target.id)}
-              onMoveUp={() => moveShopTarget(target.id, -1)}
-              onMoveDown={() => moveShopTarget(target.id, 1)}
-              onEdit={() => openEdit(target)}
-              onTest={() => testTarget(target)}
-              onSync={() => syncTarget(target)}
-              onWatchRules={() => openWatchRules(target)}
-              watchRuleCount={target.watch_rule_count}
-              onDelete={() => deleteTarget(target)}
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[376px_minmax(0,1fr)]">
+        <div className="min-w-0 space-y-3 lg:hidden">
+          {shopList.length > 0 ? (
+            <Card className="p-3">
+              <Field label="选择店铺">
+                <Select value={selectedID == null ? undefined : String(selectedID)} onValueChange={(value) => setSelectedID(Number(value))}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择店铺" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {shopList.map((target) => (
+                      <SelectItem key={target.id} value={String(target.id)}>
+                        {shopDisplayName(target)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            </Card>
+          ) : null}
+          {selected ? (
+            <ShopCard
+              target={selected}
+              active
+              busy={busy}
+              syncJob={syncJobs[selected.id]}
+              canMoveUp={selectedIndex > 0}
+              canMoveDown={selectedIndex >= 0 && selectedIndex < shopList.length - 1}
+              onSelect={() => setSelectedID(selected.id)}
+              onMoveUp={() => moveShopTarget(selected.id, -1)}
+              onMoveDown={() => moveShopTarget(selected.id, 1)}
+              onEdit={() => openEdit(selected)}
+              onTest={() => testTarget(selected)}
+              onSync={() => syncTarget(selected)}
+              onWatchRules={() => openWatchRules(selected)}
+              watchRuleCount={selected.watch_rule_count}
+              onDelete={() => deleteTarget(selected)}
             />
-          ))}
-          {!targets.loading && (targets.data?.length ?? 0) === 0 ? (
+          ) : null}
+          {!targets.loading && shopList.length === 0 ? (
             <Card className="border-dashed p-6 text-center text-sm text-muted-foreground">
               <PackageSearch className="mx-auto mb-2 size-8" />
               {"还没有店铺监控，添加一个店铺 URL 开始。"}
             </Card>
           ) : null}
+        </div>
+
+        <div className="hidden min-w-0 lg:block">
+          <div className="sticky top-[calc(3.5rem+1.25rem)] self-start">
+            <div
+              ref={shopListScrollRef}
+              onScroll={(event) => {
+                shopListScrollTopRef.current = event.currentTarget.scrollTop
+                if (shopListScrollSaveTimerRef.current != null) {
+                  window.clearTimeout(shopListScrollSaveTimerRef.current)
+                }
+                shopListScrollSaveTimerRef.current = window.setTimeout(() => {
+                  writeShopsGoodsPreferences({
+                    ...readShopsGoodsPreferences(),
+                    shopListScrollTop: shopListScrollTopRef.current,
+                  })
+                  shopListScrollSaveTimerRef.current = null
+                }, 180)
+              }}
+              className="space-y-3 overflow-y-auto overscroll-contain pr-1 max-h-[calc(100dvh-3.5rem-1.25rem)]"
+            >
+              {shopList.map((target, index) => (
+                <ShopCard
+                  key={target.id}
+                  target={target}
+                  active={target.id === selectedID}
+                  busy={busy}
+                  syncJob={syncJobs[target.id]}
+                  canMoveUp={index > 0}
+                  canMoveDown={index < shopList.length - 1}
+                  onSelect={() => setSelectedID(target.id)}
+                  onMoveUp={() => moveShopTarget(target.id, -1)}
+                  onMoveDown={() => moveShopTarget(target.id, 1)}
+                  onEdit={() => openEdit(target)}
+                  onTest={() => testTarget(target)}
+                  onSync={() => syncTarget(target)}
+                  onWatchRules={() => openWatchRules(target)}
+                  watchRuleCount={target.watch_rule_count}
+                  onDelete={() => deleteTarget(target)}
+                />
+              ))}
+              {!targets.loading && shopList.length === 0 ? (
+                <Card className="border-dashed p-6 text-center text-sm text-muted-foreground">
+                  <PackageSearch className="mx-auto mb-2 size-8" />
+                  {"还没有店铺监控，添加一个店铺 URL 开始。"}
+                </Card>
+              ) : null}
+            </div>
+          </div>
         </div>
 
         <div className="min-w-0 space-y-4">
@@ -1015,6 +1117,25 @@ export default function ShopsPage() {
             </Field>
             <Field label="商品 Key">
               <Input value={form.goods_keys} onChange={(e) => setForm({ ...form, goods_keys: e.target.value })} placeholder="96tin3, 7togvs" />
+            </Field>
+            <Field label="列表位置">
+              <Input
+                type="number"
+                min="1"
+                max={editing ? String(Math.max(shopList.length, 1)) : String(shopList.length + 1)}
+                step="1"
+                value={form.sort_order}
+                onChange={(e) => setForm({ ...form, sort_order: e.target.value })}
+                onBlur={() =>
+                  setForm((current) => ({
+                    ...current,
+                    sort_order: normalizeListPositionInput(
+                      current.sort_order,
+                      editing ? Math.max(shopList.length, 1) : shopList.length + 1,
+                    ),
+                  }))
+                }
+              />
             </Field>
             <Field label="低库存阈值">
               <Input type="number" value={form.stock_threshold} onChange={(e) => setForm({ ...form, stock_threshold: Number(e.target.value) || 0 })} />
@@ -1231,7 +1352,7 @@ function ShopCard(props: {
 }) {
   const { target, active, busy } = props
   const displayName = shopDisplayName(target)
-	const syncing = props.syncJob?.status === "queued" || props.syncJob?.status === "running"
+  const syncing = props.syncJob?.status === "queued" || props.syncJob?.status === "running"
   return (
     <Card className={cn("cursor-pointer p-3 transition hover:border-foreground/30", active && "border-foreground shadow-sm")} onClick={props.onSelect}>
       <div className="flex items-start justify-between gap-3">
@@ -1262,9 +1383,9 @@ function ShopCard(props: {
         <span>{`关注规则 ${props.watchRuleCount ?? 0}`}</span>
       </div>
       {target.last_error ? <p className="mt-2 line-clamp-2 text-xs text-danger">{target.last_error}</p> : null}
-      <div className="mt-3 flex items-center justify-between gap-2">
+      <div className="mt-3 flex flex-col gap-2">
         <span className="text-[11px] text-muted-foreground">上次同步 {relativeTime(target.last_sync_at)}</span>
-        <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+        <div className="flex flex-nowrap justify-end gap-1" onClick={(e) => e.stopPropagation()}>
           <Button asChild variant="outline" size="icon" className="size-7">
             <a href={target.site_url} target="_blank" rel="noreferrer" title="打开店铺">
               <ExternalLink className="size-3.5" />

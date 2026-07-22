@@ -512,8 +512,11 @@ func TestShopTargetsCreateAssignsNextSortOrder(t *testing.T) {
 		t.Fatalf("create second target: %v", err)
 	}
 
-	if second.SortOrder != 8 {
-		t.Fatalf("second sort_order = %d, want 8", second.SortOrder)
+	if first.SortOrder != 1 {
+		t.Fatalf("first sort_order = %d, want clamped 1", first.SortOrder)
+	}
+	if second.SortOrder != 2 {
+		t.Fatalf("second sort_order = %d, want 2", second.SortOrder)
 	}
 	list, err := targets.List()
 	if err != nil {
@@ -521,6 +524,271 @@ func TestShopTargetsCreateAssignsNextSortOrder(t *testing.T) {
 	}
 	if len(list) != 2 || list[0].Name != "shop-a" || list[1].Name != "shop-b" {
 		t.Fatalf("unexpected order after create: %#v", list)
+	}
+	if list[0].SortOrder != 1 || list[1].SortOrder != 2 {
+		t.Fatalf("unexpected sort orders after create: %#v", list)
+	}
+}
+
+func TestShopTargetsCreateInsertsAtRequestedPosition(t *testing.T) {
+	db := openTestDB(t)
+	targets := NewShopTargets(db)
+	for _, item := range []*ShopTarget{
+		{Name: "shop-a", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/A", BaseURL: "https://example.invalid", Token: "A", MonitorEnabled: true, ScopeMode: ShopScopeAll},
+		{Name: "shop-b", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/B", BaseURL: "https://example.invalid", Token: "B", MonitorEnabled: true, ScopeMode: ShopScopeAll},
+		{Name: "shop-c", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/C", BaseURL: "https://example.invalid", Token: "C", MonitorEnabled: true, ScopeMode: ShopScopeAll},
+	} {
+		if err := targets.Create(item); err != nil {
+			t.Fatalf("create %s: %v", item.Name, err)
+		}
+	}
+
+	inserted := &ShopTarget{
+		Name:           "shop-inserted",
+		Platform:       ShopPlatformLDXP,
+		SiteURL:        "https://example.invalid/shop/INSERTED",
+		BaseURL:        "https://example.invalid",
+		Token:          "INSERTED",
+		MonitorEnabled: true,
+		ScopeMode:      ShopScopeAll,
+		SortOrder:      2,
+	}
+	if err := targets.Create(inserted); err != nil {
+		t.Fatalf("create inserted target: %v", err)
+	}
+
+	list, err := targets.List()
+	if err != nil {
+		t.Fatalf("list targets: %v", err)
+	}
+	wantNames := []string{"shop-a", "shop-inserted", "shop-b", "shop-c"}
+	if len(list) != len(wantNames) {
+		t.Fatalf("targets count = %d, want %d", len(list), len(wantNames))
+	}
+	for i, wantName := range wantNames {
+		if list[i].Name != wantName || list[i].SortOrder != i+1 {
+			t.Fatalf("list[%d] = %#v, want name=%s sort_order=%d", i, list[i], wantName, i+1)
+		}
+	}
+}
+
+func TestShopTargetsUpdateMovesToRequestedPositionAndReindexes(t *testing.T) {
+	db := openTestDB(t)
+	targets := NewShopTargets(db)
+	items := []*ShopTarget{
+		{Name: "shop-a", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/A", BaseURL: "https://example.invalid", Token: "A", MonitorEnabled: true, ScopeMode: ShopScopeAll},
+		{Name: "shop-b", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/B", BaseURL: "https://example.invalid", Token: "B", MonitorEnabled: true, ScopeMode: ShopScopeAll},
+		{Name: "shop-c", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/C", BaseURL: "https://example.invalid", Token: "C", MonitorEnabled: true, ScopeMode: ShopScopeAll},
+		{Name: "shop-d", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/D", BaseURL: "https://example.invalid", Token: "D", MonitorEnabled: true, ScopeMode: ShopScopeAll},
+	}
+	for _, item := range items {
+		if err := targets.Create(item); err != nil {
+			t.Fatalf("create %s: %v", item.Name, err)
+		}
+	}
+
+	items[2].Name = "shop-c-moved"
+	items[2].SortOrder = 1
+	if err := targets.Update(items[2]); err != nil {
+		t.Fatalf("update target: %v", err)
+	}
+
+	list, err := targets.List()
+	if err != nil {
+		t.Fatalf("list targets: %v", err)
+	}
+	wantNames := []string{"shop-c-moved", "shop-a", "shop-b", "shop-d"}
+	if len(list) != len(wantNames) {
+		t.Fatalf("targets count = %d, want %d", len(list), len(wantNames))
+	}
+	for i, wantName := range wantNames {
+		if list[i].Name != wantName || list[i].SortOrder != i+1 {
+			t.Fatalf("list[%d] = %#v, want name=%s sort_order=%d", i, list[i], wantName, i+1)
+		}
+	}
+}
+
+func TestShopTargetsUpdatePreservesOrderWhenSortOrderNotRequested(t *testing.T) {
+	db := openTestDB(t)
+	targets := NewShopTargets(db)
+	items := []*ShopTarget{
+		{Name: "shop-a", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/A", BaseURL: "https://example.invalid", Token: "A", MonitorEnabled: true, ScopeMode: ShopScopeAll},
+		{Name: "shop-b", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/B", BaseURL: "https://example.invalid", Token: "B", MonitorEnabled: true, ScopeMode: ShopScopeAll},
+		{Name: "shop-c", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/C", BaseURL: "https://example.invalid", Token: "C", MonitorEnabled: true, ScopeMode: ShopScopeAll},
+	}
+	for _, item := range items {
+		if err := targets.Create(item); err != nil {
+			t.Fatalf("create %s: %v", item.Name, err)
+		}
+	}
+	firstBefore, err := targets.FindByID(items[0].ID)
+	if err != nil {
+		t.Fatalf("find first target before update: %v", err)
+	}
+	thirdBefore, err := targets.FindByID(items[2].ID)
+	if err != nil {
+		t.Fatalf("find third target before update: %v", err)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	items[1].Name = "shop-b-renamed"
+	items[1].SortOrder = 0
+	if err := targets.Update(items[1]); err != nil {
+		t.Fatalf("update target: %v", err)
+	}
+
+	list, err := targets.List()
+	if err != nil {
+		t.Fatalf("list targets: %v", err)
+	}
+	wantNames := []string{"shop-a", "shop-b-renamed", "shop-c"}
+	if len(list) != len(wantNames) {
+		t.Fatalf("targets count = %d, want %d", len(list), len(wantNames))
+	}
+	for i, wantName := range wantNames {
+		if list[i].Name != wantName || list[i].SortOrder != i+1 {
+			t.Fatalf("list[%d] = %#v, want name=%s sort_order=%d", i, list[i], wantName, i+1)
+		}
+	}
+	firstAfter, err := targets.FindByID(items[0].ID)
+	if err != nil {
+		t.Fatalf("find first target after update: %v", err)
+	}
+	thirdAfter, err := targets.FindByID(items[2].ID)
+	if err != nil {
+		t.Fatalf("find third target after update: %v", err)
+	}
+	if !firstAfter.UpdatedAt.Equal(firstBefore.UpdatedAt) {
+		t.Fatalf("first target updated_at changed on preserve-order update: before=%s after=%s", firstBefore.UpdatedAt, firstAfter.UpdatedAt)
+	}
+	if !thirdAfter.UpdatedAt.Equal(thirdBefore.UpdatedAt) {
+		t.Fatalf("third target updated_at changed on preserve-order update: before=%s after=%s", thirdBefore.UpdatedAt, thirdAfter.UpdatedAt)
+	}
+}
+
+func TestShopTargetsConcurrentCreatesKeepContinuousOrder(t *testing.T) {
+	db := openTestDB(t)
+	targets := NewShopTargets(db)
+	if err := targets.Create(&ShopTarget{
+		Name:           "seed",
+		Platform:       ShopPlatformLDXP,
+		SiteURL:        "https://example.invalid/shop/seed",
+		BaseURL:        "https://example.invalid",
+		Token:          "seed",
+		MonitorEnabled: true,
+		ScopeMode:      ShopScopeAll,
+	}); err != nil {
+		t.Fatalf("create seed target: %v", err)
+	}
+
+	const workers = 8
+	start := make(chan struct{})
+	errCh := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errCh <- targets.Create(&ShopTarget{
+				Name:           fmt.Sprintf("shop-%d", i),
+				Platform:       ShopPlatformLDXP,
+				SiteURL:        fmt.Sprintf("https://example.invalid/shop/%d", i),
+				BaseURL:        "https://example.invalid",
+				Token:          fmt.Sprintf("token-%d", i),
+				MonitorEnabled: true,
+				ScopeMode:      ShopScopeAll,
+				SortOrder:      1,
+			})
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent create failed: %v", err)
+		}
+	}
+
+	list, err := targets.List()
+	if err != nil {
+		t.Fatalf("list targets: %v", err)
+	}
+	if len(list) != workers+1 {
+		t.Fatalf("targets count = %d, want %d", len(list), workers+1)
+	}
+	seen := make(map[uint]struct{}, len(list))
+	for i, target := range list {
+		if target.SortOrder != i+1 {
+			t.Fatalf("list[%d] sort_order = %d, want %d", i, target.SortOrder, i+1)
+		}
+		if _, ok := seen[target.ID]; ok {
+			t.Fatalf("duplicate target id in ordered list: %d", target.ID)
+		}
+		seen[target.ID] = struct{}{}
+	}
+}
+
+func TestShopTargetsDeleteReindexesRemainingTargets(t *testing.T) {
+	db := openTestDB(t)
+	targets := NewShopTargets(db)
+	items := []*ShopTarget{
+		{Name: "shop-a", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/A", BaseURL: "https://example.invalid", Token: "A", MonitorEnabled: true, ScopeMode: ShopScopeAll},
+		{Name: "shop-b", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/B", BaseURL: "https://example.invalid", Token: "B", MonitorEnabled: true, ScopeMode: ShopScopeAll},
+		{Name: "shop-c", Platform: ShopPlatformLDXP, SiteURL: "https://example.invalid/shop/C", BaseURL: "https://example.invalid", Token: "C", MonitorEnabled: true, ScopeMode: ShopScopeAll},
+	}
+	for _, item := range items {
+		if err := targets.Create(item); err != nil {
+			t.Fatalf("create %s: %v", item.Name, err)
+		}
+	}
+	if err := targets.UpdateSortOrders(map[uint]int{
+		items[0].ID: 10,
+		items[1].ID: 20,
+		items[2].ID: 30,
+	}); err != nil {
+		t.Fatalf("seed sparse sort orders: %v", err)
+	}
+
+	if err := targets.Delete(items[1].ID); err != nil {
+		t.Fatalf("delete middle target: %v", err)
+	}
+
+	list, err := targets.List()
+	if err != nil {
+		t.Fatalf("list after delete: %v", err)
+	}
+	wantNames := []string{"shop-a", "shop-c"}
+	if len(list) != len(wantNames) {
+		t.Fatalf("targets count = %d, want %d", len(list), len(wantNames))
+	}
+	for i, wantName := range wantNames {
+		if list[i].Name != wantName || list[i].SortOrder != i+1 {
+			t.Fatalf("list[%d] = %#v, want name=%s sort_order=%d", i, list[i], wantName, i+1)
+		}
+	}
+
+	remaining, err := targets.FindByID(items[2].ID)
+	if err != nil {
+		t.Fatalf("find remaining target: %v", err)
+	}
+	remaining.Name = "shop-c-renamed"
+	remaining.SortOrder = 0
+	if err := targets.Update(remaining); err != nil {
+		t.Fatalf("rename remaining target: %v", err)
+	}
+
+	list, err = targets.List()
+	if err != nil {
+		t.Fatalf("list after rename: %v", err)
+	}
+	wantNames = []string{"shop-a", "shop-c-renamed"}
+	for i, wantName := range wantNames {
+		if list[i].Name != wantName || list[i].SortOrder != i+1 {
+			t.Fatalf("post-rename list[%d] = %#v, want name=%s sort_order=%d", i, list[i], wantName, i+1)
+		}
 	}
 }
 

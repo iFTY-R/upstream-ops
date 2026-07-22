@@ -167,6 +167,32 @@ func TestBuildShopTargetAcceptsGoodsSort(t *testing.T) {
 	}
 }
 
+func TestBuildShopTargetLeavesSortOrderUnsetWhenOmitted(t *testing.T) {
+	current := &storage.ShopTarget{
+		Name:      "shop",
+		Platform:  storage.ShopPlatformLDXP,
+		SiteURL:   "https://pay.ldxp.cn/shop/TOKEN",
+		BaseURL:   "https://pay.ldxp.cn",
+		Token:     "TOKEN",
+		SortOrder: 20,
+		GoodsSort: "category",
+		ScopeMode: storage.ShopScopeAll,
+	}
+	next, err := buildShopTarget(shopTargetInput{
+		Name:     current.Name,
+		Platform: current.Platform,
+		SiteURL:  current.SiteURL,
+		BaseURL:  current.BaseURL,
+		Token:    current.Token,
+	}, current)
+	if err != nil {
+		t.Fatalf("build target: %v", err)
+	}
+	if next.SortOrder != 0 {
+		t.Fatalf("sort_order = %d, want omitted sentinel 0", next.SortOrder)
+	}
+}
+
 func TestParseShopURLAPIResolvesLDXPItemURL(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -278,6 +304,216 @@ func TestCreateShopTargetReturnsConflictWhenShopExists(t *testing.T) {
 	}
 	if len(list) != 1 {
 		t.Fatalf("targets count = %d, want 1", len(list))
+	}
+}
+
+func TestCreateShopTargetSortOrderUsesRequestedPosition(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db := openTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	for _, item := range []*storage.ShopTarget{
+		{Name: "shop-a", Platform: storage.ShopPlatformLDXP, SiteURL: "https://pay.ldxp.cn/shop/A", BaseURL: "https://pay.ldxp.cn", Token: "A", MonitorEnabled: true, ScopeMode: storage.ShopScopeAll},
+		{Name: "shop-b", Platform: storage.ShopPlatformLDXP, SiteURL: "https://pay.ldxp.cn/shop/B", BaseURL: "https://pay.ldxp.cn", Token: "B", MonitorEnabled: true, ScopeMode: storage.ShopScopeAll},
+		{Name: "shop-c", Platform: storage.ShopPlatformLDXP, SiteURL: "https://pay.ldxp.cn/shop/C", BaseURL: "https://pay.ldxp.cn", Token: "C", MonitorEnabled: true, ScopeMode: storage.ShopScopeAll},
+	} {
+		if err := targets.Create(item); err != nil {
+			t.Fatalf("create %s: %v", item.Name, err)
+		}
+	}
+
+	router := gin.New()
+	registerShopTargets(router.Group("/api"), &Deps{
+		ShopTargets: targets,
+		ShopGoods:   goods,
+	})
+
+	body := `{
+		"name":"shop-inserted",
+		"platform":"ldxp",
+		"site_url":"https://pay.ldxp.cn/shop/INSERTED",
+		"base_url":"https://pay.ldxp.cn",
+		"token":"INSERTED",
+		"sort_order":2
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/shop-targets", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data storage.ShopTarget `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Data.SortOrder != 2 {
+		t.Fatalf("created sort_order = %d, want 2", resp.Data.SortOrder)
+	}
+	list, err := targets.List()
+	if err != nil {
+		t.Fatalf("list targets: %v", err)
+	}
+	wantNames := []string{"shop-a", "shop-inserted", "shop-b", "shop-c"}
+	if len(list) != len(wantNames) {
+		t.Fatalf("targets count = %d, want %d", len(list), len(wantNames))
+	}
+	for i, wantName := range wantNames {
+		if list[i].Name != wantName || list[i].SortOrder != i+1 {
+			t.Fatalf("list[%d] = %#v, want name=%s sort_order=%d", i, list[i], wantName, i+1)
+		}
+	}
+}
+
+func TestUpdateShopTargetSortOrderSemantics(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db := openTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	items := []*storage.ShopTarget{
+		{Name: "shop-a", Platform: storage.ShopPlatformLDXP, SiteURL: "https://pay.ldxp.cn/shop/A", BaseURL: "https://pay.ldxp.cn", Token: "A", MonitorEnabled: true, ScopeMode: storage.ShopScopeAll},
+		{Name: "shop-b", Platform: storage.ShopPlatformLDXP, SiteURL: "https://pay.ldxp.cn/shop/B", BaseURL: "https://pay.ldxp.cn", Token: "B", MonitorEnabled: true, ScopeMode: storage.ShopScopeAll},
+		{Name: "shop-c", Platform: storage.ShopPlatformLDXP, SiteURL: "https://pay.ldxp.cn/shop/C", BaseURL: "https://pay.ldxp.cn", Token: "C", MonitorEnabled: true, ScopeMode: storage.ShopScopeAll},
+	}
+	for _, item := range items {
+		if err := targets.Create(item); err != nil {
+			t.Fatalf("create %s: %v", item.Name, err)
+		}
+	}
+
+	router := gin.New()
+	registerShopTargets(router.Group("/api"), &Deps{
+		ShopTargets: targets,
+		ShopGoods:   goods,
+	})
+
+	preserveBody := `{
+		"name":"shop-b-renamed",
+		"platform":"ldxp",
+		"site_url":"https://pay.ldxp.cn/shop/B",
+		"base_url":"https://pay.ldxp.cn",
+		"token":"B"
+	}`
+	preserveReq := httptest.NewRequest(http.MethodPut, "/api/shop-targets/"+uintString(items[1].ID), strings.NewReader(preserveBody))
+	preserveReq.Header.Set("Content-Type", "application/json")
+	preserveRec := httptest.NewRecorder()
+	router.ServeHTTP(preserveRec, preserveReq)
+	if preserveRec.Code != http.StatusOK {
+		t.Fatalf("preserve status = %d, body = %s", preserveRec.Code, preserveRec.Body.String())
+	}
+
+	moveBody := `{
+		"name":"shop-a-moved",
+		"platform":"ldxp",
+		"site_url":"https://pay.ldxp.cn/shop/A",
+		"base_url":"https://pay.ldxp.cn",
+		"token":"A",
+		"sort_order":99
+	}`
+	moveReq := httptest.NewRequest(http.MethodPut, "/api/shop-targets/"+uintString(items[0].ID), strings.NewReader(moveBody))
+	moveReq.Header.Set("Content-Type", "application/json")
+	moveRec := httptest.NewRecorder()
+	router.ServeHTTP(moveRec, moveReq)
+	if moveRec.Code != http.StatusOK {
+		t.Fatalf("move status = %d, body = %s", moveRec.Code, moveRec.Body.String())
+	}
+	var moveResp struct {
+		Data storage.ShopTarget `json:"data"`
+	}
+	if err := json.Unmarshal(moveRec.Body.Bytes(), &moveResp); err != nil {
+		t.Fatalf("decode move response: %v", err)
+	}
+	if moveResp.Data.SortOrder != 3 {
+		t.Fatalf("moved sort_order = %d, want clamped 3", moveResp.Data.SortOrder)
+	}
+
+	list, err := targets.List()
+	if err != nil {
+		t.Fatalf("list targets: %v", err)
+	}
+	wantNames := []string{"shop-b-renamed", "shop-c", "shop-a-moved"}
+	if len(list) != len(wantNames) {
+		t.Fatalf("targets count = %d, want %d", len(list), len(wantNames))
+	}
+	for i, wantName := range wantNames {
+		if list[i].Name != wantName || list[i].SortOrder != i+1 {
+			t.Fatalf("list[%d] = %#v, want name=%s sort_order=%d", i, list[i], wantName, i+1)
+		}
+	}
+}
+
+func TestUpdateShopTargetWithoutSortOrderPreservesSparseLegacyOrder(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db := openTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	items := []*storage.ShopTarget{
+		{Name: "shop-a", Platform: storage.ShopPlatformLDXP, SiteURL: "https://pay.ldxp.cn/shop/A", BaseURL: "https://pay.ldxp.cn", Token: "A", MonitorEnabled: true, ScopeMode: storage.ShopScopeAll},
+		{Name: "shop-b", Platform: storage.ShopPlatformLDXP, SiteURL: "https://pay.ldxp.cn/shop/B", BaseURL: "https://pay.ldxp.cn", Token: "B", MonitorEnabled: true, ScopeMode: storage.ShopScopeAll},
+		{Name: "shop-c", Platform: storage.ShopPlatformLDXP, SiteURL: "https://pay.ldxp.cn/shop/C", BaseURL: "https://pay.ldxp.cn", Token: "C", MonitorEnabled: true, ScopeMode: storage.ShopScopeAll},
+	}
+	for _, item := range items {
+		if err := targets.Create(item); err != nil {
+			t.Fatalf("create %s: %v", item.Name, err)
+		}
+	}
+	if err := targets.UpdateSortOrders(map[uint]int{
+		items[0].ID: 10,
+		items[1].ID: 20,
+		items[2].ID: 30,
+	}); err != nil {
+		t.Fatalf("seed sparse sort orders: %v", err)
+	}
+
+	router := gin.New()
+	registerShopTargets(router.Group("/api"), &Deps{
+		ShopTargets: targets,
+		ShopGoods:   goods,
+	})
+
+	body := `{
+		"name":"shop-b-renamed",
+		"platform":"ldxp",
+		"site_url":"https://pay.ldxp.cn/shop/B",
+		"base_url":"https://pay.ldxp.cn",
+		"token":"B"
+	}`
+	req := httptest.NewRequest(http.MethodPut, "/api/shop-targets/"+uintString(items[1].ID), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data storage.ShopTarget `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Data.SortOrder != 20 {
+		t.Fatalf("returned sort_order = %d, want preserved 20", resp.Data.SortOrder)
+	}
+
+	list, err := targets.List()
+	if err != nil {
+		t.Fatalf("list targets: %v", err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("targets count = %d, want 3", len(list))
+	}
+	wantNames := []string{"shop-a", "shop-b-renamed", "shop-c"}
+	wantOrders := []int{10, 20, 30}
+	for i := range wantNames {
+		if list[i].Name != wantNames[i] || list[i].SortOrder != wantOrders[i] {
+			t.Fatalf("list[%d] = %#v, want name=%s sort_order=%d", i, list[i], wantNames[i], wantOrders[i])
+		}
 	}
 }
 
@@ -399,6 +635,10 @@ func TestBulkConfigureShopNotificationsUpsertsRules(t *testing.T) {
 
 func uintString(id uint) string {
 	return strconv.FormatUint(uint64(id), 10)
+}
+
+func intPtr(value int) *int {
+	return &value
 }
 
 func TestBulkConfigureShopNotificationsValidatesTargetsBeforeUpdate(t *testing.T) {
