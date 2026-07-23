@@ -1003,3 +1003,89 @@ func TestSyncAllShopTargetsQueuesBackgroundJobs(t *testing.T) {
 		t.Fatalf("batch details = %#v", detailsResp.Data)
 	}
 }
+
+func TestGlobalShopWatchRulesApplyExcludeKeywordsAcrossShops(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	rules := storage.NewShopWatchRules(db)
+	target := &storage.ShopTarget{
+		Name:           "global-rule-shop",
+		Platform:       storage.ShopPlatformLDXP,
+		SiteURL:        "https://pay.ldxp.cn/shop/GLOBAL",
+		BaseURL:        "https://pay.ldxp.cn",
+		Token:          "GLOBAL",
+		MonitorEnabled: true,
+		ScopeMode:      storage.ShopScopeAll,
+	}
+	if err := targets.Create(target); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	secondTarget := &storage.ShopTarget{
+		Name:           "global-rule-shop-2",
+		Platform:       storage.ShopPlatformLDXP,
+		SiteURL:        "https://pay.ldxp.cn/shop/GLOBAL-2",
+		BaseURL:        "https://pay.ldxp.cn",
+		Token:          "GLOBAL-2",
+		MonitorEnabled: true,
+		ScopeMode:      storage.ShopScopeAll,
+	}
+	if err := targets.Create(secondTarget); err != nil {
+		t.Fatalf("create second target: %v", err)
+	}
+	now := time.Now()
+	for _, snapshot := range []storage.ShopGoodsSnapshot{
+		{TargetID: target.ID, GoodsKey: "keep", GoodsType: "card", Name: "Claude Pro", Price: 1, FirstSeenAt: now, LastSeenAt: now},
+		{TargetID: target.ID, GoodsKey: "skip", GoodsType: "card", Name: "Claude 测试套餐", Price: 1, FirstSeenAt: now, LastSeenAt: now},
+		{TargetID: secondTarget.ID, GoodsKey: "keep-second", GoodsType: "card", Name: "Claude Team", Price: 1, FirstSeenAt: now, LastSeenAt: now},
+	} {
+		if err := goods.CreateSnapshot(&snapshot); err != nil {
+			t.Fatalf("create snapshot: %v", err)
+		}
+	}
+
+	router := gin.New()
+	registerShopTargets(router.Group("/api"), &Deps{ShopTargets: targets, ShopGoods: goods, ShopWatchRules: rules})
+	body := `{"name":"全局 Claude","enabled":true,"keywords":["Claude"],"exclude_keywords":["测试"],"events":["stock_changed"],"stock_threshold":1}`
+	createReq := httptest.NewRequest(http.MethodPost, "/api/shop-watch-rules", strings.NewReader(body))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		Data storage.ShopWatchRule `json:"data"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.Data.TargetID != 0 || created.Data.ExcludeKeywordsJSON != `["测试"]` {
+		t.Fatalf("created global rule = %#v", created.Data)
+	}
+
+	previewReq := httptest.NewRequest(http.MethodPost, "/api/shop-watch-rules/preview", strings.NewReader(body))
+	previewReq.Header.Set("Content-Type", "application/json")
+	previewRec := httptest.NewRecorder()
+	router.ServeHTTP(previewRec, previewReq)
+	if previewRec.Code != http.StatusOK {
+		t.Fatalf("preview status = %d, body = %s", previewRec.Code, previewRec.Body.String())
+	}
+	var preview struct {
+		Data shopWatchRulePreview `json:"data"`
+	}
+	if err := json.Unmarshal(previewRec.Body.Bytes(), &preview); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+	if preview.Data.Total != 2 || len(preview.Data.Items) != 2 {
+		t.Fatalf("preview = %#v", preview.Data)
+	}
+	matched := map[string]bool{}
+	for _, item := range preview.Data.Items {
+		matched[item.GoodsKey] = true
+	}
+	if !matched["keep"] || !matched["keep-second"] || matched["skip"] {
+		t.Fatalf("preview items = %#v", preview.Data.Items)
+	}
+}

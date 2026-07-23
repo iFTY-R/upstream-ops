@@ -10,19 +10,124 @@ import (
 )
 
 type shopWatchRuleInput struct {
-	Name           string                         `json:"name"`
-	Enabled        *bool                          `json:"enabled"`
-	GoodsKeys      []string                       `json:"goods_keys"`
-	CategoryIDs    []int64                        `json:"category_ids"`
-	CategoryNames  []string                       `json:"category_names"`
-	Keywords       []string                       `json:"keywords"`
-	Events         []storage.ShopGoodsChangeEvent `json:"events"`
-	StockThreshold int                            `json:"stock_threshold"`
+	Name            string                         `json:"name"`
+	Enabled         *bool                          `json:"enabled"`
+	GoodsKeys       []string                       `json:"goods_keys"`
+	CategoryIDs     []int64                        `json:"category_ids"`
+	CategoryNames   []string                       `json:"category_names"`
+	Keywords        []string                       `json:"keywords"`
+	ExcludeKeywords []string                       `json:"exclude_keywords"`
+	Events          []storage.ShopGoodsChangeEvent `json:"events"`
+	StockThreshold  int                            `json:"stock_threshold"`
 }
 
 type shopWatchRulePreview struct {
 	Total int64                       `json:"total"`
 	Items []storage.ShopGoodsSnapshot `json:"items"`
+}
+
+const globalShopWatchRuleTargetID uint = 0
+
+func listGlobalShopWatchRules(c *gin.Context, d *Deps) {
+	if !shopWatchReposReady(c, d) {
+		return
+	}
+	list, err := d.ShopWatchRules.ListGlobal()
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list})
+}
+
+func createGlobalShopWatchRule(c *gin.Context, d *Deps) {
+	if !shopWatchReposReady(c, d) {
+		return
+	}
+	var in shopWatchRuleInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	rule, err := buildShopWatchRule(globalShopWatchRuleTargetID, in, nil)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	if err := d.ShopWatchRules.Create(rule); err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": rule})
+}
+
+func updateGlobalShopWatchRule(c *gin.Context, d *Deps) {
+	if !shopWatchReposReady(c, d) {
+		return
+	}
+	ruleID, ok := parseUintParam(c, "rule_id")
+	if !ok {
+		return
+	}
+	current, err := d.ShopWatchRules.FindByID(globalShopWatchRuleTargetID, ruleID)
+	if err != nil {
+		fail(c, http.StatusNotFound, err)
+		return
+	}
+	var in shopWatchRuleInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	next, err := buildShopWatchRule(globalShopWatchRuleTargetID, in, current)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	next.ID = current.ID
+	next.CreatedAt = current.CreatedAt
+	if err := d.ShopWatchRules.Update(next); err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": next})
+}
+
+func deleteGlobalShopWatchRule(c *gin.Context, d *Deps) {
+	if !shopWatchReposReady(c, d) {
+		return
+	}
+	ruleID, ok := parseUintParam(c, "rule_id")
+	if !ok {
+		return
+	}
+	if err := d.ShopWatchRules.Delete(globalShopWatchRuleTargetID, ruleID); err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"ok": true}})
+}
+
+func previewGlobalShopWatchRule(c *gin.Context, d *Deps) {
+	if !shopWatchReposReady(c, d) {
+		return
+	}
+	var in shopWatchRuleInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	rule, err := buildShopWatchRule(globalShopWatchRuleTargetID, in, nil)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	items, total, err := d.ShopGoods.ListFirstMatchingWatchRule(*rule, 10)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": shopWatchRulePreview{Total: total, Items: items}})
 }
 
 func listShopWatchRules(c *gin.Context, d *Deps) {
@@ -174,6 +279,7 @@ func buildShopWatchRule(targetID uint, in shopWatchRuleInput, current *storage.S
 	rule.CategoryIDsJSON = mustJSON(cleanInt64s(in.CategoryIDs))
 	rule.CategoryNamesJSON = mustJSON(cleanStrings(in.CategoryNames))
 	rule.KeywordsJSON = mustJSON(cleanStrings(in.Keywords))
+	rule.ExcludeKeywordsJSON = mustJSON(cleanStrings(in.ExcludeKeywords))
 	events, err := cleanShopWatchEvents(in.Events)
 	if err != nil {
 		return nil, err

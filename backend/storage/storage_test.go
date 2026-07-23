@@ -811,6 +811,12 @@ func TestShopWatchRuleMatchesSnapshotAndChange(t *testing.T) {
 	if !ShopWatchRuleMatchesChange(rule, ShopChangeStockLow, snapshot, snapshot.GoodsKey, snapshot.Name) {
 		t.Fatalf("watch rule should match keyword and stock threshold")
 	}
+	rule.ExcludeKeywordsJSON = `["月卡"]`
+	snapshot.GoodsKey = "sku-1"
+	if ShopWatchRuleMatchesChange(rule, ShopChangeStockLow, snapshot, snapshot.GoodsKey, snapshot.Name) {
+		t.Fatalf("exclude keyword should take precedence over exact goods key and matching keyword")
+	}
+	rule.ExcludeKeywordsJSON = `[]`
 	snapshot.StockCount = 4
 	if ShopWatchRuleMatchesChange(rule, ShopChangeStockLow, snapshot, snapshot.GoodsKey, snapshot.Name) {
 		t.Fatalf("watch rule should not match stock_low above threshold")

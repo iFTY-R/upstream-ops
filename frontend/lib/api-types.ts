@@ -164,6 +164,7 @@ export interface ShopWatchRule {
   category_ids_json: string
   category_names_json: string
   keywords_json: string
+  exclude_keywords_json: string
   events_json: string
   stock_threshold: number
   created_at: string
@@ -177,6 +178,7 @@ export interface ShopWatchRuleInput {
   category_ids: number[]
   category_names: string[]
   keywords: string[]
+  exclude_keywords: string[]
   events: ShopGoodsChangeEvent[]
   stock_threshold: number
 }

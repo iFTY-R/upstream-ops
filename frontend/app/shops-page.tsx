@@ -27,10 +27,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { ShopWatchRulesDrawer, type ShopWatchSeed } from "@/components/monitor/shop-watch-rules-drawer"
+import { GlobalShopWatchRulesDrawer, type GlobalShopWatchSeed } from "@/components/monitor/shop-watch-rules-drawer"
 import { SearchHistoryInput } from "@/components/search-history-input"
 import { apiFetch } from "@/lib/api"
-import { useShopChangeLogs, useShopGoods, useShopMonitorLogs, useShopSnapshotCategories, useShopTargets, useShopWatchRules } from "@/lib/queries"
+import { useGlobalShopWatchRules, useShopChangeLogs, useShopGoods, useShopMonitorLogs, useShopSnapshotCategories, useShopTargets } from "@/lib/queries"
 import { useTriggerRefresh } from "@/lib/refresh-context"
 import { money, relativeTime } from "@/lib/format"
 import {
@@ -47,8 +47,6 @@ import type {
   ShopGoodsSort,
   ShopGoodsSnapshot,
   ShopGoodsStatus,
-  ShopBulkNotificationInput,
-  ShopBulkNotificationResult,
   ShopMonitorLog,
   ShopRefreshGoodsResult,
   ShopScopeMode,
@@ -58,8 +56,6 @@ import type {
   ShopSyncJobStartResult,
   ShopTarget,
   ShopTestResult,
-  ShopWatchRule,
-  ShopWatchRuleInput,
 } from "@/lib/api-types"
 
 type ShopForm = {
@@ -69,7 +65,6 @@ type ShopForm = {
   base_url: string
   token: string
   monitor_enabled: boolean
-  notify_enabled: boolean
   scope_mode: ShopScopeMode
   goods_types: string
   category_ids: string
@@ -95,7 +90,6 @@ const emptyForm: ShopForm = {
   base_url: "",
   token: "",
   monitor_enabled: true,
-  notify_enabled: false,
   scope_mode: "all",
   goods_types: "card",
   category_ids: "",
@@ -112,19 +106,6 @@ const emptyForm: ShopForm = {
   removed_goods_enabled: true,
   sort_order: "",
   goods_sort: "category",
-}
-
-type BulkNotificationForm = {
-  targetIDs: number[]
-  notifyMode: "keep" | "on" | "off"
-  upsertRule: boolean
-  replaceSameName: boolean
-  ruleName: string
-  events: ShopGoodsChangeEvent[]
-  stockThreshold: number
-  categoryNames: string
-  keywords: string
-  goodsKeys: string
 }
 
 const eventLabels: Record<ShopGoodsChangeEvent, string> = {
@@ -192,7 +173,6 @@ function formFromTarget(target: ShopTarget): ShopForm {
     base_url: target.base_url,
     token: target.token,
     monitor_enabled: target.monitor_enabled,
-    notify_enabled: target.notify_enabled,
     scope_mode: target.scope_mode,
     goods_types: parseJSONList(target.goods_types_json).join(", "),
     category_ids: parseJSONList(target.category_ids_json).join(", "),
@@ -210,76 +190,6 @@ function formFromTarget(target: ShopTarget): ShopForm {
     sort_order: String(target.sort_order),
     goods_sort: target.goods_sort || "category",
   }
-}
-
-function shopTargetUpdateBody(target: ShopTarget, patch: Partial<ShopForm>) {
-  return {
-    name: target.name,
-    site_url: target.site_url,
-    platform: target.platform,
-    base_url: target.base_url,
-    token: target.token,
-    monitor_enabled: target.monitor_enabled,
-    notify_enabled: target.notify_enabled,
-    scope_mode: target.scope_mode,
-    goods_types: parseJSONList(target.goods_types_json),
-    category_ids: parseJSONList(target.category_ids_json).map(Number).filter((value) => Number.isFinite(value)),
-    category_names: parseJSONList(target.category_names_json),
-    keywords: parseJSONList(target.keywords_json),
-    goods_keys: parseJSONList(target.goods_keys_json),
-    stock_threshold: target.stock_threshold,
-    proxy_enabled: target.proxy_enabled,
-    price_change_enabled: target.price_change_enabled,
-    stock_change_enabled: target.stock_change_enabled,
-    low_stock_enabled: target.low_stock_enabled,
-    restock_enabled: target.restock_enabled,
-    new_goods_enabled: target.new_goods_enabled,
-    removed_goods_enabled: target.removed_goods_enabled,
-    goods_sort: target.goods_sort || "category",
-    ...patch,
-  }
-}
-
-const defaultBulkNotificationForm: BulkNotificationForm = {
-  targetIDs: [],
-  notifyMode: "on",
-  upsertRule: true,
-  replaceSameName: true,
-  ruleName: "批量关注规则",
-  events: ["stock_changed", "stock_low", "goods_restocked"],
-  stockThreshold: 1,
-  categoryNames: "",
-  keywords: "",
-  goodsKeys: "",
-}
-
-function shopRulesMatchRow(rules: ShopWatchRule[], row: ShopGoodsSnapshot): boolean {
-  return rules.some((rule) => {
-    if (!rule.enabled) return false
-    let hasCriteria = false
-    const goodsKeys = parseJSONList(rule.goods_keys_json)
-    if (goodsKeys.length > 0) {
-      hasCriteria = true
-      if (goodsKeys.some((key) => key.toLowerCase() === row.goods_key.toLowerCase())) return true
-    }
-    const categoryIDs = parseJSONList(rule.category_ids_json).map(Number).filter((value) => Number.isFinite(value))
-    if (categoryIDs.length > 0) {
-      hasCriteria = true
-      if (categoryIDs.includes(row.category_id)) return true
-    }
-    const categoryNames = parseJSONList(rule.category_names_json)
-    if (categoryNames.length > 0) {
-      hasCriteria = true
-      if (categoryNames.some((name) => name.toLowerCase() === row.category_name.toLowerCase())) return true
-    }
-    const keywords = parseJSONList(rule.keywords_json)
-    if (keywords.length > 0) {
-      hasCriteria = true
-      const haystack = `${row.name} ${row.goods_key} ${row.category_name}`.toLowerCase()
-      if (keywords.some((keyword) => haystack.includes(keyword.toLowerCase()))) return true
-    }
-    return !hasCriteria
-  })
 }
 
 function shopDisplayName(target: ShopTarget | null) {
@@ -331,10 +241,8 @@ export default function ShopsPage() {
   const [categoryIDs, setCategoryIDs] = useState(initialGoodsPreferences.categoryIDs)
   const [sorts, setSorts] = useState(initialGoodsPreferences.sorts)
   const [highlightedGoodsKey, setHighlightedGoodsKey] = useState<string | null>(null)
-  const [watchRulesOpen, setWatchRulesOpen] = useState(false)
-  const [watchSeed, setWatchSeed] = useState<ShopWatchSeed | null>(null)
-  const [bulkOpen, setBulkOpen] = useState(false)
-  const [bulkForm, setBulkForm] = useState<BulkNotificationForm>(defaultBulkNotificationForm)
+  const [globalWatchRulesOpen, setGlobalWatchRulesOpen] = useState(false)
+  const [globalWatchSeed, setGlobalWatchSeed] = useState<GlobalShopWatchSeed | null>(null)
   const [syncJobs, setSyncJobs] = useState<Record<number, ShopSyncJob>>({})
   const bulkSyncJobIDsRef = useRef<Set<number> | null>(null)
   const goodsRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({})
@@ -357,12 +265,20 @@ export default function ShopsPage() {
   const goodsSearchActive = appliedGoodsKeyword.trim() !== "" || appliedGoodsExcludeKeyword.trim() !== ""
   const goods = useShopGoods(selectedID, goodsPage, 25, goodsFilters, true)
   const snapshotCategories = useShopSnapshotCategories(selectedID)
-  const watchRules = useShopWatchRules(selectedID)
+  const globalWatchRules = useGlobalShopWatchRules()
   const changes = useShopChangeLogs(selectedID, changesPage, 20)
   const monitorLogs = useShopMonitorLogs(selectedID, logsPage, 20)
   const shopList = targets.data ?? emptyShopTargets
   const selected = shopList.find((target) => target.id === selectedID) ?? null
   const selectedIndex = selected == null ? -1 : shopList.findIndex((target) => target.id === selected.id)
+  const globalWatchTargetNames = useMemo(
+    () => Object.fromEntries(shopList.map((target) => [target.id, shopDisplayName(target)])),
+    [shopList],
+  )
+  const legacyWatchRuleCount = useMemo(
+    () => shopList.reduce((total, target) => total + target.watch_rule_count, 0),
+    [shopList],
+  )
   const activeSyncJobs = useMemo(
     () => Object.values(syncJobs).filter((job) => job.status === "queued" || job.status === "running"),
     [syncJobs],
@@ -540,17 +456,6 @@ export default function ShopsPage() {
     return () => window.clearTimeout(timer)
   }, [goods.data?.items, highlightedGoodsKey])
 
-  const selectedWatchRules = useMemo(
-    () => (watchRules.data ?? []).filter((rule) => rule.target_id === selectedID),
-    [selectedID, watchRules.data],
-  )
-  const watchedGoodsKeys = useMemo(() => {
-    const out = new Set<string>()
-    for (const row of goods.data?.items ?? []) {
-      if (shopRulesMatchRow(selectedWatchRules, row)) out.add(row.goods_key)
-    }
-    return out
-  }, [goods.data?.items, selectedWatchRules])
   const summary = useMemo(() => {
     return {
       total: shopList.length,
@@ -566,12 +471,6 @@ export default function ShopsPage() {
     setEditing(null)
     setForm({ ...emptyForm, sort_order: String(shopList.length + 1) })
     setFormOpen(true)
-  }
-
-  function openBulkNotification() {
-    const ids = shopList.map((target) => target.id)
-    setBulkForm({ ...defaultBulkNotificationForm, targetIDs: ids })
-    setBulkOpen(true)
   }
 
   function openEdit(target: ShopTarget) {
@@ -651,61 +550,6 @@ export default function ShopsPage() {
     toast.success(result.reused ? "店铺已添加，同步任务仍在运行" : "店铺已添加，已开始自动同步")
   }
 
-  async function updateShopNotify(target: ShopTarget, enabled: boolean) {
-    const next = await apiFetch<ShopTarget>(`/shop-targets/${target.id}`, {
-      method: "PUT",
-      body: JSON.stringify(shopTargetUpdateBody(target, { notify_enabled: enabled })),
-    })
-    targets.setData((targets.data ?? []).map((item) => (item.id === next.id ? { ...next, watch_rule_count: item.watch_rule_count } : item)))
-    toast.success(enabled ? "店铺通知已开启" : "店铺通知已关闭")
-    refresh()
-  }
-
-  async function saveBulkNotification() {
-    const targetIDs = bulkForm.targetIDs.filter(Boolean)
-    if (targetIDs.length === 0) {
-      toast.error("请选择至少一个店铺")
-      return
-    }
-    if (bulkForm.notifyMode === "keep" && !bulkForm.upsertRule) {
-      toast.error("请选择要批量修改的通知配置")
-      return
-    }
-    setBusy("bulk-notify")
-    try {
-      const rule: ShopWatchRuleInput = {
-        name: bulkForm.ruleName.trim() || "批量关注规则",
-        enabled: true,
-        goods_keys: csv(bulkForm.goodsKeys),
-        category_ids: [],
-        category_names: csv(bulkForm.categoryNames),
-        keywords: csv(bulkForm.keywords),
-        events: bulkForm.events,
-        stock_threshold: bulkForm.stockThreshold,
-      }
-      const body: ShopBulkNotificationInput = {
-        target_ids: targetIDs,
-        notify_enabled: bulkForm.notifyMode === "keep" ? undefined : bulkForm.notifyMode === "on",
-        upsert_rule: bulkForm.upsertRule,
-        replace_same_name: bulkForm.replaceSameName,
-        rule,
-      }
-      const result = await apiFetch<ShopBulkNotificationResult>("/shop-targets/bulk-notification", {
-        method: "POST",
-        body: JSON.stringify(body),
-      })
-      targets.setData(result.targets)
-      setBulkOpen(false)
-      toast.success(`批量配置完成：店铺 ${result.updated_targets} 个，新增规则 ${result.created_rules} 条，更新规则 ${result.updated_rules} 条`)
-      refresh()
-      watchRules.refetch()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "批量配置通知失败")
-    } finally {
-      setBusy(null)
-    }
-  }
-
   function applyGoodsSearch(nextValues?: Partial<{ keyword: string; excludeKeyword: string }>) {
     const nextKeyword = normalizeTextFilter(nextValues?.keyword ?? goodsKeyword)
     const nextExcludeKeyword = normalizeTextFilter(nextValues?.excludeKeyword ?? goodsExcludeKeyword)
@@ -719,20 +563,27 @@ export default function ShopsPage() {
     if (!changed && goodsPage === 1) goods.refetch()
   }
 
-  function openWatchRules(target: ShopTarget) {
-    setSelectedID(target.id)
-    setWatchSeed(null)
-    setWatchRulesOpen(true)
+  function handleGlobalWatchRulesChanged() {
+    globalWatchRules.refetch()
   }
 
-  function watchGoods(row: ShopGoodsSnapshot) {
-    setWatchSeed({ ...row, nonce: Date.now() })
-    setWatchRulesOpen(true)
+  function setGlobalWatchRulesDrawerOpen(open: boolean) {
+    setGlobalWatchRulesOpen(open)
+    if (!open) setGlobalWatchSeed(null)
   }
 
-  function handleWatchRulesChanged() {
-    watchRules.refetch()
-    targets.refetch()
+  function openGlobalWatchRules() {
+    setGlobalWatchSeed(null)
+    setGlobalWatchRulesOpen(true)
+  }
+
+  function watchGoodsGlobally(row: ShopGoodsSnapshot) {
+    setGlobalWatchSeed({
+      goods_key: row.goods_key,
+      name: row.name,
+      nonce: Date.now(),
+    })
+    setGlobalWatchRulesOpen(true)
   }
 
   async function testTarget(target: ShopTarget) {
@@ -903,9 +754,9 @@ export default function ShopsPage() {
             </p>
           </div>
           <div className="relative flex flex-wrap items-end justify-start gap-2 lg:justify-end">
-            <Button variant="outline" onClick={openBulkNotification} disabled={(targets.data?.length ?? 0) === 0 || busy === "bulk-notify"} className="gap-2">
-              {busy === "bulk-notify" ? <Loader2 className="size-4 animate-spin" /> : <Bell className="size-4" />}
-              {"批量通知"}
+            <Button variant="outline" onClick={openGlobalWatchRules} className="gap-2">
+              <Bell className="size-4" />
+              {"全局关注规则"}
             </Button>
             <Button variant="outline" onClick={syncAllTargets} disabled={busy === "sync-all"} className="gap-2">
               {busy === "sync-all" ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
@@ -962,8 +813,6 @@ export default function ShopsPage() {
               onEdit={() => openEdit(selected)}
               onTest={() => testTarget(selected)}
               onSync={() => syncTarget(selected)}
-              onWatchRules={() => openWatchRules(selected)}
-              watchRuleCount={selected.watch_rule_count}
               onDelete={() => deleteTarget(selected)}
             />
           ) : null}
@@ -1009,8 +858,6 @@ export default function ShopsPage() {
                   onEdit={() => openEdit(target)}
                   onTest={() => testTarget(target)}
                   onSync={() => syncTarget(target)}
-                  onWatchRules={() => openWatchRules(target)}
-                  watchRuleCount={target.watch_rule_count}
                   onDelete={() => deleteTarget(target)}
                 />
               ))}
@@ -1046,7 +893,6 @@ export default function ShopsPage() {
             searchActive={goodsSearchActive}
             refreshingKey={busy?.startsWith("refresh-goods:") ? busy.slice("refresh-goods:".length) : null}
             highlightedGoodsKey={highlightedGoodsKey}
-            watchedGoodsKeys={watchedGoodsKeys}
             rowRefs={goodsRowRefs}
             onCategory={updateSelectedCategory}
             onStatus={setGoodsStatus}
@@ -1058,7 +904,7 @@ export default function ShopsPage() {
             onExcludeKeyword={setGoodsExcludeKeyword}
             onApplySearch={applyGoodsSearch}
             onRefreshGoods={refreshGoodsStock}
-            onWatchGoods={watchGoods}
+            onWatchGoods={watchGoodsGlobally}
             onPage={setGoodsPage}
           />
           <ChangePanel
@@ -1167,7 +1013,6 @@ export default function ShopsPage() {
           </div>
           <div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3 sm:grid-cols-3">
             <Check label="启用监控" checked={form.monitor_enabled} onChange={(v) => setForm({ ...form, monitor_enabled: v })} />
-            <Check label="启用通知" checked={form.notify_enabled} onChange={(v) => setForm({ ...form, notify_enabled: v })} />
             <Check label="价格变化" checked={form.price_change_enabled} onChange={(v) => setForm({ ...form, price_change_enabled: v })} />
             <Check label="库存变化" checked={form.stock_change_enabled} onChange={(v) => setForm({ ...form, stock_change_enabled: v })} />
             <Check label="低库存" checked={form.low_stock_enabled} onChange={(v) => setForm({ ...form, low_stock_enabled: v })} />
@@ -1185,155 +1030,16 @@ export default function ShopsPage() {
           </div>
         </DialogContent>
       </Dialog>
-      <ShopWatchRulesDrawer
-        open={watchRulesOpen}
-        onOpenChange={setWatchRulesOpen}
-        target={selected}
-        categories={snapshotCategories.data ?? []}
-        rules={selectedWatchRules}
-        loading={watchRules.loading}
-        seed={watchSeed}
-        onRulesChanged={handleWatchRulesChanged}
-        onToggleNotify={async (enabled) => {
-          if (!selected) return
-          await updateShopNotify(selected, enabled)
-        }}
+      <GlobalShopWatchRulesDrawer
+        open={globalWatchRulesOpen}
+        onOpenChange={setGlobalWatchRulesDrawerOpen}
+        rules={globalWatchRules.data ?? []}
+        loading={globalWatchRules.loading}
+        seed={globalWatchSeed}
+        targetNames={globalWatchTargetNames}
+        legacyRuleCount={legacyWatchRuleCount}
+        onRulesChanged={handleGlobalWatchRulesChanged}
       />
-      <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
-        <DialogContent className="max-h-[calc(100vh-2rem)] max-w-3xl overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{"批量通知配置"}</DialogTitle>
-            <DialogDescription>
-              {"一次性修改多个店铺的通知开关，并可批量创建或更新同名关注规则。"}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <Label className="text-xs text-muted-foreground">{"选择店铺"}</Label>
-                <div className="flex gap-1">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setBulkForm((prev) => ({ ...prev, targetIDs: (targets.data ?? []).map((target) => target.id) }))}
-                  >
-                    {"全选"}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setBulkForm((prev) => ({ ...prev, targetIDs: [] }))}
-                  >
-                    {"清空"}
-                  </Button>
-                </div>
-              </div>
-              <div className="grid max-h-56 gap-2 overflow-y-auto rounded-lg border border-border p-2 sm:grid-cols-2">
-                {(targets.data ?? []).map((target) => {
-                  const checked = bulkForm.targetIDs.includes(target.id)
-                  return (
-                    <button
-                      key={target.id}
-                      type="button"
-                      onClick={() =>
-                        setBulkForm((prev) => ({
-                          ...prev,
-                          targetIDs: checked ? prev.targetIDs.filter((id) => id !== target.id) : [...prev.targetIDs, target.id],
-                        }))
-                      }
-                      className={cn(
-                        "rounded-md border px-3 py-2 text-left text-sm transition",
-                        checked ? "border-emerald-500 bg-emerald-500/10 text-emerald-800" : "border-border hover:border-foreground/40",
-                      )}
-                    >
-                      <div className="truncate font-medium">{shopDisplayName(target)}</div>
-                      <div className="mt-0.5 text-[11px] text-muted-foreground">{target.notify_enabled ? "通知已开" : "通知关闭"} · 规则 {target.watch_rule_count ?? 0}</div>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="店铺通知开关">
-                <Select value={bulkForm.notifyMode} onValueChange={(value) => setBulkForm({ ...bulkForm, notifyMode: value as BulkNotificationForm["notifyMode"] })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="on">全部开启</SelectItem>
-                    <SelectItem value="off">全部关闭</SelectItem>
-                    <SelectItem value="keep">保持不变</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="同名规则处理">
-                <Select value={bulkForm.replaceSameName ? "replace" : "skip"} onValueChange={(value) => setBulkForm({ ...bulkForm, replaceSameName: value === "replace" })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="replace">更新同名规则</SelectItem>
-                    <SelectItem value="skip">已有同名则跳过</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
-            </div>
-            <div className="rounded-lg border border-border bg-muted/20 p-3">
-              <Check label="批量创建/更新关注规则" checked={bulkForm.upsertRule} onChange={(v) => setBulkForm({ ...bulkForm, upsertRule: v })} />
-              {bulkForm.upsertRule ? (
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <Field label="规则名称">
-                    <Input value={bulkForm.ruleName} onChange={(e) => setBulkForm({ ...bulkForm, ruleName: e.target.value })} />
-                  </Field>
-                  <Field label="低库存阈值">
-                    <Input type="number" value={bulkForm.stockThreshold} onChange={(e) => setBulkForm({ ...bulkForm, stockThreshold: Number(e.target.value) || 0 })} />
-                  </Field>
-                  <Field label="分类名称">
-                    <Input value={bulkForm.categoryNames} onChange={(e) => setBulkForm({ ...bulkForm, categoryNames: e.target.value })} placeholder="分类名，逗号或换行分隔" />
-                  </Field>
-                  <Field label="商品 Key">
-                    <Input value={bulkForm.goodsKeys} onChange={(e) => setBulkForm({ ...bulkForm, goodsKeys: e.target.value })} placeholder="商品 key，逗号或换行分隔" />
-                  </Field>
-                  <Field label="关键词">
-                    <Input value={bulkForm.keywords} onChange={(e) => setBulkForm({ ...bulkForm, keywords: e.target.value })} placeholder="关键词，逗号或换行分隔" />
-                  </Field>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">{"通知事件"}</Label>
-                    <div className="flex flex-wrap gap-2">
-                      {(Object.entries(eventLabels) as Array<[ShopGoodsChangeEvent, string]>).map(([event, label]) => {
-                        const checked = bulkForm.events.includes(event)
-                        return (
-                          <button
-                            key={event}
-                            type="button"
-                            onClick={() =>
-                              setBulkForm((prev) => ({
-                                ...prev,
-                                events: checked ? prev.events.filter((item) => item !== event) : [...prev.events, event],
-                              }))
-                            }
-                            className={cn(
-                              "rounded-full border px-2.5 py-1 text-xs transition",
-                              checked ? "border-emerald-500 bg-emerald-500/10 text-emerald-800" : "border-border text-muted-foreground hover:text-foreground",
-                            )}
-                          >
-                            {label}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setBulkOpen(false)}>取消</Button>
-            <Button onClick={saveBulkNotification} disabled={busy === "bulk-notify"}>
-              {busy === "bulk-notify" ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
-              {"批量保存"}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </section>
   )
 }
@@ -1360,8 +1066,6 @@ function ShopCard(props: {
   onEdit: () => void
   onTest: () => void
   onSync: () => void
-  onWatchRules: () => void
-  watchRuleCount?: number
   onDelete: () => void
 }) {
   const { target, active, busy } = props
@@ -1389,13 +1093,6 @@ function ShopCard(props: {
         <Mini label="低库存" value={target.last_low_stock_goods} />
         <Mini label="变化" value={target.last_changed_count} />
       </div>
-      <div className="mt-2 flex items-center justify-between gap-2 rounded-md bg-muted/30 px-2 py-1.5 text-[11px] text-muted-foreground">
-        <span className={cn("inline-flex items-center gap-1", target.notify_enabled && "text-emerald-700")}>
-          <Bell className="size-3.5" />
-          {target.notify_enabled ? "通知开启" : "通知关闭"}
-        </span>
-        <span>{`关注规则 ${props.watchRuleCount ?? 0}`}</span>
-      </div>
       {target.last_error ? <p className="mt-2 line-clamp-2 text-xs text-danger">{target.last_error}</p> : null}
       <div className="mt-3 flex flex-col gap-2">
         <span className="text-[11px] text-muted-foreground">上次同步 {relativeTime(target.last_sync_at)}</span>
@@ -1416,9 +1113,6 @@ function ShopCard(props: {
           </Button>
           <Button variant="outline" size="icon" className="size-7" onClick={props.onSync} disabled={busy === `sync:${target.id}` || syncing}>
             {busy === `sync:${target.id}` || syncing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-          </Button>
-          <Button variant="outline" size="icon" className={cn("size-7", target.notify_enabled && "border-emerald-500/40 text-emerald-700")} onClick={props.onWatchRules}>
-            <Bell className="size-3.5" />
           </Button>
           <Button variant="outline" size="icon" className="size-7" onClick={props.onEdit}><Pencil className="size-3.5" /></Button>
           <Button variant="outline" size="icon" className="size-7" onClick={props.onDelete} disabled={busy === `delete:${target.id}`}><Trash2 className="size-3.5" /></Button>
@@ -1458,7 +1152,6 @@ function GoodsPanel({
   searchActive,
   refreshingKey,
   highlightedGoodsKey,
-  watchedGoodsKeys,
   rowRefs,
   onCategory,
   onStatus,
@@ -1491,7 +1184,6 @@ function GoodsPanel({
   searchActive: boolean
   refreshingKey: string | null
   highlightedGoodsKey: string | null
-  watchedGoodsKeys: Set<string>
   rowRefs: React.MutableRefObject<Record<string, HTMLTableRowElement | null>>
   onCategory: (categoryID: number | null) => void
   onStatus: (status: GoodsStatusFilter) => void
@@ -1630,7 +1322,6 @@ function GoodsPanel({
             {rows.map((row) => {
               const refreshing = refreshingKey === row.goods_key
               const canBuy = !row.removed_at && row.stock_count > 0 && row.link
-              const watched = watchedGoodsKeys.has(row.goods_key)
               return (
                 <TableRow
                   key={row.id}
@@ -1644,21 +1335,18 @@ function GoodsPanel({
                   )}
                 >
                   <TableCell className="min-w-0">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <button
+                    <div className="flex min-w-0 items-center gap-1">
+                      <Button
                         type="button"
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          onWatchGoods(row)
-                        }}
-                        className={cn(
-                          "shrink-0 rounded-md p-1 transition hover:bg-muted",
-                          watched ? "text-amber-500" : "text-muted-foreground",
-                        )}
-                        title={watched ? "已被关注规则命中，点击编辑关注" : "重点关注该商品"}
+                        size="icon"
+                        variant="ghost"
+                        className="size-7 shrink-0"
+                        onClick={() => onWatchGoods(row)}
+                        aria-label={`为 ${row.name || row.goods_key} 新建全局关注规则`}
+                        title="新建全局关注规则"
                       >
-                        <Star className={cn("size-4", watched && "fill-amber-400")} />
-                      </button>
+                        <Star className="size-4" />
+                      </Button>
                       <div className="min-w-0 truncate font-medium" title={row.name}>{row.name}</div>
                     </div>
                     <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">

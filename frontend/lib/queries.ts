@@ -297,6 +297,10 @@ export function useShopWatchRules(targetID: number | null) {
   )
 }
 
+export function useGlobalShopWatchRules() {
+  return useApi<ShopWatchRule[]>("/shop-watch-rules")
+}
+
 export interface ShopGoodsFilters {
   target_id?: number
   category_id?: number

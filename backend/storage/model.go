@@ -320,13 +320,15 @@ type MonitorLog struct {
 func (MonitorLog) TableName() string { return "monitor_logs" }
 
 type ShopTarget struct {
-	ID                  uint          `gorm:"primaryKey" json:"id"`
-	Name                string        `gorm:"size:128;not null;uniqueIndex" json:"name"`
-	Platform            ShopPlatform  `gorm:"size:32;not null;index" json:"platform"`
-	SiteURL             string        `gorm:"size:512;not null" json:"site_url"`
-	BaseURL             string        `gorm:"size:512;not null" json:"base_url"`
-	Token               string        `gorm:"size:128;not null;index" json:"token"`
-	MonitorEnabled      bool          `gorm:"default:true" json:"monitor_enabled"`
+	ID             uint         `gorm:"primaryKey" json:"id"`
+	Name           string       `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	Platform       ShopPlatform `gorm:"size:32;not null;index" json:"platform"`
+	SiteURL        string       `gorm:"size:512;not null" json:"site_url"`
+	BaseURL        string       `gorm:"size:512;not null" json:"base_url"`
+	Token          string       `gorm:"size:128;not null;index" json:"token"`
+	MonitorEnabled bool         `gorm:"default:true" json:"monitor_enabled"`
+	// NotifyEnabled is retained for database/API compatibility with pre-global notification data.
+	// Global watch rules select shop changes, then notification channel subscriptions deliver them.
 	NotifyEnabled       bool          `gorm:"default:false" json:"notify_enabled"`
 	ScopeMode           ShopScopeMode `gorm:"size:32;not null;default:'all'" json:"scope_mode"`
 	GoodsTypesJSON      string        `gorm:"type:text" json:"goods_types_json"`
@@ -359,18 +361,21 @@ type ShopTarget struct {
 func (ShopTarget) TableName() string { return "shop_targets" }
 
 type ShopWatchRule struct {
-	ID                uint      `gorm:"primaryKey" json:"id"`
-	TargetID          uint      `gorm:"not null;index" json:"target_id"`
-	Name              string    `gorm:"size:128;not null" json:"name"`
-	Enabled           bool      `gorm:"default:true;index" json:"enabled"`
-	GoodsKeysJSON     string    `gorm:"type:text" json:"goods_keys_json"`
-	CategoryIDsJSON   string    `gorm:"type:text" json:"category_ids_json"`
-	CategoryNamesJSON string    `gorm:"type:text" json:"category_names_json"`
-	KeywordsJSON      string    `gorm:"type:text" json:"keywords_json"`
-	EventsJSON        string    `gorm:"type:text" json:"events_json"`
-	StockThreshold    int       `gorm:"default:0" json:"stock_threshold"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	// ShopWatchRule is retained for backwards-compatible reads and migrations. Runtime shop
+	// notifications only consult global rules, then deliver through channel subscriptions.
+	ID                  uint      `gorm:"primaryKey" json:"id"`
+	TargetID            uint      `gorm:"not null;index" json:"target_id"`
+	Name                string    `gorm:"size:128;not null" json:"name"`
+	Enabled             bool      `gorm:"default:true;index" json:"enabled"`
+	GoodsKeysJSON       string    `gorm:"type:text" json:"goods_keys_json"`
+	CategoryIDsJSON     string    `gorm:"type:text" json:"category_ids_json"`
+	CategoryNamesJSON   string    `gorm:"type:text" json:"category_names_json"`
+	KeywordsJSON        string    `gorm:"type:text" json:"keywords_json"`
+	ExcludeKeywordsJSON string    `gorm:"type:text" json:"exclude_keywords_json"`
+	EventsJSON          string    `gorm:"type:text" json:"events_json"`
+	StockThreshold      int       `gorm:"default:0" json:"stock_threshold"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 func (ShopWatchRule) TableName() string { return "shop_watch_rules" }

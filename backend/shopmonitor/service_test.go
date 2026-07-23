@@ -2,14 +2,21 @@ package shopmonitor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ifty-r/upstream-ops/backend/config"
+	"github.com/ifty-r/upstream-ops/backend/crypto"
+	"github.com/ifty-r/upstream-ops/backend/notify"
 	"github.com/ifty-r/upstream-ops/backend/shopprovider"
 	"github.com/ifty-r/upstream-ops/backend/storage"
 	"gorm.io/gorm"
@@ -146,6 +153,140 @@ func TestRefreshGoodsByKeyMarksMissingSnapshotRemoved(t *testing.T) {
 	}
 	if result.Found || !result.Changed || result.Snapshot.RemovedAt == nil {
 		t.Fatalf("missing snapshot should be marked removed: %#v", result)
+	}
+}
+
+func TestShopNotificationsUseGlobalChannels(t *testing.T) {
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	notifies := storage.NewNotifications(db)
+	cipher, err := crypto.NewCipher("shop-monitor-test-secret")
+	if err != nil {
+		t.Fatalf("cipher: %v", err)
+	}
+
+	events := make(chan storage.NotificationEvent, 4)
+	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Event storage.NotificationEvent `json:"event"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode webhook payload: %v", err)
+		} else {
+			events <- payload.Event
+		}
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer webhook.Close()
+
+	configCipher, err := cipher.Encrypt(fmt.Sprintf(`{"url":%q}`, webhook.URL))
+	if err != nil {
+		t.Fatalf("encrypt webhook config: %v", err)
+	}
+	if err := notifies.CreateChannel(&storage.NotificationChannel{
+		Name:          "global shop notifications",
+		Type:          storage.NotifyWebhook,
+		ConfigCipher:  configCipher,
+		Subscriptions: `[{"events":["shop_stock_changed","shop_monitor_failed"]}]`,
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("create notification channel: %v", err)
+	}
+
+	dispatcher := notify.NewDispatcher(
+		notifies,
+		cipher,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		notify.Policy{SendMaxAttempts: 1},
+	)
+	rules := storage.NewShopWatchRules(db)
+	if err := rules.Create(&storage.ShopWatchRule{
+		TargetID:            0,
+		Name:                "全局库存关注",
+		Enabled:             true,
+		EventsJSON:          `["stock_changed","monitor_failed"]`,
+		ExcludeKeywordsJSON: `["屏蔽"]`,
+	}); err != nil {
+		t.Fatalf("create global watch rule: %v", err)
+	}
+	service := NewService(targets, rules, goods, dispatcher, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	target := createRefreshTarget(t, targets, storage.ShopPlatform("global-notification-test"))
+	target.NotifyEnabled = false // Historical per-shop setting must no longer gate global delivery.
+
+	if err := service.dispatchChanges(context.Background(), target, &shopprovider.ShopInfo{Name: "全局店铺"}, []storage.ShopGoodsChangeLog{{
+		TargetID:  target.ID,
+		GoodsKey:  "goods-1",
+		GoodsName: "商品一",
+		Event:     storage.ShopChangeStockChanged,
+		Summary:   "库存 0 -> 1",
+	}}); err != nil {
+		t.Fatalf("dispatch shop change: %v", err)
+	}
+	select {
+	case event := <-events:
+		if event != storage.EventShopStockChanged {
+			t.Fatalf("first event = %q, want %q", event, storage.EventShopStockChanged)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("global shop change notification was not delivered")
+	}
+
+	service.notifyFailure(context.Background(), target, errors.New("upstream unavailable"))
+	select {
+	case event := <-events:
+		if event != storage.EventShopMonitorFailed {
+			t.Fatalf("second event = %q, want %q", event, storage.EventShopMonitorFailed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("global shop failure notification was not delivered")
+	}
+}
+
+func TestGlobalWatchRulesIgnoreLegacyPerShopRules(t *testing.T) {
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	rules := storage.NewShopWatchRules(db)
+	target := createRefreshTarget(t, targets, storage.ShopPlatform("legacy-rule-test"))
+	service := NewService(targets, rules, goods, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	change := storage.ShopGoodsChangeLog{
+		TargetID:  target.ID,
+		GoodsKey:  "goods-1",
+		GoodsName: "商品一",
+		Event:     storage.ShopChangeStockChanged,
+	}
+
+	if err := rules.Create(&storage.ShopWatchRule{
+		TargetID:   target.ID,
+		Name:       "历史店铺规则",
+		Enabled:    true,
+		EventsJSON: `["stock_changed"]`,
+	}); err != nil {
+		t.Fatalf("create legacy rule: %v", err)
+	}
+	globalRules, err := service.globalWatchRules()
+	if err != nil {
+		t.Fatalf("list global rules: %v", err)
+	}
+	if matched := service.filterGlobalWatchRuleChanges(globalRules, []storage.ShopGoodsChangeLog{change}); len(matched) != 0 {
+		t.Fatalf("legacy per-shop rule must not match global dispatch: %#v", matched)
+	}
+
+	if err := rules.Create(&storage.ShopWatchRule{
+		TargetID:   0,
+		Name:       "全局规则",
+		Enabled:    true,
+		EventsJSON: `["stock_changed"]`,
+	}); err != nil {
+		t.Fatalf("create global rule: %v", err)
+	}
+	globalRules, err = service.globalWatchRules()
+	if err != nil {
+		t.Fatalf("list updated global rules: %v", err)
+	}
+	if matched := service.filterGlobalWatchRuleChanges(globalRules, []storage.ShopGoodsChangeLog{change}); len(matched) != 1 {
+		t.Fatalf("global rule should match dispatch: %#v", matched)
 	}
 }
 

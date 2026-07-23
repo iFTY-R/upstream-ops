@@ -18,6 +18,14 @@ import (
 
 func registerShopTargets(g *gin.RouterGroup, d *Deps) {
 	g.GET("/shop-goods", func(c *gin.Context) { listAllShopGoods(c, d) })
+	// Global shop watch rules apply to every synchronized shop. The legacy
+	// /shop-targets/:id/watch-rules routes remain available for old clients but
+	// are no longer consulted by the sync notification runtime.
+	g.GET("/shop-watch-rules", func(c *gin.Context) { listGlobalShopWatchRules(c, d) })
+	g.POST("/shop-watch-rules", func(c *gin.Context) { createGlobalShopWatchRule(c, d) })
+	g.POST("/shop-watch-rules/preview", func(c *gin.Context) { previewGlobalShopWatchRule(c, d) })
+	g.PUT("/shop-watch-rules/:rule_id", func(c *gin.Context) { updateGlobalShopWatchRule(c, d) })
+	g.DELETE("/shop-watch-rules/:rule_id", func(c *gin.Context) { deleteGlobalShopWatchRule(c, d) })
 	gp := g.Group("/shop-targets")
 	gp.GET("", func(c *gin.Context) { listShopTargets(c, d) })
 	gp.POST("", func(c *gin.Context) { createShopTarget(c, d) })

@@ -393,6 +393,7 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 	if err != nil {
 		s.blockOrigin(origin, err)
 		s.recordFailure(target, started, err)
+		s.notifyFailure(ctx, target, err)
 		return result, err
 	}
 
@@ -416,6 +417,7 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 	changes, lowStockCount, err := s.diffAndSave(target, fetched, started)
 	if err != nil {
 		s.recordFailure(target, started, err)
+		s.notifyFailure(ctx, target, err)
 		return result, err
 	}
 	result.ChangedCount = len(changes)
@@ -917,10 +919,17 @@ func (s *Service) recordFailure(target *storage.ShopTarget, started time.Time, e
 }
 
 func (s *Service) notifyFailure(ctx context.Context, target *storage.ShopTarget, err error) {
-	if s.dispatcher == nil || err == nil || target == nil || !target.NotifyEnabled {
+	if s.dispatcher == nil || err == nil || target == nil {
 		return
 	}
-	if !s.hasMatchingWatchRule(target.ID, storage.ShopChangeMonitorFailed, nil, "", "") {
+	rules, ruleErr := s.globalWatchRules()
+	if ruleErr != nil {
+		if s.log != nil {
+			s.log.Warn("list global shop watch rules failed", "err", ruleErr)
+		}
+		return
+	}
+	if !hasMatchingGlobalWatchRule(rules, storage.ShopChangeMonitorFailed, nil, "", "") {
 		return
 	}
 	if dispatchErr := s.dispatcher.Dispatch(ctx, notify.Message{
@@ -933,10 +942,14 @@ func (s *Service) notifyFailure(ctx context.Context, target *storage.ShopTarget,
 }
 
 func (s *Service) dispatchChanges(ctx context.Context, target *storage.ShopTarget, info *shopprovider.ShopInfo, changes []storage.ShopGoodsChangeLog) error {
-	if s.dispatcher == nil || target == nil || !target.NotifyEnabled || len(changes) == 0 {
+	if s.dispatcher == nil || target == nil || len(changes) == 0 {
 		return nil
 	}
-	changes = s.filterWatchRuleChanges(target.ID, changes)
+	rules, err := s.globalWatchRules()
+	if err != nil {
+		return err
+	}
+	changes = s.filterGlobalWatchRuleChanges(rules, changes)
 	if len(changes) == 0 {
 		return nil
 	}
@@ -980,53 +993,41 @@ func (s *Service) dispatchChanges(ctx context.Context, target *storage.ShopTarge
 	return firstErr
 }
 
-func (s *Service) filterWatchRuleChanges(targetID uint, changes []storage.ShopGoodsChangeLog) []storage.ShopGoodsChangeLog {
+func (s *Service) globalWatchRules() ([]storage.ShopWatchRule, error) {
 	if s.watchRules == nil {
-		return nil
+		return nil, nil
 	}
-	rules, err := s.watchRules.ListEnabledByTarget(targetID)
-	if err != nil || len(rules) == 0 {
-		if err != nil && s.log != nil {
-			s.log.Warn("list shop watch rules failed", "target_id", targetID, "err", err)
-		}
+	return s.watchRules.ListEnabledGlobal()
+}
+
+func (s *Service) filterGlobalWatchRuleChanges(rules []storage.ShopWatchRule, changes []storage.ShopGoodsChangeLog) []storage.ShopGoodsChangeLog {
+	if len(rules) == 0 || len(changes) == 0 {
 		return nil
 	}
 	out := make([]storage.ShopGoodsChangeLog, 0, len(changes))
 	snapshotCache := map[string]*storage.ShopGoodsSnapshot{}
 	for _, change := range changes {
 		var snapshot *storage.ShopGoodsSnapshot
+		cacheKey := fmt.Sprintf("%d:%s", change.TargetID, change.GoodsKey)
 		if strings.TrimSpace(change.GoodsKey) != "" {
-			if cached, ok := snapshotCache[change.GoodsKey]; ok {
+			if cached, ok := snapshotCache[cacheKey]; ok {
 				snapshot = cached
 			} else if s.goods != nil {
-				found, err := s.goods.FindSnapshot(targetID, change.GoodsKey)
+				found, err := s.goods.FindSnapshot(change.TargetID, change.GoodsKey)
 				if err == nil {
 					snapshot = found
 				}
-				snapshotCache[change.GoodsKey] = snapshot
+				snapshotCache[cacheKey] = snapshot
 			}
 		}
-		for _, rule := range rules {
-			if storage.ShopWatchRuleMatchesChange(rule, change.Event, snapshot, change.GoodsKey, change.GoodsName) {
-				out = append(out, change)
-				break
-			}
+		if hasMatchingGlobalWatchRule(rules, change.Event, snapshot, change.GoodsKey, change.GoodsName) {
+			out = append(out, change)
 		}
 	}
 	return out
 }
 
-func (s *Service) hasMatchingWatchRule(targetID uint, event storage.ShopGoodsChangeEvent, snapshot *storage.ShopGoodsSnapshot, goodsKey, goodsName string) bool {
-	if s.watchRules == nil {
-		return false
-	}
-	rules, err := s.watchRules.ListEnabledByTarget(targetID)
-	if err != nil {
-		if s.log != nil {
-			s.log.Warn("list shop watch rules failed", "target_id", targetID, "err", err)
-		}
-		return false
-	}
+func hasMatchingGlobalWatchRule(rules []storage.ShopWatchRule, event storage.ShopGoodsChangeEvent, snapshot *storage.ShopGoodsSnapshot, goodsKey, goodsName string) bool {
 	for _, rule := range rules {
 		if storage.ShopWatchRuleMatchesChange(rule, event, snapshot, goodsKey, goodsName) {
 			return true

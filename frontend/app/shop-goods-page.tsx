@@ -46,7 +46,6 @@ type AddShopForm = {
   base_url: string
   token: string
   stock_threshold: number
-  notify_enabled: boolean
   proxy_enabled: boolean
 }
 
@@ -56,7 +55,6 @@ const emptyAddShopForm: AddShopForm = {
   base_url: "",
   token: "",
   stock_threshold: 1,
-  notify_enabled: false,
   proxy_enabled: false,
 }
 
@@ -354,7 +352,6 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
           base_url: addShopForm.base_url,
           token: addShopForm.token,
           monitor_enabled: true,
-          notify_enabled: addShopForm.notify_enabled,
           scope_mode: "all",
           goods_types: ["card"],
           category_ids: [],
@@ -1097,13 +1094,7 @@ function AddShopDialog({
             />
           </Field>
         </div>
-        <div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3 sm:grid-cols-2">
-          <CheckRow
-            id="shop-goods-add-notify"
-            label="启用通知"
-            checked={form.notify_enabled}
-            onChange={(checked) => onFormChange({ ...form, notify_enabled: checked })}
-          />
+        <div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3">
           <CheckRow
             id="shop-goods-add-proxy"
             label="使用代理"

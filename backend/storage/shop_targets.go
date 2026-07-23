@@ -340,6 +340,17 @@ func (r *ShopWatchRules) ListEnabledByTarget(targetID uint) ([]ShopWatchRule, er
 	return list, nil
 }
 
+// ListGlobal returns rules that apply to every shop. TargetID=0 is reserved for
+// this global scope so existing per-shop rows remain readable for compatibility.
+func (r *ShopWatchRules) ListGlobal() ([]ShopWatchRule, error) {
+	return r.ListByTarget(0)
+}
+
+// ListEnabledGlobal returns enabled rules that apply to every shop.
+func (r *ShopWatchRules) ListEnabledGlobal() ([]ShopWatchRule, error) {
+	return r.ListEnabledByTarget(0)
+}
+
 func (r *ShopWatchRules) CountByTargets(targetIDs []uint) (map[uint]int, error) {
 	out := make(map[uint]int, len(targetIDs))
 	if len(targetIDs) == 0 {
@@ -435,6 +446,18 @@ func shopWatchRuleMatchesEvent(rule ShopWatchRule, event ShopGoodsChangeEvent) b
 }
 
 func shopWatchRuleMatchesSnapshot(rule ShopWatchRule, snapshot ShopGoodsSnapshot) bool {
+	haystack := strings.ToLower(strings.Join([]string{
+		snapshot.Name,
+		snapshot.GoodsKey,
+		snapshot.CategoryName,
+	}, " "))
+	// Exclusions always win, including over an explicit goods key or category match.
+	for _, keyword := range parseJSONStrings(rule.ExcludeKeywordsJSON) {
+		if strings.Contains(haystack, strings.ToLower(keyword)) {
+			return false
+		}
+	}
+
 	hasCriteria := false
 	goodsKey := strings.TrimSpace(snapshot.GoodsKey)
 	goodsKeys := parseJSONStrings(rule.GoodsKeysJSON)
@@ -468,11 +491,6 @@ func shopWatchRuleMatchesSnapshot(rule ShopWatchRule, snapshot ShopGoodsSnapshot
 		}
 	}
 
-	haystack := strings.ToLower(strings.Join([]string{
-		snapshot.Name,
-		snapshot.GoodsKey,
-		snapshot.CategoryName,
-	}, " "))
 	keywords := parseJSONStrings(rule.KeywordsJSON)
 	if len(keywords) > 0 {
 		hasCriteria = true
@@ -506,10 +524,14 @@ func applyShopWatchRuleFilter(q *gorm.DB, rule ShopWatchRule) *gorm.DB {
 		clauses = append(clauses, "(name LIKE ? OR goods_key LIKE ? OR category_name LIKE ?)")
 		args = append(args, like, like, like)
 	}
-	if len(clauses) == 0 {
-		return q
+	if len(clauses) > 0 {
+		q = q.Where("("+strings.Join(clauses, " OR ")+")", args...)
 	}
-	return q.Where(strings.Join(clauses, " OR "), args...)
+	for _, keyword := range parseJSONStrings(rule.ExcludeKeywordsJSON) {
+		like := "%" + keyword + "%"
+		q = q.Where("NOT (name LIKE ? OR goods_key LIKE ? OR category_name LIKE ?)", like, like, like)
+	}
+	return q
 }
 
 func parseJSONStrings(raw string) []string {
@@ -612,7 +634,10 @@ func (r *ShopGoods) ListFirstMatchingWatchRule(rule ShopWatchRule, limit int) ([
 	if limit <= 0 {
 		limit = 10
 	}
-	q := r.db.Model(&ShopGoodsSnapshot{}).Where("target_id = ?", rule.TargetID)
+	q := r.db.Model(&ShopGoodsSnapshot{})
+	if rule.TargetID != 0 {
+		q = q.Where("target_id = ?", rule.TargetID)
+	}
 	q = applyShopWatchRuleFilter(q, rule)
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
