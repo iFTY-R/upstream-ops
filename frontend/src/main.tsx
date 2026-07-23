@@ -1,4 +1,4 @@
-import { lazy, StrictMode, Suspense } from 'react'
+import { lazy, StrictMode, Suspense, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Route, Routes, useLocation } from 'react-router-dom'
 import '@fontsource-variable/geist'
@@ -10,6 +10,8 @@ import { AddChannelProvider } from '@/lib/add-channel-context'
 import { AuthGate } from '@/components/auth/auth-gate'
 import { AppShell } from '@/components/app-shell'
 import { Toaster } from '@/components/ui/sonner'
+import { documentTitleForPath } from '@/lib/document-title'
+import { useAppVersion } from '@/lib/queries'
 import '@/app/globals.css'
 
 // Operational screens are independent routes. Load them on demand so the dashboard does not pay for every tool up front.
@@ -52,6 +54,17 @@ function Application() {
   const isPublicShopGoods = location.pathname.replace(/\/+$/, "") === "/shop-goods" && status === "anonymous"
 
   if (!isPublicShopGoods) return <ProtectedApplication />
+
+  return <PublicShopGoodsApplication />
+}
+
+function PublicShopGoodsApplication() {
+  const appVersion = useAppVersion()
+  const appTitle = appVersion.data?.title?.trim() || 'UpstreamOps'
+
+  useEffect(() => {
+    document.title = documentTitleForPath('/shop-goods', appTitle)
+  }, [appTitle])
 
   return (
     <div className="min-h-screen bg-background">

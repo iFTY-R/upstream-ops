@@ -15,6 +15,7 @@ import { useTriggerRefresh } from "@/lib/refresh-context"
 import { useAppVersion, useChannels } from "@/lib/queries"
 import type { AppVersion } from "@/lib/api-types"
 import { relativeTime } from "@/lib/format"
+import { documentTitleForPath } from "@/lib/document-title"
 import { toast } from "sonner"
 
 export function MonitorHeader() {
@@ -50,8 +51,8 @@ export function MonitorHeader() {
   useEffect(() => setMounted(true), [])
 
   useEffect(() => {
-    document.title = appTitle
-  }, [appTitle])
+    document.title = documentTitleForPath(location.pathname, appTitle)
+  }, [appTitle, location.pathname])
 
   /**
    * 找出所有渠道中最近一次采集时间——这是"上次采集"展示的依据，
