@@ -223,6 +223,9 @@ export default function ShopsPage() {
   const [goodsPage, setGoodsPage] = useState(1)
   const [changesPage, setChangesPage] = useState(1)
   const [logsPage, setLogsPage] = useState(1)
+  const [goodsPageSize, setGoodsPageSize] = useState(initialGoodsPreferences.goodsPageSize)
+  const [changesPageSize, setChangesPageSize] = useState(initialGoodsPreferences.changesPageSize)
+  const [monitorLogsPageSize, setMonitorLogsPageSize] = useState(initialGoodsPreferences.monitorLogsPageSize)
   const [selectedCategoryID, setSelectedCategoryID] = useState<number | null>(() => {
     const targetID = initialGoodsPreferences.selectedTargetID
     return targetID == null ? null : initialGoodsPreferences.categoryIDs[String(targetID)] ?? null
@@ -263,11 +266,11 @@ export default function ShopsPage() {
   const goodsSearchDirty = normalizeTextFilter(goodsKeyword) !== appliedGoodsKeyword
     || normalizeTextFilter(goodsExcludeKeyword) !== appliedGoodsExcludeKeyword
   const goodsSearchActive = appliedGoodsKeyword.trim() !== "" || appliedGoodsExcludeKeyword.trim() !== ""
-  const goods = useShopGoods(selectedID, goodsPage, 25, goodsFilters, true)
+  const goods = useShopGoods(selectedID, goodsPage, goodsPageSize, goodsFilters, true)
   const snapshotCategories = useShopSnapshotCategories(selectedID)
   const globalWatchRules = useGlobalShopWatchRules()
-  const changes = useShopChangeLogs(selectedID, changesPage, 20)
-  const monitorLogs = useShopMonitorLogs(selectedID, logsPage, 20)
+  const changes = useShopChangeLogs(selectedID, changesPage, changesPageSize)
+  const monitorLogs = useShopMonitorLogs(selectedID, logsPage, monitorLogsPageSize)
   const shopList = targets.data ?? emptyShopTargets
   const selected = shopList.find((target) => target.id === selectedID) ?? null
   const selectedIndex = selected == null ? -1 : shopList.findIndex((target) => target.id === selected.id)
@@ -307,8 +310,11 @@ export default function ShopsPage() {
       categoryIDs,
       sorts,
       shopListScrollTop: shopListScrollTopRef.current,
+      goodsPageSize,
+      changesPageSize,
+      monitorLogsPageSize,
     })
-  }, [appliedGoodsExcludeKeyword, appliedGoodsKeyword, categoryIDs, goodsStatus, inStockOnly, selectedID, sorts])
+  }, [appliedGoodsExcludeKeyword, appliedGoodsKeyword, categoryIDs, changesPageSize, goodsPageSize, goodsStatus, inStockOnly, monitorLogsPageSize, selectedID, sorts])
 
   useEffect(() => {
     if (!goods.data || goods.error) return
@@ -879,6 +885,7 @@ export default function ShopsPage() {
             categoriesLoading={snapshotCategories.loading}
             rows={goods.data?.items ?? []}
             page={goods.data?.page ?? goodsPage}
+            pageSize={goodsPageSize}
             pages={goods.data?.pages ?? 1}
             total={goods.data?.total ?? 0}
             selectedCategoryID={selectedCategoryID}
@@ -906,23 +913,37 @@ export default function ShopsPage() {
             onRefreshGoods={refreshGoodsStock}
             onWatchGoods={watchGoodsGlobally}
             onPage={setGoodsPage}
+            onPageSize={(value) => {
+              setGoodsPageSize(value)
+              setGoodsPage(1)
+            }}
           />
           <ChangePanel
             loading={changes.loading}
             rows={changes.data?.items ?? []}
             page={changes.data?.page ?? changesPage}
+            pageSize={changesPageSize}
             pages={changes.data?.pages ?? 1}
             total={changes.data?.total ?? 0}
             onLocateGoods={locateGoodsFromChange}
             onPage={setChangesPage}
+            onPageSize={(value) => {
+              setChangesPageSize(value)
+              setChangesPage(1)
+            }}
           />
           <MonitorLogPanel
             loading={monitorLogs.loading}
             rows={monitorLogs.data?.items ?? []}
             page={monitorLogs.data?.page ?? logsPage}
+            pageSize={monitorLogsPageSize}
             pages={monitorLogs.data?.pages ?? 1}
             total={monitorLogs.data?.total ?? 0}
             onPage={setLogsPage}
+            onPageSize={(value) => {
+              setMonitorLogsPageSize(value)
+              setLogsPage(1)
+            }}
           />
         </div>
       </div>
@@ -1138,6 +1159,7 @@ function GoodsPanel({
   categoriesLoading,
   rows,
   page,
+  pageSize,
   pages,
   total,
   selectedCategoryID,
@@ -1163,6 +1185,7 @@ function GoodsPanel({
   onRefreshGoods,
   onWatchGoods,
   onPage,
+  onPageSize,
 }: {
   target: ShopTarget | null
   loading: boolean
@@ -1170,6 +1193,7 @@ function GoodsPanel({
   categoriesLoading: boolean
   rows: ShopGoodsSnapshot[]
   page: number
+  pageSize: number
   pages: number
   total: number
   selectedCategoryID: number | null
@@ -1195,6 +1219,7 @@ function GoodsPanel({
   onRefreshGoods: (row: ShopGoodsSnapshot) => void
   onWatchGoods: (row: ShopGoodsSnapshot) => void
   onPage: (page: number) => void
+  onPageSize: (pageSize: number) => void
 }) {
   const allCount = categories.reduce((sum, category) => sum + category.goods_count, 0)
   const activeFilters = selectedCategoryID !== null || status !== "all" || sort !== "category" || searchActive
@@ -1401,7 +1426,7 @@ function GoodsPanel({
           </TableBody>
         </Table>
       </div>
-      <Pager page={page} pages={pages} onPage={onPage} />
+      <Pager page={page} pageSize={pageSize} pages={pages} onPage={onPage} onPageSize={onPageSize} />
     </Card>
   )
 }
@@ -1451,18 +1476,22 @@ function ChangePanel({
   loading,
   rows,
   page,
+  pageSize,
   pages,
   total,
   onLocateGoods,
   onPage,
+  onPageSize,
 }: {
   loading: boolean
   rows: ShopGoodsChangeLog[]
   page: number
+  pageSize: number
   pages: number
   total: number
   onLocateGoods: (row: ShopGoodsChangeLog) => void
   onPage: (page: number) => void
+  onPageSize: (pageSize: number) => void
 }) {
   return (
     <Card className="overflow-hidden">
@@ -1505,7 +1534,7 @@ function ChangePanel({
           </TableBody>
         </Table>
       </div>
-      <Pager page={page} pages={pages} onPage={onPage} />
+      <Pager page={page} pageSize={pageSize} pages={pages} onPage={onPage} onPageSize={onPageSize} />
     </Card>
   )
 }
@@ -1514,16 +1543,20 @@ function MonitorLogPanel({
   loading,
   rows,
   page,
+  pageSize,
   pages,
   total,
   onPage,
+  onPageSize,
 }: {
   loading: boolean
   rows: ShopMonitorLog[]
   page: number
+  pageSize: number
   pages: number
   total: number
   onPage: (page: number) => void
+  onPageSize: (pageSize: number) => void
 }) {
   return (
     <Card className="overflow-hidden">
@@ -1568,16 +1601,46 @@ function MonitorLogPanel({
           </TableBody>
         </Table>
       </div>
-      <Pager page={page} pages={pages} onPage={onPage} />
+      <Pager page={page} pageSize={pageSize} pages={pages} onPage={onPage} onPageSize={onPageSize} />
     </Card>
   )
 }
 
-function Pager({ page, pages, onPage }: { page: number; pages: number; onPage: (page: number) => void }) {
-  if (pages <= 1) return null
+function Pager({
+  page,
+  pageSize,
+  pages,
+  onPage,
+  onPageSize,
+}: {
+  page: number
+  pageSize: number
+  pages: number
+  onPage: (page: number) => void
+  onPageSize: (pageSize: number) => void
+}) {
+  const pageSizeOptions = [10, 20, 25, 50, 100, 200]
+  const options = pageSizeOptions.includes(pageSize)
+    ? pageSizeOptions
+    : [...pageSizeOptions, pageSize].sort((a, b) => a - b)
   return (
-    <div className="flex items-center justify-end gap-2 border-t border-border p-3 text-xs text-muted-foreground">
-      <span>第 {page} / {pages} 页</span>
+    <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border p-3 text-xs text-muted-foreground">
+      <div className="flex items-center gap-1.5">
+        <span>每页</span>
+        <Select value={String(pageSize)} onValueChange={(value) => onPageSize(Number(value))}>
+          <SelectTrigger size="sm" className="h-8 w-20 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent align="end">
+            {options.map((option) => (
+              <SelectItem key={option} value={String(option)}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <span>第 {page} / {Math.max(pages, 1)} 页</span>
       <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>上一页</Button>
       <Button variant="outline" size="sm" disabled={page >= pages} onClick={() => onPage(page + 1)}>下一页</Button>
     </div>

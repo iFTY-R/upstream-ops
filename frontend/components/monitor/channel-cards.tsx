@@ -60,6 +60,12 @@ import { channelTypeLabel, decimal, formatRatio, money, relativeTime } from "@/l
 import { cn } from "@/lib/utils"
 import { syncAllChannelsStream, syncChannelStream, testLoginStream, type ProgressEvent } from "@/lib/sync-stream"
 import type { Channel, ChannelRedeemResult, RateSnapshot } from "@/lib/api-types"
+import {
+  channelPageSizeOptions,
+  readChannelCardsPreferences,
+  writeChannelCardsPreferences,
+  type ChannelPageSizePreference,
+} from "@/lib/pagination-preferences"
 import { ChannelFormDialog } from "@/components/monitor/channel-form-dialog"
 import { ChannelRedeemDialog } from "@/components/monitor/channel-redeem-dialog"
 import { ChannelRechargeDialog } from "@/components/monitor/channel-recharge-dialog"
@@ -69,10 +75,8 @@ import {
 } from "@/components/monitor/channel-subscription-usage-dialog"
 
 type Status = "healthy" | "low" | "failed" | "idle"
-type ChannelPageSize = 9 | 18 | 36 | 72 | 81 | "all"
+type ChannelPageSize = ChannelPageSizePreference
 type GroupSortMode = "channel-asc" | "channel-desc" | "ratio-asc" | "ratio-desc"
-
-const channelPageSizeOptions: ChannelPageSize[] = [9, 18, 36, 72, 81, "all"]
 
 function pageNumbers(currentPage: number, totalPages: number) {
   const first = Math.max(1, currentPage - 3)
@@ -543,8 +547,9 @@ export function ChannelCards() {
   const navigate = useNavigate()
   const { data: channels, loading: channelsLoading } = useChannels()
   const autoGroups = useAutoGroupPolicies()
+  const [initialPreferences] = useState(readChannelCardsPreferences)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState<ChannelPageSize>(9)
+  const [pageSize, setPageSize] = useState<ChannelPageSize>(initialPreferences.pageSize)
   const pageQuery = useChannelsPage(page, pageSize === "all" ? -1 : pageSize)
   const refresh = useTriggerRefresh()
   const { confirm, dialog: confirmDialog } = useConfirm()
@@ -602,6 +607,10 @@ export function ChannelCards() {
     if (pageSizeAll || loadedTotalPages == null) return
     setPage((prev) => Math.min(prev, Math.max(loadedTotalPages, 1)))
   }, [loadedTotalPages, pageSizeAll])
+
+  useEffect(() => {
+    writeChannelCardsPreferences({ pageSize })
+  }, [pageSize])
 
   function clearHideTimer(id: number) {
     const t = hideTimers.current.get(id)

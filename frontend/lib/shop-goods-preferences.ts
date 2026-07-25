@@ -53,6 +53,9 @@ export interface ShopsGoodsPreferences {
   categoryIDs: Record<string, number | null>
   sorts: Record<string, ShopGoodsSort>
   shopListScrollTop: number
+  goodsPageSize: number
+  changesPageSize: number
+  monitorLogsPageSize: number
 }
 
 const defaultAllShopGoodsPreferences: AllShopGoodsPreferences = {
@@ -82,6 +85,9 @@ const defaultShopsGoodsPreferences: ShopsGoodsPreferences = {
   categoryIDs: {},
   sorts: {},
   shopListScrollTop: 0,
+  goodsPageSize: 25,
+  changesPageSize: 20,
+  monitorLogsPageSize: 20,
 }
 
 function readObject(key: string): Record<string, unknown> | null {
@@ -145,6 +151,12 @@ function asPageSize(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 10 && value <= 200
     ? value
     : defaultAllShopGoodsPreferences.pageSize
+}
+
+function asPageSizeWithDefault(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 10 && value <= 200
+    ? value
+    : fallback
 }
 
 function asScrollTop(value: unknown): number {
@@ -245,6 +257,9 @@ export function readShopsGoodsPreferences(): ShopsGoodsPreferences {
     categoryIDs: asCategoryIDs(value.categoryIDs),
     sorts: asSorts(value.sorts),
     shopListScrollTop: asScrollTop(value.shopListScrollTop),
+    goodsPageSize: asPageSizeWithDefault(value.goodsPageSize, defaultShopsGoodsPreferences.goodsPageSize),
+    changesPageSize: asPageSizeWithDefault(value.changesPageSize, defaultShopsGoodsPreferences.changesPageSize),
+    monitorLogsPageSize: asPageSizeWithDefault(value.monitorLogsPageSize, defaultShopsGoodsPreferences.monitorLogsPageSize),
   }
 }
 
