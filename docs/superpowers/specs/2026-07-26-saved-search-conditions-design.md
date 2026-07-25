@@ -60,15 +60,31 @@ Use the existing public/authenticated split:
   - Public.
   - Returns cloud values for requested valid fields.
   - If `fields` is omitted, return all valid fields.
+  - Response shape:
+
+```json
+{
+  "data": [
+    {
+      "id": 1,
+      "field": "keyword",
+      "value": "abc",
+      "created_at": "2026-07-26T12:00:00Z",
+      "updated_at": "2026-07-26T12:00:00Z"
+    }
+  ]
+}
+```
+
 - `POST /api/search-conditions`
   - Authenticated mutation.
   - Body: `{ "field": "keyword", "value": "abc" }`.
-  - Returns the saved row.
+  - Returns the saved row in `{ "data": { ... } }`.
 - `DELETE /api/search-conditions/:id`
   - Authenticated mutation.
-  - Deletes one cloud row.
+  - Deletes one cloud row and returns `{ "data": { "deleted": true } }`.
 
-Mutation endpoints must require an authenticated subject from the auth middleware. If runtime auth is disabled or unavailable, they must not become public.
+Mutation endpoints must require an authenticated subject from the auth middleware. If runtime auth is disabled or unavailable, they must not become public; missing `authSubject` returns `401`.
 
 Cloud API failures should return normal JSON errors. The frontend will catch them and keep local search unaffected.
 
