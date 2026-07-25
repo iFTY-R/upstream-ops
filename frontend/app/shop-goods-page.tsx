@@ -13,18 +13,23 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { SearchHistoryInput } from "@/components/search-history-input"
 import { apiFetch } from "@/lib/api"
-import { useLatestShopSyncBatch, useShopGoodsOverview, useShopGoodsTargetOptions, useShopSyncBatchDetails } from "@/lib/queries"
+import { useAuth } from "@/lib/auth-context"
+import { useLatestShopSyncBatch, useSavedSearchConditions, useShopGoodsOverview, useShopGoodsTargetOptions, useShopSyncBatchDetails } from "@/lib/queries"
 import { dateTime, money, relativeTime } from "@/lib/format"
 import { useTriggerRefresh } from "@/lib/refresh-context"
 import {
+  forgetAllShopGoodsSearchHistory,
   readAllShopGoodsPreferences,
   readAllShopGoodsSearchHistory,
   rememberAllShopGoodsSearchQuery,
   type ShopGoodsStatusFilter,
   writeAllShopGoodsPreferences,
 } from "@/lib/shop-goods-preferences"
+import { deleteSavedSearchCondition, saveSavedSearchCondition, savedSearchConditionsForField } from "@/lib/search-conditions"
 import { cn } from "@/lib/utils"
 import type {
+  SavedSearchCondition,
+  SavedSearchConditionField,
   ShopGoodsListItem,
   ShopGoodsSort,
   ShopGoodsStatus,
@@ -118,7 +123,9 @@ function syncBatchDetail(batch: ShopSyncBatch) {
 }
 
 export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boolean }) {
+  const auth = useAuth()
   const targets = useShopGoodsTargetOptions(publicMode)
+  const savedSearchConditions = useSavedSearchConditions(["category_name", "keyword", "exclude_keyword"])
   const latestSyncBatch = useLatestShopSyncBatch(!publicMode)
   const [syncDetailsOpen, setSyncDetailsOpen] = useState(false)
   const syncBatchDetails = useShopSyncBatchDetails(latestSyncBatch.data?.id ?? null, !publicMode && syncDetailsOpen)
@@ -143,6 +150,7 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
   const [searchHistory, setSearchHistory] = useState(readAllShopGoodsSearchHistory)
   const [refreshingGoodsKey, setRefreshingGoodsKey] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [searchConditionBusy, setSearchConditionBusy] = useState<string | null>(null)
   const [addShopOpen, setAddShopOpen] = useState(false)
   const [addShopForm, setAddShopForm] = useState<AddShopForm>(emptyAddShopForm)
   const [syncJobs, setSyncJobs] = useState<Record<number, ShopSyncJob>>({})
@@ -178,6 +186,19 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
     || appliedKeyword.trim() !== ""
     || appliedExcludeKeyword.trim() !== ""
     || appliedCategoryName.trim() !== ""
+  const canManageSearchConditions = !publicMode && auth.status === "authenticated" && !auth.authDisabled
+  const savedCategoryNameConditions = useMemo(
+    () => savedSearchConditionsForField(savedSearchConditions.data, "category_name"),
+    [savedSearchConditions.data],
+  )
+  const savedKeywordConditions = useMemo(
+    () => savedSearchConditionsForField(savedSearchConditions.data, "keyword"),
+    [savedSearchConditions.data],
+  )
+  const savedExcludeKeywordConditions = useMemo(
+    () => savedSearchConditionsForField(savedSearchConditions.data, "exclude_keyword"),
+    [savedSearchConditions.data],
+  )
 
   useEffect(() => {
     writeAllShopGoodsPreferences({
@@ -428,6 +449,42 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
     if (!changed && page === 1) goods.refetch()
   }
 
+  function removeLocalSearchHistory(
+    field: "categoryName" | "keyword" | "excludeKeyword",
+    value: string,
+  ) {
+    setSearchHistory(forgetAllShopGoodsSearchHistory(field, value))
+  }
+
+  async function saveSearchCondition(field: SavedSearchConditionField, value: string) {
+    const text = normalizeTextFilter(value)
+    if (!text) return
+    setSearchConditionBusy(`save:${field}`)
+    try {
+      await saveSavedSearchCondition(field, text)
+      savedSearchConditions.refetch()
+      toast.success("搜索条件已保存到云端")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "保存云端条件失败")
+    } finally {
+      setSearchConditionBusy(null)
+    }
+  }
+
+  async function removeSavedSearchCondition(item: { id: number }) {
+    setSearchConditionBusy(`delete:${item.id}`)
+    try {
+      await deleteSavedSearchCondition(item.id)
+      savedSearchConditions.setData((savedSearchConditions.data ?? []).filter((row) => row.id !== item.id))
+      savedSearchConditions.refetch()
+      toast.success("云端条件已移除")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "移除云端条件失败")
+    } finally {
+      setSearchConditionBusy(null)
+    }
+  }
+
   async function refreshGoodsStock(row: ShopGoodsListItem) {
     const busyKey = `${row.target_id}:${row.goods_key}`
     setRefreshingGoodsKey(busyKey)
@@ -548,6 +605,12 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
               onHistorySelect={(value) => applyTextFilters({ categoryName: value })}
               placeholder="按分类名称筛选"
               history={searchHistory.categoryName}
+              cloudItems={savedCategoryNameConditions}
+              canSaveCloud={canManageSearchConditions}
+              cloudBusy={searchConditionBusy === "save:category_name"}
+              onSaveCloud={(value) => saveSearchCondition("category_name", value)}
+              onRemoveCloud={canManageSearchConditions ? removeSavedSearchCondition : undefined}
+              onRemoveHistory={(value) => removeLocalSearchHistory("categoryName", value)}
             />
             <SearchHistoryInput
               value={keyword}
@@ -557,6 +620,12 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
               onHistorySelect={(value) => applyTextFilters({ keyword: value })}
               placeholder="包含商品名或 Key"
               history={searchHistory.keyword}
+              cloudItems={savedKeywordConditions}
+              canSaveCloud={canManageSearchConditions}
+              cloudBusy={searchConditionBusy === "save:keyword"}
+              onSaveCloud={(value) => saveSearchCondition("keyword", value)}
+              onRemoveCloud={canManageSearchConditions ? removeSavedSearchCondition : undefined}
+              onRemoveHistory={(value) => removeLocalSearchHistory("keyword", value)}
             />
             <SearchHistoryInput
               value={excludeKeyword}
@@ -566,6 +635,12 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
               onHistorySelect={(value) => applyTextFilters({ excludeKeyword: value })}
               placeholder="排除商品名或 Key"
               history={searchHistory.excludeKeyword}
+              cloudItems={savedExcludeKeywordConditions}
+              canSaveCloud={canManageSearchConditions}
+              cloudBusy={searchConditionBusy === "save:exclude_keyword"}
+              onSaveCloud={(value) => saveSearchCondition("exclude_keyword", value)}
+              onRemoveCloud={canManageSearchConditions ? removeSavedSearchCondition : undefined}
+              onRemoveHistory={(value) => removeLocalSearchHistory("excludeKeyword", value)}
             />
             <Button
               type="button"

@@ -257,6 +257,15 @@ export interface ShopGoodsListItem {
 
 export type ShopGoodsStatus = "all" | "active" | "in_stock" | "removed" | "low_stock" | "out_of_stock"
 export type ShopGoodsSort = "category" | "stock_asc" | "stock_desc" | "price_asc" | "price_desc" | "last_seen_desc"
+export type SavedSearchConditionField = "keyword" | "exclude_keyword" | "category_name"
+
+export interface SavedSearchCondition {
+  id: number
+  field: SavedSearchConditionField
+  value: string
+  created_at: string
+  updated_at: string
+}
 
 export interface ShopSnapshotCategory {
   category_id: number

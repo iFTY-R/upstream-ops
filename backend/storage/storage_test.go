@@ -134,6 +134,51 @@ func TestShopSyncJobsLifecycle(t *testing.T) {
 	}
 }
 
+func TestSavedSearchConditionsMigrationAndUpsert(t *testing.T) {
+	db := openTestDB(t)
+	if !db.Migrator().HasTable(&SavedSearchCondition{}) {
+		t.Fatalf("saved search conditions table was not migrated")
+	}
+	if !db.Migrator().HasIndex(&SavedSearchCondition{}, "idx_saved_search_conditions_field_value") {
+		t.Fatalf("saved search conditions unique index was not migrated")
+	}
+
+	repo := NewSavedSearchConditions(db)
+	first, err := repo.Save(SavedSearchConditionKeyword, "Alpha")
+	if err != nil {
+		t.Fatalf("save first condition: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	second, err := repo.Save(SavedSearchConditionKeyword, " alpha ")
+	if err != nil {
+		t.Fatalf("save duplicate condition: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("duplicate save created a new row: first=%d second=%d", first.ID, second.ID)
+	}
+	if second.Value != "alpha" {
+		t.Fatalf("duplicate save value = %q, want trimmed latest value", second.Value)
+	}
+	if !second.UpdatedAt.After(first.UpdatedAt) {
+		t.Fatalf("duplicate save did not refresh recency: first=%s second=%s", first.UpdatedAt, second.UpdatedAt)
+	}
+
+	if _, err := repo.Save(SavedSearchConditionField("bad"), "value"); err == nil {
+		t.Fatalf("invalid field save should fail")
+	}
+	if _, err := repo.Save(SavedSearchConditionKeyword, "   "); err == nil {
+		t.Fatalf("empty value save should fail")
+	}
+
+	list, err := repo.List([]SavedSearchConditionField{SavedSearchConditionKeyword})
+	if err != nil {
+		t.Fatalf("list conditions: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != first.ID {
+		t.Fatalf("list = %#v, want the single upserted row", list)
+	}
+}
+
 func TestShopHistoryRetentionKeepsRecentAndActiveRecords(t *testing.T) {
 	db := openTestDB(t)
 	goods := NewShopGoods(db)

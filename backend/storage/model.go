@@ -531,6 +531,31 @@ type ShopSyncBatchItem struct {
 
 func (ShopSyncBatchItem) TableName() string { return "shop_sync_batch_items" }
 
+type SavedSearchConditionField string
+
+const (
+	SavedSearchConditionKeyword      SavedSearchConditionField = "keyword"
+	SavedSearchConditionExclude      SavedSearchConditionField = "exclude_keyword"
+	SavedSearchConditionCategoryName SavedSearchConditionField = "category_name"
+)
+
+var SavedSearchConditionFields = []SavedSearchConditionField{
+	SavedSearchConditionKeyword,
+	SavedSearchConditionExclude,
+	SavedSearchConditionCategoryName,
+}
+
+type SavedSearchCondition struct {
+	ID              uint                      `gorm:"primaryKey" json:"id"`
+	Field           SavedSearchConditionField `gorm:"size:32;not null;uniqueIndex:idx_saved_search_conditions_field_value" json:"field"`
+	Value           string                    `gorm:"size:512;not null" json:"value"`
+	NormalizedValue string                    `gorm:"size:512;not null;uniqueIndex:idx_saved_search_conditions_field_value" json:"-"`
+	CreatedAt       time.Time                 `json:"created_at"`
+	UpdatedAt       time.Time                 `json:"updated_at"`
+}
+
+func (SavedSearchCondition) TableName() string { return "saved_search_conditions" }
+
 type AutoGroupPolicy struct {
 	ID                            uint       `gorm:"primaryKey" json:"id"`
 	ChannelID                     uint       `gorm:"not null;uniqueIndex:idx_auto_group_policy_channel_target;index" json:"channel_id"`

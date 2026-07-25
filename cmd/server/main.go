@@ -103,6 +103,7 @@ func main() {
 	shopTargets := storage.NewShopTargets(db)
 	shopWatchRules := storage.NewShopWatchRules(db)
 	shopGoods := storage.NewShopGoods(db)
+	searchConditions := storage.NewSavedSearchConditions(db)
 	autoGroups := storage.NewAutoGroups(db)
 	announcements := storage.NewUpstreamAnnouncements(db)
 	rates := storage.NewRates(db)
@@ -179,30 +180,31 @@ func main() {
 	}
 
 	api.Register(router, &api.Deps{
-		DB:             db,
-		Cipher:         cipher,
-		Runtime:        runtimeMgr,
-		Channels:       channels,
-		Sessions:       authSessions,
-		Captchas:       captchas,
-		Notifies:       notifies,
-		ShopTargets:    shopTargets,
-		ShopWatchRules: shopWatchRules,
-		ShopGoods:      shopGoods,
-		ShopSyncRunner: shopSyncRunner,
-		AutoGroups:     autoGroups,
-		Announcements:  announcements,
-		Rates:          rates,
-		MonLogs:        monLogs,
-		ChannelSvc:     channelSvc,
-		UpstreamCap:    upstreamCapSvc,
-		UpstreamOps:    upstreamCapSvc,
-		Monitor:        monitorSvc,
-		Dispatcher:     dispatcher,
-		ShopMonitor:    shopMonitorSvc,
-		AutoGroup:      autoGroupSvc,
-		Log:            log,
-		Frontend:       frontendFS,
+		DB:               db,
+		Cipher:           cipher,
+		Runtime:          runtimeMgr,
+		Channels:         channels,
+		Sessions:         authSessions,
+		Captchas:         captchas,
+		Notifies:         notifies,
+		ShopTargets:      shopTargets,
+		ShopWatchRules:   shopWatchRules,
+		ShopGoods:        shopGoods,
+		SearchConditions: searchConditions,
+		ShopSyncRunner:   shopSyncRunner,
+		AutoGroups:       autoGroups,
+		Announcements:    announcements,
+		Rates:            rates,
+		MonLogs:          monLogs,
+		ChannelSvc:       channelSvc,
+		UpstreamCap:      upstreamCapSvc,
+		UpstreamOps:      upstreamCapSvc,
+		Monitor:          monitorSvc,
+		Dispatcher:       dispatcher,
+		ShopMonitor:      shopMonitorSvc,
+		AutoGroup:        autoGroupSvc,
+		Log:              log,
+		Frontend:         frontendFS,
 	})
 
 	srv := &http.Server{

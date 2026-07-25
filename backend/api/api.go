@@ -69,29 +69,30 @@ type upstreamAPIKeyService interface {
 
 // Deps 把所有 handler 需要的依赖打包传入。
 type Deps struct {
-	DB             *gorm.DB
-	Cipher         *crypto.Cipher
-	Runtime        *runtimeconfig.Manager
-	Channels       *storage.Channels
-	Sessions       *storage.AuthSessions
-	Captchas       *storage.Captchas
-	Notifies       *storage.Notifications
-	ShopTargets    *storage.ShopTargets
-	ShopWatchRules *storage.ShopWatchRules
-	ShopGoods      *storage.ShopGoods
-	ShopSyncRunner shopSyncJobRunner
-	AutoGroups     *storage.AutoGroups
-	Announcements  *storage.UpstreamAnnouncements
-	Rates          *storage.Rates
-	MonLogs        *storage.MonitorLogs
-	ChannelSvc     channelService
-	UpstreamCap    upstreamCapabilityService
-	UpstreamOps    any
-	Monitor        monitorService
-	Dispatcher     *notify.Dispatcher
-	ShopMonitor    *shopmonitor.Service
-	AutoGroup      *autogroup.Service
-	Log            *slog.Logger
+	DB               *gorm.DB
+	Cipher           *crypto.Cipher
+	Runtime          *runtimeconfig.Manager
+	Channels         *storage.Channels
+	Sessions         *storage.AuthSessions
+	Captchas         *storage.Captchas
+	Notifies         *storage.Notifications
+	ShopTargets      *storage.ShopTargets
+	ShopWatchRules   *storage.ShopWatchRules
+	ShopGoods        *storage.ShopGoods
+	SearchConditions *storage.SavedSearchConditions
+	ShopSyncRunner   shopSyncJobRunner
+	AutoGroups       *storage.AutoGroups
+	Announcements    *storage.UpstreamAnnouncements
+	Rates            *storage.Rates
+	MonLogs          *storage.MonitorLogs
+	ChannelSvc       channelService
+	UpstreamCap      upstreamCapabilityService
+	UpstreamOps      any
+	Monitor          monitorService
+	Dispatcher       *notify.Dispatcher
+	ShopMonitor      *shopmonitor.Service
+	AutoGroup        *autogroup.Service
+	Log              *slog.Logger
 
 	// Frontend 可选：传入嵌入的前端 dist 文件系统。nil 表示不挂载（本地开发用 vite dev server）。
 	Frontend fs.FS
@@ -113,7 +114,9 @@ func Register(r *gin.Engine, d *Deps) {
 	})
 
 	api := r.Group("/api")
-	registerPublicShopGoods(r.Group("/api/public"), d)
+	public := r.Group("/api/public")
+	registerPublicShopGoods(public, d)
+	registerPublicSearchConditions(public, d)
 	if d.Runtime != nil {
 		api.Use(d.Runtime.AuthMiddleware())
 	}
@@ -123,6 +126,7 @@ func Register(r *gin.Engine, d *Deps) {
 		registerChannels(api, d)
 		registerCaptchas(api, d)
 		registerNotifications(api, d)
+		registerSearchConditions(api, d)
 		registerShopTargets(api, d)
 		registerAutoGroups(api, d)
 		registerAnnouncements(api, d)

@@ -223,6 +223,22 @@ export function rememberAllShopGoodsSearchHistory(
   return rememberAllShopGoodsSearchQuery({ [field]: value })
 }
 
+export function forgetAllShopGoodsSearchHistory(
+  field: AllShopGoodsSearchHistoryField,
+  value: string,
+): AllShopGoodsSearchHistory {
+  const text = value.trim()
+  if (!text) return readAllShopGoodsSearchHistory()
+  const normalized = text.toLocaleLowerCase()
+  const current = readAllShopGoodsSearchHistory()
+  const next = {
+    ...current,
+    [field]: current[field].filter((item) => item.toLocaleLowerCase() !== normalized),
+  }
+  writeObject(allShopGoodsSearchHistoryKey, next)
+  return next
+}
+
 export function rememberAllShopGoodsSearchQuery(
   values: Partial<Record<AllShopGoodsSearchHistoryField, string | undefined>>,
 ): AllShopGoodsSearchHistory {

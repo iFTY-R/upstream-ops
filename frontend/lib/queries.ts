@@ -21,6 +21,8 @@ import type {
   RateChangeLogPage,
   RateSnapshot,
   PageResult,
+  SavedSearchCondition,
+  SavedSearchConditionField,
   ShopGoodsSort,
   ShopGoodsChangeLog,
   ShopGoodsStatus,
@@ -289,6 +291,12 @@ export function useShopTargets() {
 
 export function useShopGoodsTargetOptions(publicMode = false) {
   return useApi<ShopGoodsTargetOption[]>(publicMode ? "/public/shop-targets" : "/shop-targets")
+}
+
+export function useSavedSearchConditions(fields: SavedSearchConditionField[]) {
+  const q = new URLSearchParams()
+  if (fields.length > 0) q.set("fields", fields.join(","))
+  return useApi<SavedSearchCondition[]>(`/public/search-conditions?${q.toString()}`)
 }
 
 export function useShopWatchRules(targetID: number | null) {

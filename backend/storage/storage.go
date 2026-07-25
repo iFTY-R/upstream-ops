@@ -142,6 +142,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&ShopSyncJob{},
 		&ShopSyncBatch{},
 		&ShopSyncBatchItem{},
+		&SavedSearchCondition{},
 		&AutoGroupPolicy{},
 		&AutoGroupCandidate{},
 		&AutoGroupEvaluationLog{},

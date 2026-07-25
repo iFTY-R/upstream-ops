@@ -30,18 +30,23 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { GlobalShopWatchRulesDrawer, type GlobalShopWatchSeed } from "@/components/monitor/shop-watch-rules-drawer"
 import { SearchHistoryInput } from "@/components/search-history-input"
 import { apiFetch } from "@/lib/api"
-import { useGlobalShopWatchRules, useShopChangeLogs, useShopGoods, useShopMonitorLogs, useShopSnapshotCategories, useShopTargets } from "@/lib/queries"
+import { useAuth } from "@/lib/auth-context"
+import { useGlobalShopWatchRules, useSavedSearchConditions, useShopChangeLogs, useShopGoods, useShopMonitorLogs, useShopSnapshotCategories, useShopTargets } from "@/lib/queries"
 import { useTriggerRefresh } from "@/lib/refresh-context"
 import { money, relativeTime } from "@/lib/format"
 import {
+  forgetAllShopGoodsSearchHistory,
   readAllShopGoodsSearchHistory,
   readShopsGoodsPreferences,
   rememberAllShopGoodsSearchQuery,
   type ShopGoodsStatusFilter,
   writeShopsGoodsPreferences,
 } from "@/lib/shop-goods-preferences"
+import { deleteSavedSearchCondition, saveSavedSearchCondition, savedSearchConditionsForField } from "@/lib/search-conditions"
 import { cn } from "@/lib/utils"
 import type {
+  SavedSearchCondition,
+  SavedSearchConditionField,
   ShopGoodsChangeEvent,
   ShopGoodsChangeLog,
   ShopGoodsSort,
@@ -210,7 +215,9 @@ function normalizeListPositionInput(value: string, max: number) {
 }
 
 export default function ShopsPage() {
+  const auth = useAuth()
   const targets = useShopTargets()
+  const savedSearchConditions = useSavedSearchConditions(["keyword", "exclude_keyword"])
   const refresh = useTriggerRefresh()
   const [initialGoodsPreferences] = useState(readShopsGoodsPreferences)
   const initialGoodsKeyword = normalizeTextFilter(initialGoodsPreferences.keyword)
@@ -220,6 +227,7 @@ export default function ShopsPage() {
   const [formOpen, setFormOpen] = useState(false)
   const [form, setForm] = useState<ShopForm>(emptyForm)
   const [busy, setBusy] = useState<string | null>(null)
+  const [searchConditionBusy, setSearchConditionBusy] = useState<string | null>(null)
   const [goodsPage, setGoodsPage] = useState(1)
   const [changesPage, setChangesPage] = useState(1)
   const [logsPage, setLogsPage] = useState(1)
@@ -287,6 +295,15 @@ export default function ShopsPage() {
     [syncJobs],
   )
   const activeSyncJobKey = activeSyncJobs.map((job) => `${job.id}:${job.status}`).join(",")
+  const canManageSearchConditions = auth.status === "authenticated" && !auth.authDisabled
+  const savedKeywordConditions = useMemo(
+    () => savedSearchConditionsForField(savedSearchConditions.data, "keyword"),
+    [savedSearchConditions.data],
+  )
+  const savedExcludeKeywordConditions = useMemo(
+    () => savedSearchConditionsForField(savedSearchConditions.data, "exclude_keyword"),
+    [savedSearchConditions.data],
+  )
 
   function updateSelectedCategory(categoryID: number | null) {
     setSelectedCategoryID(categoryID)
@@ -567,6 +584,39 @@ export default function ShopsPage() {
     setGoodsPage(1)
     if (changed) setHighlightedGoodsKey(null)
     if (!changed && goodsPage === 1) goods.refetch()
+  }
+
+  function removeLocalSearchHistory(field: "keyword" | "excludeKeyword", value: string) {
+    setGoodsSearchHistory(forgetAllShopGoodsSearchHistory(field, value))
+  }
+
+  async function saveSearchCondition(field: SavedSearchConditionField, value: string) {
+    const text = normalizeTextFilter(value)
+    if (!text) return
+    setSearchConditionBusy(`save:${field}`)
+    try {
+      await saveSavedSearchCondition(field, text)
+      savedSearchConditions.refetch()
+      toast.success("搜索条件已保存到云端")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "保存云端条件失败")
+    } finally {
+      setSearchConditionBusy(null)
+    }
+  }
+
+  async function removeSavedSearchCondition(item: { id: number }) {
+    setSearchConditionBusy(`delete:${item.id}`)
+    try {
+      await deleteSavedSearchCondition(item.id)
+      savedSearchConditions.setData((savedSearchConditions.data ?? []).filter((row) => row.id !== item.id))
+      savedSearchConditions.refetch()
+      toast.success("云端条件已移除")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "移除云端条件失败")
+    } finally {
+      setSearchConditionBusy(null)
+    }
   }
 
   function handleGlobalWatchRulesChanged() {
@@ -896,6 +946,10 @@ export default function ShopsPage() {
             excludeKeyword={goodsExcludeKeyword}
             keywordHistory={goodsSearchHistory.keyword}
             excludeKeywordHistory={goodsSearchHistory.excludeKeyword}
+            keywordCloudItems={savedKeywordConditions}
+            excludeKeywordCloudItems={savedExcludeKeywordConditions}
+            canManageSearchConditions={canManageSearchConditions}
+            searchConditionBusy={searchConditionBusy}
             searchDirty={goodsSearchDirty}
             searchActive={goodsSearchActive}
             refreshingKey={busy?.startsWith("refresh-goods:") ? busy.slice("refresh-goods:".length) : null}
@@ -910,6 +964,9 @@ export default function ShopsPage() {
             }}
             onExcludeKeyword={setGoodsExcludeKeyword}
             onApplySearch={applyGoodsSearch}
+            onSaveSearchCondition={saveSearchCondition}
+            onRemoveSavedSearchCondition={removeSavedSearchCondition}
+            onRemoveLocalSearchHistory={removeLocalSearchHistory}
             onRefreshGoods={refreshGoodsStock}
             onWatchGoods={watchGoodsGlobally}
             onPage={setGoodsPage}
@@ -1170,6 +1227,10 @@ function GoodsPanel({
   excludeKeyword,
   keywordHistory,
   excludeKeywordHistory,
+  keywordCloudItems,
+  excludeKeywordCloudItems,
+  canManageSearchConditions,
+  searchConditionBusy,
   searchDirty,
   searchActive,
   refreshingKey,
@@ -1182,6 +1243,9 @@ function GoodsPanel({
   onKeyword,
   onExcludeKeyword,
   onApplySearch,
+  onSaveSearchCondition,
+  onRemoveSavedSearchCondition,
+  onRemoveLocalSearchHistory,
   onRefreshGoods,
   onWatchGoods,
   onPage,
@@ -1204,6 +1268,10 @@ function GoodsPanel({
   excludeKeyword: string
   keywordHistory: string[]
   excludeKeywordHistory: string[]
+  keywordCloudItems: SavedSearchCondition[]
+  excludeKeywordCloudItems: SavedSearchCondition[]
+  canManageSearchConditions: boolean
+  searchConditionBusy: string | null
   searchDirty: boolean
   searchActive: boolean
   refreshingKey: string | null
@@ -1216,6 +1284,9 @@ function GoodsPanel({
   onKeyword: (keyword: string) => void
   onExcludeKeyword: (keyword: string) => void
   onApplySearch: (nextValues?: Partial<{ keyword: string; excludeKeyword: string }>) => void
+  onSaveSearchCondition: (field: SavedSearchConditionField, value: string) => void
+  onRemoveSavedSearchCondition: (item: { id: number }) => void
+  onRemoveLocalSearchHistory: (field: "keyword" | "excludeKeyword", value: string) => void
   onRefreshGoods: (row: ShopGoodsSnapshot) => void
   onWatchGoods: (row: ShopGoodsSnapshot) => void
   onPage: (page: number) => void
@@ -1307,6 +1378,12 @@ function GoodsPanel({
             onHistorySelect={(value) => onApplySearch({ keyword: value })}
             placeholder={`包含商品名或 Key（${selectedCategoryName}，空格/逗号多词）`}
             history={keywordHistory}
+            cloudItems={keywordCloudItems}
+            canSaveCloud={canManageSearchConditions}
+            cloudBusy={searchConditionBusy === "save:keyword"}
+            onSaveCloud={(value) => onSaveSearchCondition("keyword", value)}
+            onRemoveCloud={canManageSearchConditions ? onRemoveSavedSearchCondition : undefined}
+            onRemoveHistory={(value) => onRemoveLocalSearchHistory("keyword", value)}
           />
           <SearchHistoryInput
             value={excludeKeyword}
@@ -1316,6 +1393,12 @@ function GoodsPanel({
             onHistorySelect={(value) => onApplySearch({ excludeKeyword: value })}
             placeholder="排除商品名或 Key（空格/逗号多词）"
             history={excludeKeywordHistory}
+            cloudItems={excludeKeywordCloudItems}
+            canSaveCloud={canManageSearchConditions}
+            cloudBusy={searchConditionBusy === "save:exclude_keyword"}
+            onSaveCloud={(value) => onSaveSearchCondition("exclude_keyword", value)}
+            onRemoveCloud={canManageSearchConditions ? onRemoveSavedSearchCondition : undefined}
+            onRemoveHistory={(value) => onRemoveLocalSearchHistory("excludeKeyword", value)}
           />
           <Button
             type="button"
