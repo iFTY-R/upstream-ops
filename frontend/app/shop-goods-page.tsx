@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { toast } from "sonner"
-import { ExternalLink, Filter, ListTree, Loader2, PackageSearch, Plus, RefreshCw, Search, ShoppingCart } from "lucide-react"
+import { ChevronDown, ChevronRight, ExternalLink, Filter, ListTree, Loader2, PackageSearch, Plus, RefreshCw, Search, ShoppingCart } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -31,6 +31,8 @@ import type {
   SavedSearchCondition,
   SavedSearchConditionField,
   ShopGoodsListItem,
+  ShopGoodsNameGroup,
+  ShopGoodsOverviewItem,
   ShopGoodsSort,
   ShopGoodsStatus,
   ShopRefreshGoodsResult,
@@ -82,6 +84,10 @@ const sortLabels: Record<ShopGoodsSort, string> = {
 
 function shopName(row: ShopGoodsListItem) {
   return row.target_name?.trim() || row.target_last_shop_name?.trim() || `店铺 #${row.target_id}`
+}
+
+function isShopGoodsNameGroup(item: ShopGoodsOverviewItem): item is ShopGoodsNameGroup {
+  return "group_key" in item
 }
 
 function normalizeTextFilter(value: string) {
@@ -140,6 +146,8 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
   const [status, setStatus] = useState<GoodsStatusFilter>(initialPreferences.status)
   const [inStockOnly, setInStockOnly] = useState(initialPreferences.inStockOnly)
   const [showGoodsKey, setShowGoodsKey] = useState(initialPreferences.showGoodsKey)
+  const [groupByName, setGroupByName] = useState(initialPreferences.groupByName)
+  const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(() => new Set())
   const [sort, setSort] = useState<ShopGoodsSort>(initialPreferences.sort)
   const [keyword, setKeyword] = useState(initialKeyword)
   const [excludeKeyword, setExcludeKeyword] = useState(initialExcludeKeyword)
@@ -164,14 +172,26 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
       keyword: appliedKeyword,
       exclude_keyword: appliedExcludeKeyword,
       sort,
+      group_by: groupByName ? "name" as const : undefined,
     }),
-    [appliedCategoryName, appliedExcludeKeyword, appliedKeyword, inStockOnly, sort, status, targetID],
+    [appliedCategoryName, appliedExcludeKeyword, appliedKeyword, groupByName, inStockOnly, sort, status, targetID],
   )
   const textFiltersDirty = normalizeTextFilter(keyword) !== appliedKeyword
     || normalizeTextFilter(excludeKeyword) !== appliedExcludeKeyword
     || normalizeTextFilter(categoryName) !== appliedCategoryName
   const goods = useShopGoodsOverview(page, pageSize, filters, true, publicMode)
-  const rows = goods.data?.items ?? []
+  const groups = useMemo(
+    () => groupByName ? (goods.data?.items ?? []).filter(isShopGoodsNameGroup) : [],
+    [goods.data?.items, groupByName],
+  )
+  const rows = useMemo(
+    () => groupByName ? [] : (goods.data?.items ?? []).filter((item): item is ShopGoodsListItem => !isShopGoodsNameGroup(item)),
+    [goods.data?.items, groupByName],
+  )
+  const visibleQuotes = useMemo(
+    () => groupByName ? groups.flatMap((group) => group.quotes) : rows,
+    [groupByName, groups, rows],
+  )
   const total = goods.data?.total ?? 0
   const pages = goods.data?.pages ?? 1
   const activeSyncJobs = useMemo(
@@ -206,13 +226,14 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
       status,
       inStockOnly,
       showGoodsKey,
+      groupByName,
       sort,
       keyword: appliedKeyword,
       excludeKeyword: appliedExcludeKeyword,
       categoryName: appliedCategoryName,
       pageSize,
     })
-  }, [appliedCategoryName, appliedExcludeKeyword, appliedKeyword, inStockOnly, pageSize, showGoodsKey, sort, status, targetID])
+  }, [appliedCategoryName, appliedExcludeKeyword, appliedKeyword, groupByName, inStockOnly, pageSize, showGoodsKey, sort, status, targetID])
 
   useEffect(() => {
     if (!goods.data || goods.error) return
@@ -307,6 +328,21 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
   function changePageSize(nextPageSize: number) {
     setPageSize(nextPageSize)
     setPage(1)
+  }
+
+  function changeGroupByName(next: boolean) {
+    setGroupByName(next)
+    setExpandedGroupKeys(new Set())
+    setPage(1)
+  }
+
+  function toggleGroup(groupKey: string) {
+    setExpandedGroupKeys((current) => {
+      const next = new Set(current)
+      if (next.has(groupKey)) next.delete(groupKey)
+      else next.add(groupKey)
+      return next
+    })
   }
 
   function refreshShopData() {
@@ -493,11 +529,11 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
         `/shop-targets/${row.target_id}/goods/${encodeURIComponent(row.goods_key)}/refresh`,
         { method: "POST" },
       )
-      if (goods.data) {
+      if (goods.data && !groupByName) {
         goods.setData({
           ...goods.data,
           items: goods.data.items.map((item) =>
-            item.target_id === row.target_id && item.goods_key === row.goods_key
+            !isShopGoodsNameGroup(item) && item.target_id === row.target_id && item.goods_key === row.goods_key
               ? { ...item, ...result.snapshot }
               : item,
           ),
@@ -520,10 +556,10 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
     return {
       shops: targets.data?.length ?? 0,
       total,
-      inStock: rows.filter((row) => !row.removed_at && row.stock_count > 0).length,
-      low: rows.filter((row) => !row.removed_at && row.target_stock_threshold > 0 && row.stock_count <= row.target_stock_threshold).length,
+      inStock: visibleQuotes.filter((row) => !row.removed_at && row.stock_count > 0).length,
+      low: visibleQuotes.filter((row) => !row.removed_at && row.target_stock_threshold > 0 && row.stock_count <= row.target_stock_threshold).length,
     }
-  }, [rows, targets.data?.length, total])
+  }, [targets.data?.length, total, visibleQuotes])
 
   return (
     <section className="space-y-4">
@@ -571,7 +607,7 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
             />
           ) : null}
           <Summary label="店铺" value={summary.shops} />
-          <Summary label="匹配商品" value={summary.total} />
+          <Summary label={groupByName ? "匹配商品组" : "匹配商品"} value={summary.total} />
           <Summary label="本页有库存" value={summary.inStock} />
           <Summary label="本页低库存" value={summary.low} warn={summary.low > 0} />
         </div>
@@ -585,15 +621,27 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
               <span>{"筛选和排序"}</span>
               {goods.loading ? <span>{"加载中..."}</span> : textFiltersDirty ? <span>{"有未应用搜索条件"}</span> : null}
             </div>
-            <div className="inline-flex items-center gap-2">
-              <Checkbox
-                id="shop-goods-show-key"
-                checked={showGoodsKey}
-                onCheckedChange={(checked) => setShowGoodsKey(checked === true)}
-              />
-              <label htmlFor="shop-goods-show-key" className="cursor-pointer select-none transition hover:text-foreground">
-                {"显示商品 Key"}
-              </label>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <div className="inline-flex items-center gap-2">
+                <Checkbox
+                  id="shop-goods-group-by-name"
+                  checked={groupByName}
+                  onCheckedChange={(checked) => changeGroupByName(checked === true)}
+                />
+                <label htmlFor="shop-goods-group-by-name" className="cursor-pointer select-none transition hover:text-foreground">
+                  {"同商品名分组"}
+                </label>
+              </div>
+              <div className="inline-flex items-center gap-2">
+                <Checkbox
+                  id="shop-goods-show-key"
+                  checked={showGoodsKey}
+                  onCheckedChange={(checked) => setShowGoodsKey(checked === true)}
+                />
+                <label htmlFor="shop-goods-show-key" className="cursor-pointer select-none transition hover:text-foreground">
+                  {"显示商品 Key"}
+                </label>
+              </div>
             </div>
           </div>
           <div className="grid gap-2 md:grid-cols-[repeat(3,minmax(0,1fr))_2.5rem]">
@@ -713,7 +761,28 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
                     {`商品加载失败：${goods.error}`}
                   </TableCell>
                 </TableRow>
-              ) : rows.map((row) => (
+              ) : groupByName ? groups.map((group) => {
+                const expanded = expandedGroupKeys.has(group.group_key)
+                return (
+                  <Fragment key={group.group_key}>
+                    <GoodsGroupRow
+                      group={group}
+                      expanded={expanded}
+                      onToggle={() => toggleGroup(group.group_key)}
+                    />
+                    {expanded ? group.quotes.map((row) => (
+                      <GoodsRow
+                        key={`${row.target_id}:${row.goods_key}`}
+                        row={row}
+                        refreshing={refreshingGoodsKey === `${row.target_id}:${row.goods_key}`}
+                        showGoodsKey={showGoodsKey}
+                        nested
+                        onRefreshStock={publicMode ? undefined : refreshGoodsStock}
+                      />
+                    )) : null}
+                  </Fragment>
+                )
+              }) : rows.map((row) => (
                 <GoodsRow
                   key={row.id}
                   row={row}
@@ -722,10 +791,12 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
                   onRefreshStock={publicMode ? undefined : refreshGoodsStock}
                 />
               ))}
-              {!goods.error && rows.length === 0 ? (
+              {!goods.error && (groupByName ? groups.length === 0 : rows.length === 0) ? (
                 <TableRow>
                   <TableCell colSpan={8} className="h-24 text-center text-sm text-muted-foreground">
-                    {activeFilters ? "当前筛选条件下没有商品。" : "暂无商品快照，先同步店铺。"}
+                    {activeFilters
+                      ? groupByName ? "当前筛选条件下没有商品组。" : "当前筛选条件下没有商品。"
+                      : "暂无商品快照，先同步店铺。"}
                   </TableCell>
                 </TableRow>
               ) : null}
@@ -737,6 +808,7 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
           pageSize={pageSize}
           pages={pages}
           total={total}
+          itemLabel={groupByName ? "商品组" : undefined}
           disabled={goods.loading}
           onPageChange={setPage}
           onPageSizeChange={changePageSize}
@@ -767,21 +839,71 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
   )
 }
 
+function GoodsGroupRow({
+  group,
+  expanded,
+  onToggle,
+}: {
+  group: ShopGoodsNameGroup
+  expanded: boolean
+  onToggle: () => void
+}) {
+  const priceRange = group.min_price === group.max_price
+    ? money(group.min_price)
+    : `${money(group.min_price)} 至 ${money(group.max_price)}`
+  return (
+    <TableRow className="bg-muted/35 hover:bg-muted/50">
+      <TableCell>
+        <span className="whitespace-nowrap font-medium tabular-nums">{group.shop_count} 家店铺</span>
+      </TableCell>
+      <TableCell>
+        <div className="min-w-0">
+          <div className="line-clamp-2 whitespace-normal break-words font-semibold leading-5" title={group.name}>
+            {group.name}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">{group.quote_count} 个报价</div>
+        </div>
+      </TableCell>
+      <TableCell className="text-muted-foreground">同商品名</TableCell>
+      <TableCell className="whitespace-nowrap font-medium tabular-nums">{priceRange}</TableCell>
+      <TableCell className="font-semibold tabular-nums">{group.total_stock}</TableCell>
+      <TableCell>汇总</TableCell>
+      <TableCell>{relativeTime(group.latest_seen_at)}</TableCell>
+      <TableCell>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="size-7"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          aria-label={expanded ? `收起 ${group.name}` : `展开 ${group.name}`}
+          title={expanded ? "收起报价" : "展开报价"}
+        >
+          {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+        </Button>
+      </TableCell>
+    </TableRow>
+  )
+}
+
 function GoodsRow({
   row,
   refreshing,
   showGoodsKey,
+  nested = false,
   onRefreshStock,
 }: {
   row: ShopGoodsListItem
   refreshing: boolean
   showGoodsKey: boolean
+  nested?: boolean
   onRefreshStock?: (row: ShopGoodsListItem) => void
 }) {
   const canBuy = !row.removed_at && row.stock_count > 0 && row.link
   const low = !row.removed_at && row.target_stock_threshold > 0 && row.stock_count <= row.target_stock_threshold
   return (
-    <TableRow className={cn(row.removed_at && "opacity-50")}>
+    <TableRow className={cn(nested && "bg-muted/10", row.removed_at && "opacity-50")}>
       <TableCell>
         <div className="min-w-0">
           <div className="truncate font-medium" title={shopName(row)}>{shopName(row)}</div>

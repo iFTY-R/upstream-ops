@@ -626,6 +626,34 @@ type ShopGoodsWithTarget struct {
 	TargetStockThreshold int    `gorm:"column:target_stock_threshold" json:"target_stock_threshold"`
 }
 
+type ShopGoodsNameGroup struct {
+	GroupKey     string                `gorm:"column:group_key" json:"group_key"`
+	Name         string                `gorm:"-" json:"name"`
+	ShopCount    int64                 `gorm:"column:shop_count" json:"shop_count"`
+	QuoteCount   int64                 `gorm:"column:quote_count" json:"quote_count"`
+	TotalStock   int64                 `gorm:"column:total_stock" json:"total_stock"`
+	MinPrice     float64               `gorm:"column:min_price" json:"min_price"`
+	MaxPrice     float64               `gorm:"column:max_price" json:"max_price"`
+	LatestSeenAt time.Time             `gorm:"column:latest_seen_at" json:"latest_seen_at"`
+	Quotes       []ShopGoodsWithTarget `gorm:"-" json:"quotes"`
+}
+
+type shopGoodsQuoteWithGroupKey struct {
+	ShopGoodsWithTarget
+	GroupKey string `gorm:"column:group_key"`
+}
+
+const (
+	shopGoodsNameGroupKeyExpr = "COALESCE(NULLIF(LOWER(TRIM(s.name)), ''), LOWER(TRIM(s.goods_key)))"
+	shopGoodsWithTargetSelect = `s.*,
+		t.name AS target_name,
+		t.last_shop_name AS target_last_shop_name,
+		t.site_url AS target_site_url,
+		t.monitor_enabled AS target_monitor_enabled,
+		t.notify_enabled AS target_notify_enabled,
+		t.stock_threshold AS target_stock_threshold`
+)
+
 type ShopSnapshotCategory struct {
 	CategoryID      int64  `json:"category_id"`
 	CategoryName    string `json:"category_name"`
@@ -708,16 +736,7 @@ func (r *ShopGoods) ListAllPageFiltered(page, pageSize int, filter ShopGoodsFilt
 	if pageSize <= 0 {
 		pageSize = 20
 	}
-	q := r.db.Table("shop_goods_snapshots AS s").
-		Select(`s.*,
-			t.name AS target_name,
-			t.last_shop_name AS target_last_shop_name,
-			t.site_url AS target_site_url,
-			t.monitor_enabled AS target_monitor_enabled,
-			t.notify_enabled AS target_notify_enabled,
-			t.stock_threshold AS target_stock_threshold`).
-		Joins("JOIN shop_targets AS t ON t.id = s.target_id")
-	q = applyShopGoodsFilterQualified(q, filter, "s", true)
+	q := allShopGoodsFilteredQuery(r.db, filter).Select(shopGoodsWithTargetSelect)
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -730,6 +749,148 @@ func (r *ShopGoods) ListAllPageFiltered(page, pageSize int, filter ShopGoodsFilt
 		return nil, 0, err
 	}
 	return list, total, nil
+}
+
+func (r *ShopGoods) ListAllNameGroupsPageFiltered(page, pageSize int, filter ShopGoodsFilter) ([]ShopGoodsNameGroup, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	var total int64
+	if err := allShopGoodsFilteredQuery(r.db, filter).
+		Select("COUNT(DISTINCT " + shopGoodsNameGroupKeyExpr + ")").
+		Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	groups := make([]ShopGoodsNameGroup, 0, pageSize)
+	groupQuery := allShopGoodsFilteredQuery(r.db, filter).
+		Select(shopGoodsNameGroupKeyExpr + " AS group_key").
+		Group(shopGoodsNameGroupKeyExpr)
+	if err := applyShopGoodsNameGroupSort(groupQuery, filter.Sort).
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
+		Scan(&groups).Error; err != nil {
+		return nil, 0, err
+	}
+	if len(groups) == 0 {
+		return groups, total, nil
+	}
+
+	groupKeys := make([]string, len(groups))
+	groupIndexes := make(map[string]int, len(groups))
+	groupShopIDs := make([]map[uint]struct{}, len(groups))
+	for i := range groups {
+		groupKeys[i] = groups[i].GroupKey
+		groupIndexes[groups[i].GroupKey] = i
+		groupShopIDs[i] = make(map[uint]struct{})
+		groups[i].Quotes = make([]ShopGoodsWithTarget, 0)
+	}
+
+	quotes := make([]shopGoodsQuoteWithGroupKey, 0)
+	quoteQuery := allShopGoodsFilteredQuery(r.db, filter).
+		Select(shopGoodsWithTargetSelect+", "+shopGoodsNameGroupKeyExpr+" AS group_key").
+		Where(shopGoodsNameGroupKeyExpr+" IN ?", groupKeys)
+	if err := applyShopGoodsNameGroupQuoteSort(quoteQuery, filter.Sort).Find(&quotes).Error; err != nil {
+		return nil, 0, err
+	}
+	for _, quote := range quotes {
+		if index, ok := groupIndexes[quote.GroupKey]; ok {
+			group := &groups[index]
+			group.Quotes = append(group.Quotes, quote.ShopGoodsWithTarget)
+			groupShopIDs[index][quote.TargetID] = struct{}{}
+			group.QuoteCount++
+			group.TotalStock += int64(quote.StockCount)
+			if group.QuoteCount == 1 || quote.Price < group.MinPrice {
+				group.MinPrice = quote.Price
+			}
+			if group.QuoteCount == 1 || quote.Price > group.MaxPrice {
+				group.MaxPrice = quote.Price
+			}
+			if group.QuoteCount == 1 || quote.LastSeenAt.After(group.LatestSeenAt) {
+				group.LatestSeenAt = quote.LastSeenAt
+			}
+		}
+	}
+	for i := range groups {
+		groups[i].ShopCount = int64(len(groupShopIDs[i]))
+		groups[i].Name = shopGoodsNameGroupDisplayName(groups[i].Quotes)
+	}
+	return groups, total, nil
+}
+
+func allShopGoodsFilteredQuery(db *gorm.DB, filter ShopGoodsFilter) *gorm.DB {
+	q := db.Table("shop_goods_snapshots AS s").
+		Joins("JOIN shop_targets AS t ON t.id = s.target_id")
+	return applyShopGoodsFilterQualified(q, filter, "s", true)
+}
+
+func applyShopGoodsNameGroupSort(q *gorm.DB, sort string) *gorm.DB {
+	switch sort {
+	case "stock_asc":
+		q = q.Order("COALESCE(SUM(s.stock_count), 0) ASC")
+	case "stock_desc":
+		q = q.Order("COALESCE(SUM(s.stock_count), 0) DESC")
+	case "price_asc":
+		q = q.Order("MIN(s.price) ASC")
+	case "price_desc":
+		q = q.Order("MAX(s.price) DESC")
+	case "last_seen_desc":
+		q = q.Order("MAX(s.last_seen_at) DESC")
+	}
+	return q.Order("group_key ASC")
+}
+
+func applyShopGoodsNameGroupQuoteSort(q *gorm.DB, sort string) *gorm.DB {
+	switch sort {
+	case "stock_asc":
+		q = q.Order("s.stock_count ASC")
+	case "stock_desc":
+		q = q.Order("s.stock_count DESC")
+	case "price_asc":
+		q = q.Order("s.price ASC")
+	case "price_desc":
+		q = q.Order("s.price DESC")
+	case "last_seen_desc":
+		q = q.Order("s.last_seen_at DESC")
+	default:
+		return q.Order("t.sort_order ASC").
+			Order("s.target_id ASC").
+			Order("s.category_name ASC").
+			Order("s.goods_key ASC")
+	}
+	return q.Order("LOWER(TRIM(s.name)) ASC").
+		Order("TRIM(s.name) ASC").
+		Order("t.sort_order ASC").
+		Order("s.target_id ASC").
+		Order("s.goods_key ASC")
+}
+
+func shopGoodsNameGroupDisplayName(quotes []ShopGoodsWithTarget) string {
+	if name := smallestNormalizedShopGoodsText(quotes, func(quote ShopGoodsWithTarget) string { return quote.Name }); name != "" {
+		return name
+	}
+	return smallestNormalizedShopGoodsText(quotes, func(quote ShopGoodsWithTarget) string { return quote.GoodsKey })
+}
+
+func smallestNormalizedShopGoodsText(quotes []ShopGoodsWithTarget, value func(ShopGoodsWithTarget) string) string {
+	best := ""
+	bestNormalized := ""
+	for _, quote := range quotes {
+		candidate := strings.TrimSpace(value(quote))
+		if candidate == "" {
+			continue
+		}
+		normalized := strings.ToLower(candidate)
+		if best == "" || normalized < bestNormalized || (normalized == bestNormalized && candidate < best) {
+			best = candidate
+			bestNormalized = normalized
+		}
+	}
+	return best
 }
 
 func (r *ShopGoods) SnapshotCategories(targetID uint, stockThreshold int) ([]ShopSnapshotCategory, error) {

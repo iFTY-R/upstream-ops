@@ -263,6 +263,21 @@ export interface ShopGoodsListItem {
   target_stock_threshold: number
 }
 
+export interface ShopGoodsNameGroup {
+  group_key: string
+  name: string
+  shop_count: number
+  quote_count: number
+  total_stock: number
+  min_price: number
+  max_price: number
+  latest_seen_at: string
+  quotes: ShopGoodsListItem[]
+}
+
+export type ShopGoodsOverviewItem = ShopGoodsListItem | ShopGoodsNameGroup
+export type ShopGoodsGroupBy = "name"
+
 export type ShopGoodsStatus = "all" | "active" | "in_stock" | "removed" | "low_stock" | "out_of_stock"
 export type ShopGoodsSort = "category" | "stock_asc" | "stock_desc" | "price_asc" | "price_desc" | "last_seen_desc"
 export type SavedSearchConditionField = "keyword" | "exclude_keyword" | "category_name"

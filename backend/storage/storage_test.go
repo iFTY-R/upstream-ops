@@ -1254,6 +1254,169 @@ func TestShopGoodsListAllPageFilteredIncludesTargetAndFilters(t *testing.T) {
 	}
 }
 
+func TestShopGoodsListAllNameGroupsPageFiltered(t *testing.T) {
+	db := openTestDB(t)
+	targets := NewShopTargets(db)
+	goods := NewShopGoods(db)
+	first := &ShopTarget{
+		Name:           "shop-a",
+		Platform:       ShopPlatformLDXP,
+		SiteURL:        "https://example.invalid/shop/A",
+		BaseURL:        "https://example.invalid",
+		Token:          "A",
+		MonitorEnabled: true,
+		ScopeMode:      ShopScopeAll,
+		StockThreshold: 2,
+	}
+	second := &ShopTarget{
+		Name:           "shop-b",
+		Platform:       ShopPlatformLDXP,
+		SiteURL:        "https://example.invalid/shop/B",
+		BaseURL:        "https://example.invalid",
+		Token:          "B",
+		MonitorEnabled: true,
+		ScopeMode:      ShopScopeAll,
+		StockThreshold: 5,
+	}
+	if err := targets.Create(first); err != nil {
+		t.Fatalf("create first target: %v", err)
+	}
+	if err := targets.Create(second); err != nil {
+		t.Fatalf("create second target: %v", err)
+	}
+
+	base := time.Date(2026, 7, 26, 1, 0, 0, 0, time.UTC)
+	removedAt := base.Add(30 * time.Minute)
+	rows := []ShopGoodsSnapshot{
+		{TargetID: first.ID, GoodsKey: "a-plus-premium", GoodsType: "card", Name: " ChatGPT Plus ", CategoryID: 10, CategoryName: "GPT", Price: 15, StockCount: 5, FirstSeenAt: base, LastSeenAt: base.Add(4 * time.Hour)},
+		{TargetID: first.ID, GoodsKey: "a-plus-basic", GoodsType: "card", Name: "chatgpt plus", CategoryID: 10, CategoryName: "GPT", Price: 12, StockCount: 2, FirstSeenAt: base, LastSeenAt: base.Add(2 * time.Hour)},
+		{TargetID: second.ID, GoodsKey: "b-plus", GoodsType: "card", Name: "CHATGPT PLUS", CategoryID: 10, CategoryName: "GPT", Price: 10, StockCount: 7, FirstSeenAt: base, LastSeenAt: base.Add(3 * time.Hour)},
+		{TargetID: second.ID, GoodsKey: "b-plus-removed", GoodsType: "card", Name: "ChatGPT Plus", CategoryID: 10, CategoryName: "GPT", Price: 8, StockCount: 0, FirstSeenAt: base, LastSeenAt: base.Add(time.Hour), RemovedAt: &removedAt},
+		{TargetID: second.ID, GoodsKey: "b-team", GoodsType: "card", Name: "ChatGPT Team", CategoryID: 10, CategoryName: "GPT", Price: 20, StockCount: 3, FirstSeenAt: base, LastSeenAt: base.Add(6 * time.Hour)},
+		{TargetID: first.ID, GoodsKey: "a-claude", GoodsType: "card", Name: "Claude Pro", CategoryID: 20, CategoryName: "Claude", Price: 30, StockCount: 9, FirstSeenAt: base, LastSeenAt: base.Add(5 * time.Hour)},
+		{TargetID: first.ID, GoodsKey: " Unknown-Key ", GoodsType: "card", Name: "  ", CategoryID: 30, CategoryName: "Other", Price: 4, StockCount: 1, FirstSeenAt: base, LastSeenAt: base.Add(time.Hour)},
+		{TargetID: second.ID, GoodsKey: "unknown-key", GoodsType: "card", Name: "", CategoryID: 30, CategoryName: "Other", Price: 6, StockCount: 4, FirstSeenAt: base, LastSeenAt: base.Add(3 * time.Hour)},
+	}
+	for i := range rows {
+		if err := goods.CreateSnapshot(&rows[i]); err != nil {
+			t.Fatalf("create snapshot %q: %v", rows[i].GoodsKey, err)
+		}
+	}
+
+	firstPage, total, err := goods.ListAllNameGroupsPageFiltered(1, 2, ShopGoodsFilter{})
+	if err != nil {
+		t.Fatalf("list first group page: %v", err)
+	}
+	if total != 4 || len(firstPage) != 2 {
+		t.Fatalf("first group page total=%d len=%d groups=%#v", total, len(firstPage), firstPage)
+	}
+	if firstPage[0].GroupKey != "chatgpt plus" || firstPage[1].GroupKey != "chatgpt team" {
+		t.Fatalf("unexpected first group page: %#v", firstPage)
+	}
+	plus := firstPage[0]
+	if plus.Name != "CHATGPT PLUS" || plus.ShopCount != 2 || plus.QuoteCount != 4 || plus.TotalStock != 14 {
+		t.Fatalf("unexpected plus group identity or counts: %#v", plus)
+	}
+	if plus.MinPrice != 8 || plus.MaxPrice != 15 || !plus.LatestSeenAt.Equal(base.Add(4*time.Hour)) {
+		t.Fatalf("unexpected plus aggregates: %#v", plus)
+	}
+	wantCategoryQuotes := []string{"a-plus-basic", "a-plus-premium", "b-plus", "b-plus-removed"}
+	if len(plus.Quotes) != len(wantCategoryQuotes) {
+		t.Fatalf("unexpected plus quote count: %#v", plus.Quotes)
+	}
+	for i, want := range wantCategoryQuotes {
+		if plus.Quotes[i].GoodsKey != want {
+			t.Fatalf("category quote %d=%q want %q", i, plus.Quotes[i].GoodsKey, want)
+		}
+	}
+
+	secondPage, total, err := goods.ListAllNameGroupsPageFiltered(2, 2, ShopGoodsFilter{})
+	if err != nil {
+		t.Fatalf("list second group page: %v", err)
+	}
+	if total != 4 || len(secondPage) != 2 || secondPage[0].GroupKey != "claude pro" || secondPage[1].GroupKey != "unknown-key" {
+		t.Fatalf("unexpected second group page: total=%d groups=%#v", total, secondPage)
+	}
+	unnamed := secondPage[1]
+	if unnamed.Name != "Unknown-Key" || unnamed.ShopCount != 2 || unnamed.QuoteCount != 2 {
+		t.Fatalf("empty-name fallback mismatch: %#v", unnamed)
+	}
+
+	categoryID := int64(20)
+	filterCases := []struct {
+		name       string
+		filter     ShopGoodsFilter
+		wantTotal  int64
+		wantKey    string
+		wantQuotes int64
+	}{
+		{name: "target", filter: ShopGoodsFilter{TargetID: first.ID, Keyword: "Plus"}, wantTotal: 1, wantKey: "chatgpt plus", wantQuotes: 2},
+		{name: "category id", filter: ShopGoodsFilter{CategoryID: &categoryID}, wantTotal: 1, wantKey: "claude pro", wantQuotes: 1},
+		{name: "category name", filter: ShopGoodsFilter{CategoryName: "GPT"}, wantTotal: 2, wantKey: "chatgpt plus", wantQuotes: 4},
+		{name: "active status", filter: ShopGoodsFilter{Status: "active", Keyword: "Plus"}, wantTotal: 1, wantKey: "chatgpt plus", wantQuotes: 3},
+		{name: "in stock status", filter: ShopGoodsFilter{Status: "in_stock", Keyword: "Plus"}, wantTotal: 1, wantKey: "chatgpt plus", wantQuotes: 3},
+		{name: "keyword", filter: ShopGoodsFilter{Keyword: "Team"}, wantTotal: 1, wantKey: "chatgpt team", wantQuotes: 1},
+		{name: "exclude keyword", filter: ShopGoodsFilter{Keyword: "Plus", ExcludeKeyword: "premium"}, wantTotal: 1, wantKey: "chatgpt plus", wantQuotes: 3},
+	}
+	for _, tc := range filterCases {
+		t.Run(tc.name, func(t *testing.T) {
+			groups, gotTotal, err := goods.ListAllNameGroupsPageFiltered(1, 20, tc.filter)
+			if err != nil {
+				t.Fatalf("list groups: %v", err)
+			}
+			if gotTotal != tc.wantTotal || len(groups) != int(tc.wantTotal) {
+				t.Fatalf("total=%d len=%d groups=%#v", gotTotal, len(groups), groups)
+			}
+			if groups[0].GroupKey != tc.wantKey || groups[0].QuoteCount != tc.wantQuotes || int64(len(groups[0].Quotes)) != tc.wantQuotes {
+				t.Fatalf("unexpected filtered group: %#v", groups[0])
+			}
+		})
+	}
+
+	sortCases := []struct {
+		sort          string
+		wantGroupKeys []string
+		wantPlusKeys  []string
+	}{
+		{sort: "category", wantGroupKeys: []string{"chatgpt plus", "chatgpt team", "claude pro", "unknown-key"}, wantPlusKeys: []string{"a-plus-basic", "a-plus-premium", "b-plus", "b-plus-removed"}},
+		{sort: "stock_asc", wantGroupKeys: []string{"chatgpt team", "unknown-key", "claude pro", "chatgpt plus"}, wantPlusKeys: []string{"b-plus-removed", "a-plus-basic", "a-plus-premium", "b-plus"}},
+		{sort: "stock_desc", wantGroupKeys: []string{"chatgpt plus", "claude pro", "unknown-key", "chatgpt team"}, wantPlusKeys: []string{"b-plus", "a-plus-premium", "a-plus-basic", "b-plus-removed"}},
+		{sort: "price_asc", wantGroupKeys: []string{"unknown-key", "chatgpt plus", "chatgpt team", "claude pro"}, wantPlusKeys: []string{"b-plus-removed", "b-plus", "a-plus-basic", "a-plus-premium"}},
+		{sort: "price_desc", wantGroupKeys: []string{"claude pro", "chatgpt team", "chatgpt plus", "unknown-key"}, wantPlusKeys: []string{"a-plus-premium", "a-plus-basic", "b-plus", "b-plus-removed"}},
+		{sort: "last_seen_desc", wantGroupKeys: []string{"chatgpt team", "claude pro", "chatgpt plus", "unknown-key"}, wantPlusKeys: []string{"a-plus-premium", "b-plus", "a-plus-basic", "b-plus-removed"}},
+	}
+	for _, tc := range sortCases {
+		t.Run("sort "+tc.sort, func(t *testing.T) {
+			groups, gotTotal, err := goods.ListAllNameGroupsPageFiltered(1, 20, ShopGoodsFilter{Sort: tc.sort})
+			if err != nil {
+				t.Fatalf("list sorted groups: %v", err)
+			}
+			if gotTotal != 4 || len(groups) != len(tc.wantGroupKeys) {
+				t.Fatalf("total=%d groups=%#v", gotTotal, groups)
+			}
+			var gotPlus []string
+			for i, group := range groups {
+				if group.GroupKey != tc.wantGroupKeys[i] {
+					t.Fatalf("group %d=%q want %q", i, group.GroupKey, tc.wantGroupKeys[i])
+				}
+				if group.GroupKey == "chatgpt plus" {
+					for _, quote := range group.Quotes {
+						gotPlus = append(gotPlus, quote.GoodsKey)
+					}
+				}
+			}
+			if len(gotPlus) != len(tc.wantPlusKeys) {
+				t.Fatalf("plus quotes=%#v", gotPlus)
+			}
+			for i, want := range tc.wantPlusKeys {
+				if gotPlus[i] != want {
+					t.Fatalf("plus quote %d=%q want %q", i, gotPlus[i], want)
+				}
+			}
+		})
+	}
+}
+
 func TestAggregateBalanceTrendFillsMissingDays(t *testing.T) {
 	db := openTestDB(t)
 	rates := NewRates(db)

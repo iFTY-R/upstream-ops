@@ -54,6 +54,7 @@ export interface DataPaginationProps {
   pageSize: number
   pages: number
   total: number
+  itemLabel?: string
   pageSizeOptions?: number[]
   disabled?: boolean
   className?: string
@@ -66,6 +67,7 @@ export function DataPagination({
   pageSize,
   pages,
   total,
+  itemLabel = "条",
   pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS,
   disabled,
   className,
@@ -91,7 +93,7 @@ export function DataPagination({
       )}
     >
       <div className="flex flex-wrap items-center gap-2">
-        <span className="whitespace-nowrap">共 {total} 条</span>
+        <span className="whitespace-nowrap">共 {total} {itemLabel}</span>
         <span className="whitespace-nowrap">第 {current} / {safePages} 页</span>
         <div className="flex items-center gap-2">
           <span className="whitespace-nowrap">每页</span>
@@ -111,7 +113,7 @@ export function DataPagination({
               ))}
             </SelectContent>
           </Select>
-          <span className="whitespace-nowrap">条</span>
+          <span className="whitespace-nowrap">{itemLabel}</span>
         </div>
       </div>
 

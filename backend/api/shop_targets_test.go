@@ -698,6 +698,103 @@ func TestListAllShopGoodsReturnsTargetMetadata(t *testing.T) {
 	}
 }
 
+func TestListAllShopGoodsSupportsNameGrouping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	first := &storage.ShopTarget{
+		Name:           "shop-a",
+		Platform:       storage.ShopPlatformLDXP,
+		SiteURL:        "https://pay.ldxp.cn/shop/A",
+		BaseURL:        "https://pay.ldxp.cn",
+		Token:          "A",
+		MonitorEnabled: true,
+		ScopeMode:      storage.ShopScopeAll,
+	}
+	second := &storage.ShopTarget{
+		Name:           "shop-b",
+		Platform:       storage.ShopPlatformLDXP,
+		SiteURL:        "https://pay.ldxp.cn/shop/B",
+		BaseURL:        "https://pay.ldxp.cn",
+		Token:          "B",
+		MonitorEnabled: true,
+		ScopeMode:      storage.ShopScopeAll,
+	}
+	for _, target := range []*storage.ShopTarget{first, second} {
+		if err := targets.Create(target); err != nil {
+			t.Fatalf("create target %q: %v", target.Name, err)
+		}
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, snapshot := range []storage.ShopGoodsSnapshot{
+		{TargetID: first.ID, GoodsKey: "plus-a", GoodsType: "card", Name: "ChatGPT Plus", Price: 12, StockCount: 2, FirstSeenAt: now, LastSeenAt: now},
+		{TargetID: second.ID, GoodsKey: "plus-b", GoodsType: "card", Name: " chatgpt plus ", Price: 10, StockCount: 3, FirstSeenAt: now, LastSeenAt: now},
+	} {
+		snapshot := snapshot
+		if err := goods.CreateSnapshot(&snapshot); err != nil {
+			t.Fatalf("create snapshot %q: %v", snapshot.GoodsKey, err)
+		}
+	}
+
+	router := gin.New()
+	registerShopTargets(router.Group("/api"), &Deps{ShopTargets: targets, ShopGoods: goods})
+
+	ungrouped := performRequest(router, http.MethodGet, "/api/shop-goods")
+	if ungrouped.Code != http.StatusOK {
+		t.Fatalf("ungrouped status = %d, body = %s", ungrouped.Code, ungrouped.Body.String())
+	}
+	var ungroupedBody struct {
+		Data struct {
+			Items []map[string]json.RawMessage `json:"items"`
+			Total int64                        `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(ungrouped.Body.Bytes(), &ungroupedBody); err != nil {
+		t.Fatalf("decode ungrouped response: %v", err)
+	}
+	if ungroupedBody.Data.Total != 2 || len(ungroupedBody.Data.Items) != 2 {
+		t.Fatalf("unexpected ungrouped response: %#v", ungroupedBody.Data)
+	}
+	if _, ok := ungroupedBody.Data.Items[0]["target_id"]; !ok {
+		t.Fatalf("ungrouped response shape changed: %#v", ungroupedBody.Data.Items[0])
+	}
+	if _, ok := ungroupedBody.Data.Items[0]["group_key"]; ok {
+		t.Fatalf("ungrouped response unexpectedly contains a group: %#v", ungroupedBody.Data.Items[0])
+	}
+
+	grouped := performRequest(router, http.MethodGet, "/api/shop-goods?group_by=name&page_size=100000")
+	if grouped.Code != http.StatusOK {
+		t.Fatalf("grouped status = %d, body = %s", grouped.Code, grouped.Body.String())
+	}
+	var groupedBody struct {
+		Data struct {
+			Items    []storage.ShopGoodsNameGroup `json:"items"`
+			Total    int64                        `json:"total"`
+			Pages    int                          `json:"pages"`
+			PageSize int                          `json:"page_size"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(grouped.Body.Bytes(), &groupedBody); err != nil {
+		t.Fatalf("decode grouped response: %v", err)
+	}
+	if groupedBody.Data.Total != 1 || groupedBody.Data.Pages != 1 || groupedBody.Data.PageSize != 200 || len(groupedBody.Data.Items) != 1 {
+		t.Fatalf("unexpected grouped page: %#v", groupedBody.Data)
+	}
+	group := groupedBody.Data.Items[0]
+	if group.GroupKey != "chatgpt plus" || group.ShopCount != 2 || group.QuoteCount != 2 || len(group.Quotes) != 2 {
+		t.Fatalf("unexpected group: %#v", group)
+	}
+	if group.Quotes[0].TargetName == "" || group.Quotes[0].TargetSiteURL == "" {
+		t.Fatalf("grouped quote is missing management metadata: %#v", group.Quotes[0])
+	}
+
+	invalid := performRequest(router, http.MethodGet, "/api/shop-goods?group_by=category")
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid group_by status = %d, body = %s", invalid.Code, invalid.Body.String())
+	}
+}
+
 type fakeShopSyncJobRunner struct {
 	job        *storage.ShopSyncJob
 	batch      *storage.ShopSyncBatch

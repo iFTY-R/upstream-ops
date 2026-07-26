@@ -34,7 +34,7 @@ import type {
   ShopGoodsChangeLog,
   ShopGoodsStatus,
   ShopGoodsSnapshot,
-  ShopGoodsListItem,
+  ShopGoodsOverviewItem,
   ShopGoodsTargetOption,
   ShopMonitorLog,
   ShopSnapshotCategory,
@@ -388,7 +388,11 @@ export interface ShopGoodsFilters {
   sort?: ShopGoodsSort
 }
 
-function shopGoodsQuery(page: number, pageSize: number, filters?: ShopGoodsFilters) {
+export interface ShopGoodsOverviewFilters extends ShopGoodsFilters {
+  group_by?: "name"
+}
+
+function shopGoodsQuery(page: number, pageSize: number, filters?: ShopGoodsOverviewFilters) {
   const q = new URLSearchParams()
   q.set("page", String(page))
   q.set("page_size", String(pageSize))
@@ -399,6 +403,7 @@ function shopGoodsQuery(page: number, pageSize: number, filters?: ShopGoodsFilte
   if (filters?.keyword?.trim()) q.set("keyword", filters.keyword.trim())
   if (filters?.exclude_keyword?.trim()) q.set("exclude_keyword", filters.exclude_keyword.trim())
   if (filters?.sort && filters.sort !== "category") q.set("sort", filters.sort)
+  if (filters?.group_by === "name") q.set("group_by", filters.group_by)
   return q.toString()
 }
 
@@ -408,9 +413,9 @@ export function useShopGoods(targetID: number | null, page = 1, pageSize = 20, f
   )
 }
 
-export function useShopGoodsOverview(page = 1, pageSize = 50, filters?: ShopGoodsFilters, enabled = true, publicMode = false) {
+export function useShopGoodsOverview(page = 1, pageSize = 50, filters?: ShopGoodsOverviewFilters, enabled = true, publicMode = false) {
   const resource = publicMode ? "/public/shop-goods" : "/shop-goods"
-  return useApi<PageResult<ShopGoodsListItem>>(
+  return useApi<PageResult<ShopGoodsOverviewItem>>(
     enabled ? `${resource}?${shopGoodsQuery(page, pageSize, filters)}` : null,
   )
 }

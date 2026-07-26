@@ -116,6 +116,99 @@ func TestPublicShopGoodsEndpointsExposeOnlyAllowedFields(t *testing.T) {
 	}
 }
 
+func TestPublicShopGoodsNameGroupingSanitizesEveryQuote(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	safeTarget := &storage.ShopTarget{
+		Name:           "Safe Shop",
+		Platform:       storage.ShopPlatformLDXP,
+		SiteURL:        "https://pay.ldxp.cn/shop/safe",
+		BaseURL:        "https://pay.ldxp.cn",
+		Token:          "safe-secret",
+		MonitorEnabled: true,
+	}
+	unsafeTarget := &storage.ShopTarget{
+		Name:           "Unsafe Shop",
+		Platform:       storage.ShopPlatformLDXP,
+		SiteURL:        "javascript:alert(1)",
+		BaseURL:        "https://pay.ldxp.cn",
+		Token:          "unsafe-secret",
+		MonitorEnabled: true,
+	}
+	for _, target := range []*storage.ShopTarget{safeTarget, unsafeTarget} {
+		if err := targets.Create(target); err != nil {
+			t.Fatalf("create target %q: %v", target.Name, err)
+		}
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, snapshot := range []storage.ShopGoodsSnapshot{
+		{TargetID: safeTarget.ID, GoodsKey: "plus-safe", GoodsType: "card", Name: "ChatGPT Plus", Link: "https://pay.ldxp.cn/buy/plus-safe", Price: 12, StockCount: 2, RawJSON: `{"secret":"safe"}`, FirstSeenAt: now, LastSeenAt: now},
+		{TargetID: unsafeTarget.ID, GoodsKey: "plus-unsafe", GoodsType: "card", Name: " chatgpt plus ", Link: "data:text/html,unsafe", Price: 10, StockCount: 3, RawJSON: `{"secret":"unsafe"}`, FirstSeenAt: now, LastSeenAt: now},
+	} {
+		snapshot := snapshot
+		if err := goods.CreateSnapshot(&snapshot); err != nil {
+			t.Fatalf("create snapshot %q: %v", snapshot.GoodsKey, err)
+		}
+	}
+
+	router := newPublicShopGoodsTestRouter(t, targets, goods)
+	grouped := performRequest(router, http.MethodGet, "/api/public/shop-goods?group_by=name&page_size=100000")
+	if grouped.Code != http.StatusOK {
+		t.Fatalf("grouped status = %d, body = %s", grouped.Code, grouped.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Items    []map[string]json.RawMessage `json:"items"`
+			Total    int                          `json:"total"`
+			PageSize int                          `json:"page_size"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(grouped.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode grouped response: %v", err)
+	}
+	if body.Data.Total != 1 || body.Data.PageSize != 200 || len(body.Data.Items) != 1 {
+		t.Fatalf("unexpected grouped response: %#v", body.Data)
+	}
+	assertOnlyJSONKeys(t, body.Data.Items[0],
+		"group_key", "name", "shop_count", "quote_count", "total_stock",
+		"min_price", "max_price", "latest_seen_at", "quotes",
+	)
+	var quotes []map[string]json.RawMessage
+	if err := json.Unmarshal(body.Data.Items[0]["quotes"], &quotes); err != nil {
+		t.Fatalf("decode grouped quotes: %v", err)
+	}
+	if len(quotes) != 2 {
+		t.Fatalf("grouped quote count = %d, want 2", len(quotes))
+	}
+	for _, quote := range quotes {
+		assertOnlyJSONKeys(t, quote,
+			"id", "target_id", "goods_key", "name", "category_name", "link", "price",
+			"stock_count", "limit_count", "last_seen_at", "removed_at", "target_name",
+			"target_last_shop_name", "target_site_url", "target_stock_threshold",
+		)
+		var goodsKey, link, siteURL string
+		if err := json.Unmarshal(quote["goods_key"], &goodsKey); err != nil {
+			t.Fatalf("decode goods key: %v", err)
+		}
+		if err := json.Unmarshal(quote["link"], &link); err != nil {
+			t.Fatalf("decode link: %v", err)
+		}
+		if err := json.Unmarshal(quote["target_site_url"], &siteURL); err != nil {
+			t.Fatalf("decode site URL: %v", err)
+		}
+		if goodsKey == "plus-unsafe" && (link != "" || siteURL != "") {
+			t.Fatalf("unsafe quote URLs leaked: %#v", quote)
+		}
+	}
+
+	invalid := performRequest(router, http.MethodGet, "/api/public/shop-goods?group_by=shop")
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid group_by status = %d, body = %s", invalid.Code, invalid.Body.String())
+	}
+}
+
 func TestPublicShopGoodsRoutesDoNotOpenManagementEndpoints(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openTestDB(t)

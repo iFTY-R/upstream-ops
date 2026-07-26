@@ -676,7 +676,7 @@ func listAllShopGoods(c *gin.Context, d *Deps) {
 	if !shopReposReady(c, d) {
 		return
 	}
-	page, pageSize := parsePageDefaults(c)
+	page, pageSize := parseShopGoodsOverviewPageDefaults(c)
 	filter, ok := parseShopGoodsFilter(c, 0)
 	if !ok {
 		return
@@ -688,6 +688,19 @@ func listAllShopGoods(c *gin.Context, d *Deps) {
 			return
 		}
 		filter.TargetID = uint(targetID)
+	}
+	groupBy, ok := parseShopGoodsGroupBy(c)
+	if !ok {
+		return
+	}
+	if groupBy == "name" {
+		groups, total, err := d.ShopGoods.ListAllNameGroupsPageFiltered(page, pageSize, filter)
+		if err != nil {
+			fail(c, http.StatusInternalServerError, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": pageData(groups, total, page, pageSize)})
+		return
 	}
 	list, total, err := d.ShopGoods.ListAllPageFiltered(page, pageSize, filter)
 	if err != nil {
@@ -911,6 +924,14 @@ func parsePageDefaults(c *gin.Context) (int, int) {
 	return page, pageSize
 }
 
+func parseShopGoodsOverviewPageDefaults(c *gin.Context) (int, int) {
+	page, pageSize := parsePageDefaults(c)
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	return page, pageSize
+}
+
 func parseShopGoodsFilter(c *gin.Context, stockThreshold int) (storage.ShopGoodsFilter, bool) {
 	filter := storage.ShopGoodsFilter{
 		CategoryName:   strings.TrimSpace(c.Query("category_name")),
@@ -945,6 +966,17 @@ func parseShopGoodsFilter(c *gin.Context, stockThreshold int) (storage.ShopGoods
 		return filter, false
 	}
 	return filter, true
+}
+
+func parseShopGoodsGroupBy(c *gin.Context) (string, bool) {
+	groupBy := strings.TrimSpace(c.Query("group_by"))
+	switch groupBy {
+	case "", "name":
+		return groupBy, true
+	default:
+		fail(c, http.StatusBadRequest, fmt.Errorf("unsupported goods grouping: %s", groupBy))
+		return "", false
+	}
 }
 
 func pageData[T any](items []T, total int64, page, pageSize int) gin.H {

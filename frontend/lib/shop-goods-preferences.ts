@@ -29,6 +29,7 @@ export interface AllShopGoodsPreferences {
   status: ShopGoodsStatusFilter
   inStockOnly: boolean
   showGoodsKey: boolean
+  groupByName: boolean
   sort: ShopGoodsSort
   keyword: string
   excludeKeyword: string
@@ -63,6 +64,7 @@ const defaultAllShopGoodsPreferences: AllShopGoodsPreferences = {
   status: "all",
   inStockOnly: true,
   showGoodsKey: false,
+  groupByName: false,
   sort: "category",
   keyword: "",
   excludeKeyword: "",
@@ -194,6 +196,7 @@ export function readAllShopGoodsPreferences(): AllShopGoodsPreferences {
     status: asStatus(value.status),
     inStockOnly: typeof value.inStockOnly === "boolean" ? value.inStockOnly : defaultAllShopGoodsPreferences.inStockOnly,
     showGoodsKey: typeof value.showGoodsKey === "boolean" ? value.showGoodsKey : defaultAllShopGoodsPreferences.showGoodsKey,
+    groupByName: typeof value.groupByName === "boolean" ? value.groupByName : defaultAllShopGoodsPreferences.groupByName,
     sort: asSort(value.sort),
     keyword: asText(value.keyword),
     excludeKeyword: asText(value.excludeKeyword),
