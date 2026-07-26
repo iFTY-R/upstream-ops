@@ -17,12 +17,12 @@ Add an optional `同商品名分组` view to `/shop-goods`. When enabled, pagina
 The backend derives a portable grouping key from each filtered current snapshot:
 
 ```text
-COALESCE(NULLIF(LOWER(TRIM(goods_name)), ''), LOWER(TRIM(goods_key)))
+COALESCE(NULLIF(LOWER(TRIM(name)), ''), LOWER(TRIM(goods_key)))
 ```
 
 This removes leading and trailing whitespace and makes Latin-letter case differences equivalent. It does not remove internal whitespace or punctuation and does not perform fuzzy matching. Empty names fall back to `goods_key` so unrelated unnamed products are not merged accidentally.
 
-The displayed name is the lexicographically smallest trimmed non-empty `goods_name` after comparing lowercase values and then exact values in Go. If every name is empty, use the lexicographically smallest trimmed `goods_key`. This selection does not change when the user changes the group sort.
+The displayed name is the lexicographically smallest trimmed non-empty `name` after comparing lowercase values and then exact values in Go. If every name is empty, use the lexicographically smallest trimmed `goods_key`. This selection does not change when the user changes the group sort.
 
 ## API Contract
 
