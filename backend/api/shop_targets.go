@@ -676,7 +676,7 @@ func listAllShopGoods(c *gin.Context, d *Deps) {
 	if !shopReposReady(c, d) {
 		return
 	}
-	page, pageSize := parseShopGoodsOverviewPageDefaults(c)
+	page, pageSize := parsePageDefaults(c)
 	filter, ok := parseShopGoodsFilter(c, 0)
 	if !ok {
 		return
@@ -921,11 +921,7 @@ func parsePageDefaults(c *gin.Context) (int, int) {
 	if pageSize <= 0 {
 		pageSize = 20
 	}
-	return page, pageSize
-}
-
-func parseShopGoodsOverviewPageDefaults(c *gin.Context) (int, int) {
-	page, pageSize := parsePageDefaults(c)
+	// 统一上限：防止任意大的 page_size 把列表端点放大成超大查询与响应。
 	if pageSize > 200 {
 		pageSize = 200
 	}

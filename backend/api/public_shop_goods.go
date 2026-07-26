@@ -84,7 +84,7 @@ func listPublicShopGoods(c *gin.Context, d *Deps) {
 		failPublicShopRead(c, d, "shop goods", nil)
 		return
 	}
-	page, pageSize := parseShopGoodsOverviewPageDefaults(c)
+	page, pageSize := parsePageDefaults(c)
 	filter, ok := parseShopGoodsFilter(c, 0)
 	if !ok {
 		return

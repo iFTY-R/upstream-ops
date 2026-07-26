@@ -118,6 +118,7 @@ func Register(r *gin.Engine, d *Deps) {
 
 	api := r.Group("/api")
 	public := r.Group("/api/public")
+	public.Use(publicRateLimitMiddleware())
 	registerPublicShopGoods(public, d)
 	registerPublicSearchConditions(public, d)
 	if d.Runtime != nil {
