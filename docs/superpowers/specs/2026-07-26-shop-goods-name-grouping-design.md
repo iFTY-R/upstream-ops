@@ -22,7 +22,7 @@ COALESCE(NULLIF(LOWER(TRIM(goods_name)), ''), LOWER(TRIM(goods_key)))
 
 This removes leading and trailing whitespace and makes Latin-letter case differences equivalent. It does not remove internal whitespace or punctuation and does not perform fuzzy matching. Empty names fall back to `goods_key` so unrelated unnamed products are not merged accidentally.
 
-The displayed name is a stable non-empty name selected from the group, falling back to `goods_key` when necessary.
+The displayed name is the lexicographically smallest trimmed non-empty `goods_name` after comparing lowercase values and then exact values in Go. If every name is empty, use the lexicographically smallest trimmed `goods_key`. This selection does not change when the user changes the group sort.
 
 ## API Contract
 
@@ -79,14 +79,14 @@ The existing sort selector remains the single sorting control. In grouped mode i
 
 | Sort | Group order | Quote order inside group |
 | --- | --- | --- |
-| `category` | normalized product name ascending | shop order, category, goods key |
+| `category` | normalized product name ascending | `shop_targets.sort_order`, target ID, category, goods key |
 | `stock_asc` | total stock ascending | stock ascending |
 | `stock_desc` | total stock descending | stock descending |
 | `price_asc` | minimum price ascending | price ascending |
 | `price_desc` | maximum price descending | price descending |
 | `last_seen_desc` | latest seen time descending | last seen time descending |
 
-Stable name, target, and goods-key tie breakers make pagination deterministic. Null-price handling follows the existing list behavior.
+Stable name, target, and goods-key tie breakers make pagination deterministic. `shop order` always means `shop_targets.sort_order ASC, target_id ASC`. Null-price handling follows the existing list behavior.
 
 ## Frontend Behavior
 
