@@ -1,0 +1,21 @@
+# Normalize all text files to LF in both the index and the working tree.
+# core.autocrlf on contributors' machines previously left ~150 files CRLF/mixed
+# in worktrees, which made gofmt -l and diff tooling report whole-file noise.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.db binary
