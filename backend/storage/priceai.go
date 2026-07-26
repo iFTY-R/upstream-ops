@@ -16,8 +16,8 @@ type PriceAI struct{ db *gorm.DB }
 
 func NewPriceAI(db *gorm.DB) *PriceAI { return &PriceAI{db: db} }
 
-// Transaction keeps a Feed import's current-state updates, history, and audit
-// records on the same database transaction.
+// Transaction keeps a Feed import's current-state updates and sync logs on the
+// same database transaction.
 func (r *PriceAI) Transaction(fn func(tx *PriceAI) error) error {
 	if fn == nil {
 		return fmt.Errorf("priceai transaction callback is nil")
@@ -204,18 +204,6 @@ func (r *PriceAI) MarkProductsMissingFromLatest(snapshotID string, at time.Time)
 		Where("last_snapshot_id <> ? AND missing_from_latest_at IS NULL", snapshotID).
 		Update("missing_from_latest_at", at)
 	return result.RowsAffected, result.Error
-}
-
-func (r *PriceAI) ListProductsMissingFromLatest(snapshotID string) ([]PriceAIProduct, error) {
-	if strings.TrimSpace(snapshotID) == "" {
-		return nil, fmt.Errorf("snapshot id is required when listing missing products")
-	}
-	var products []PriceAIProduct
-	if err := r.db.Where("last_snapshot_id <> ? AND missing_from_latest_at IS NULL", snapshotID).
-		Order("id ASC").Find(&products).Error; err != nil {
-		return nil, err
-	}
-	return products, nil
 }
 
 func (r *PriceAI) FindWatchTargetByProductID(productID uint) (*PriceAIWatchTarget, error) {
@@ -462,58 +450,7 @@ func (r *PriceAI) ListCurrentBoardEntries(productID uint) ([]PriceAIPublicBoardE
 	return entries, nil
 }
 
-func (r *PriceAI) UpsertProductHistory(history *PriceAIProductHistory) error {
-	if history == nil || history.ProductID == 0 || strings.TrimSpace(history.SnapshotID) == "" {
-		return fmt.Errorf("priceai product history product id and snapshot id are required")
-	}
-	return r.db.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "product_id"}, {Name: "snapshot_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"lowest_price", "lowest_price_currency", "in_stock_count", "offer_count", "product_snapshot_generated_at", "feed_stale", "captured_at",
-		}),
-	}).Create(history).Error
-}
-
-func (r *PriceAI) ListProductHistory(productID uint, page, pageSize int) ([]PriceAIProductHistory, int64, error) {
-	page, pageSize = normalizePriceAIPage(page, pageSize)
-	q := r.db.Model(&PriceAIProductHistory{}).Where("product_id = ?", productID)
-	var total int64
-	if err := q.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	var list []PriceAIProductHistory
-	if err := q.Order("captured_at DESC").Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&list).Error; err != nil {
-		return nil, 0, err
-	}
-	return list, total, nil
-}
-
-func (r *PriceAI) AppendChangeLog(log *PriceAIChangeLog) error {
-	if log == nil || log.Event == "" {
-		return fmt.Errorf("priceai change log event is required")
-	}
-	if log.OccurredAt.IsZero() {
-		log.OccurredAt = time.Now()
-	}
-	return r.db.Create(log).Error
-}
-
-func (r *PriceAI) ListChangeLogs(productID uint, page, pageSize int) ([]PriceAIChangeLog, int64, error) {
-	page, pageSize = normalizePriceAIPage(page, pageSize)
-	q := r.db.Model(&PriceAIChangeLog{})
-	if productID != 0 {
-		q = q.Where("product_id = ?", productID)
-	}
-	var total int64
-	if err := q.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	var list []PriceAIChangeLog
-	if err := q.Order("occurred_at DESC").Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&list).Error; err != nil {
-		return nil, 0, err
-	}
-	return list, total, nil
-}
+const priceAISyncLogLimitPerJob = 5
 
 func (r *PriceAI) AppendSyncLog(log *PriceAISyncLog) error {
 	if log == nil || log.JobKind == "" {
@@ -528,7 +465,23 @@ func (r *PriceAI) AppendSyncLog(log *PriceAISyncLog) error {
 	if log.DurationMS == 0 {
 		log.DurationMS = log.FinishedAt.Sub(log.StartedAt).Milliseconds()
 	}
-	return r.db.Create(log).Error
+	if err := r.db.Create(log).Error; err != nil {
+		return err
+	}
+	return r.trimSyncLogs(log.JobKind)
+}
+
+func (r *PriceAI) trimSyncLogs(jobKind PriceAISyncJobKind) error {
+	var retainedIDs []uint
+	if err := r.db.Model(&PriceAISyncLog{}).
+		Where("job_kind = ?", jobKind).
+		Order("started_at DESC").
+		Order("id DESC").
+		Limit(priceAISyncLogLimitPerJob).
+		Pluck("id", &retainedIDs).Error; err != nil {
+		return err
+	}
+	return r.db.Where("job_kind = ? AND id NOT IN ?", jobKind, retainedIDs).Delete(&PriceAISyncLog{}).Error
 }
 
 func (r *PriceAI) ListSyncLogs(jobKind PriceAISyncJobKind, page, pageSize int) ([]PriceAISyncLog, int64, error) {
@@ -595,8 +548,8 @@ type PriceAIBoardPruneResult struct {
 	PresetsDeleted  int64
 }
 
-// PruneCurrentBoards removes only public-board state that was absent from the
-// committed snapshot. Product history is intentionally untouched.
+// PruneCurrentBoards removes public-board state absent from the committed
+// snapshot. PriceAI keeps no product history.
 func (r *PriceAI) PruneCurrentBoards(snapshotID string) (PriceAIBoardPruneResult, error) {
 	if strings.TrimSpace(snapshotID) == "" {
 		return PriceAIBoardPruneResult{}, fmt.Errorf("snapshot id is required when pruning priceai boards")
@@ -623,21 +576,6 @@ func (r *PriceAI) PruneCurrentBoards(snapshotID string) (PriceAIBoardPruneResult
 	}
 	result.PresetsDeleted = presets.RowsAffected
 	return result, nil
-}
-
-func (r *PriceAI) DeleteProductHistoryBefore(cutoff time.Time) (int64, error) {
-	result := r.db.Where("captured_at < ?", cutoff).Delete(&PriceAIProductHistory{})
-	return result.RowsAffected, result.Error
-}
-
-func (r *PriceAI) DeleteChangeLogsBefore(cutoff time.Time) (int64, error) {
-	result := r.db.Where("occurred_at < ?", cutoff).Delete(&PriceAIChangeLog{})
-	return result.RowsAffected, result.Error
-}
-
-func (r *PriceAI) DeleteSyncLogsBefore(cutoff time.Time) (int64, error) {
-	result := r.db.Where("started_at < ?", cutoff).Delete(&PriceAISyncLog{})
-	return result.RowsAffected, result.Error
 }
 
 func (r *PriceAI) FindLDXPTargetBinding(platform ShopPlatform, baseURL, token string) (*PriceAILDXPTargetBinding, error) {

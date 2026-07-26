@@ -110,9 +110,6 @@ function normalizeSystemConfig(config: SystemConfig): SystemConfig {
         shopOtherChangeLogsDays: config.scheduler.retention.shopOtherChangeLogsDays ?? 90,
         shopMonitorLogsDays: config.scheduler.retention.shopMonitorLogsDays ?? 30,
         shopSyncJobsDays: config.scheduler.retention.shopSyncJobsDays ?? 30,
-        priceAIProductHistoryDays: config.scheduler.retention.priceAIProductHistoryDays ?? 90,
-        priceAIChangeLogsDays: config.scheduler.retention.priceAIChangeLogsDays ?? 90,
-        priceAISyncLogsDays: config.scheduler.retention.priceAISyncLogsDays ?? 30,
       },
     },
     upstream: {
@@ -1240,84 +1237,6 @@ export default function SettingsPage() {
                                 retention: {
                                   ...prev.scheduler.retention,
                                   shopSyncJobsDays: Math.max(0, num(e.target.value)),
-                                },
-                              },
-                            }
-                          : prev,
-                      )
-                    }
-                  />
-                </Field>
-                <Field
-                  label="PriceAI 商品历史保留天数"
-                  description="公开最低价、库存和报价数的历史快照；0 表示永久保留。"
-                >
-                  <Input
-                    type="number"
-                    min={0}
-                    value={String(form.scheduler.retention.priceAIProductHistoryDays)}
-                    onChange={(e) =>
-                      setForm((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              scheduler: {
-                                ...prev.scheduler,
-                                retention: {
-                                  ...prev.scheduler.retention,
-                                  priceAIProductHistoryDays: Math.max(0, num(e.target.value)),
-                                },
-                              },
-                            }
-                          : prev,
-                      )
-                    }
-                  />
-                </Field>
-                <Field
-                  label="PriceAI 变更记录保留天数"
-                  description="公开榜单、价格、可用性和 Feed 健康变化；0 表示永久保留。"
-                >
-                  <Input
-                    type="number"
-                    min={0}
-                    value={String(form.scheduler.retention.priceAIChangeLogsDays)}
-                    onChange={(e) =>
-                      setForm((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              scheduler: {
-                                ...prev.scheduler,
-                                retention: {
-                                  ...prev.scheduler.retention,
-                                  priceAIChangeLogsDays: Math.max(0, num(e.target.value)),
-                                },
-                              },
-                            }
-                          : prev,
-                      )
-                    }
-                  />
-                </Field>
-                <Field
-                  label="PriceAI 同步日志保留天数"
-                  description="Feed 与风险提取作业记录；0 表示永久保留。"
-                >
-                  <Input
-                    type="number"
-                    min={0}
-                    value={String(form.scheduler.retention.priceAISyncLogsDays)}
-                    onChange={(e) =>
-                      setForm((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              scheduler: {
-                                ...prev.scheduler,
-                                retention: {
-                                  ...prev.scheduler.retention,
-                                  priceAISyncLogsDays: Math.max(0, num(e.target.value)),
                                 },
                               },
                             }

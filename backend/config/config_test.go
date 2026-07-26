@@ -58,9 +58,6 @@ func TestLoadAppliesShopRetentionDefaults(t *testing.T) {
 	if retention.ShopSyncJobsDays != 30 {
 		t.Fatalf("shop sync jobs days = %d", retention.ShopSyncJobsDays)
 	}
-	if retention.PriceAIProductHistoryDays != 90 || retention.PriceAIChangeLogsDays != 90 || retention.PriceAISyncLogsDays != 30 {
-		t.Fatalf("unexpected priceai retention: %#v", retention)
-	}
 }
 
 func TestValidatePriceAIFeedCronRejectsSubMinuteSchedule(t *testing.T) {

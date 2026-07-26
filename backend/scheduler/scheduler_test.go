@@ -108,7 +108,7 @@ func TestStartRegistersPriceAIFeedAndRiskJobs(t *testing.T) {
 		config.ProxyConfig{},
 		log,
 	)
-	s.SetPriceAIService(service, repo)
+	s.SetPriceAIService(service)
 	if err := s.Start(); err != nil {
 		t.Fatalf("start scheduler: %v", err)
 	}

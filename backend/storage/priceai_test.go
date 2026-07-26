@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -16,8 +17,6 @@ func TestPriceAIAutoMigrateCreatesTablesAndIndexes(t *testing.T) {
 		&PriceAIPreset{},
 		&PriceAIOffer{},
 		&PriceAIOfferRanking{},
-		&PriceAIProductHistory{},
-		&PriceAIChangeLog{},
 		&PriceAISyncLog{},
 		&PriceAIRiskFeedback{},
 		&PriceAILDXPTargetBinding{},
@@ -37,7 +36,6 @@ func TestPriceAIAutoMigrateCreatesTablesAndIndexes(t *testing.T) {
 		{&PriceAIPreset{}, "uq_priceai_presets_product_remote_id"},
 		{&PriceAIOffer{}, "uq_priceai_offers_product_dedupe"},
 		{&PriceAIOfferRanking{}, "uq_priceai_offer_rankings_membership"},
-		{&PriceAIProductHistory{}, "uq_priceai_product_history_snapshot"},
 		{&PriceAIRiskFeedback{}, "uq_priceai_risk_feedback_subject"},
 		{&PriceAILDXPTargetBinding{}, "uq_priceai_ldxp_target_identity"},
 		{&PriceAILDXPTargetBinding{}, "uq_priceai_ldxp_target_shop_target"},
@@ -100,7 +98,7 @@ func TestPriceAIUpsertsPreserveLogicalRecordAndRollbackTransaction(t *testing.T)
 	}
 }
 
-func TestPriceAIPruneCurrentBoardsKeepsHistory(t *testing.T) {
+func TestPriceAIPruneCurrentBoardsKeepsCurrentRows(t *testing.T) {
 	db := openTestDB(t)
 	repo := NewPriceAI(db)
 	now := time.Now().UTC().Truncate(time.Millisecond)
@@ -133,11 +131,6 @@ func TestPriceAIPruneCurrentBoardsKeepsHistory(t *testing.T) {
 			t.Fatalf("create ranking: %v", err)
 		}
 	}
-	history := PriceAIProductHistory{ProductID: product.ID, SnapshotID: "snapshot-old", LowestPrice: &price, InStockCount: 1, OfferCount: 1, ProductSnapshotGeneratedAt: now, CapturedAt: now}
-	if err := db.Create(&history).Error; err != nil {
-		t.Fatalf("create history: %v", err)
-	}
-
 	pruned, err := repo.PruneCurrentBoards("snapshot-new")
 	if err != nil {
 		t.Fatalf("prune current boards: %v", err)
@@ -153,7 +146,6 @@ func TestPriceAIPruneCurrentBoardsKeepsHistory(t *testing.T) {
 		{"rankings", &PriceAIOfferRanking{}, 1},
 		{"offers", &PriceAIOffer{}, 1},
 		{"presets", &PriceAIPreset{}, 1},
-		{"history", &PriceAIProductHistory{}, 1},
 	} {
 		var count int64
 		if err := db.Model(item.model).Count(&count).Error; err != nil {
@@ -165,90 +157,124 @@ func TestPriceAIPruneCurrentBoardsKeepsHistory(t *testing.T) {
 	}
 }
 
-func TestPriceAIRetentionKeepsCurrentState(t *testing.T) {
+func TestPriceAIAutoMigrateDropsLegacyHistoryTables(t *testing.T) {
 	db := openTestDB(t)
 	repo := NewPriceAI(db)
-	now := time.Now().UTC().Truncate(time.Millisecond)
-	old := now.AddDate(0, 0, -10)
-	price := 20.0
-	product, err := repo.UpsertProduct(newPriceAIProduct("product-1", "chatgpt-plus", old, "snapshot-current", &price))
-	if err != nil {
-		t.Fatalf("upsert product: %v", err)
-	}
-	watch := PriceAIWatchTarget{ProductID: product.ID, MonitorEnabled: true, BaselineSnapshotID: "snapshot-current"}
-	if err := db.Create(&watch).Error; err != nil {
-		t.Fatalf("create watch target: %v", err)
-	}
-	offer := PriceAIOffer{ProductID: product.ID, DedupeKey: "offer", MerchantKey: "merchant", Title: "Current offer", NormalizedTitle: "current offer", Price: price, URL: "https://merchant.example/item", LastSnapshotID: "snapshot-current", FirstSeenAt: old, LastSeenAt: old}
-	if err := db.Create(&offer).Error; err != nil {
-		t.Fatalf("create current offer: %v", err)
-	}
-	risk := PriceAIRiskFeedback{ProductID: product.ID, Scope: PriceAIRiskScopeOffer, SubjectRemoteID: "offer", FetchedAt: &old}
-	if err := db.Create(&risk).Error; err != nil {
-		t.Fatalf("create current risk cache: %v", err)
-	}
-	for _, history := range []PriceAIProductHistory{
-		{ProductID: product.ID, SnapshotID: "history-old", ProductSnapshotGeneratedAt: old, CapturedAt: old},
-		{ProductID: product.ID, SnapshotID: "history-new", ProductSnapshotGeneratedAt: now, CapturedAt: now},
-	} {
-		if err := db.Create(&history).Error; err != nil {
-			t.Fatalf("create history: %v", err)
+	base := time.Date(2026, time.July, 26, 10, 30, 0, 0, time.UTC)
+
+	for _, table := range []string{"priceai_product_history", "priceai_change_logs"} {
+		if db.Migrator().HasTable(table) {
+			t.Fatalf("legacy table %s unexpectedly exists before setup", table)
 		}
-	}
-	for _, log := range []PriceAIChangeLog{
-		{ProductID: product.ID, Event: PriceAIChangeBaselineCreated, OccurredAt: old},
-		{ProductID: product.ID, Event: PriceAIChangeLowestPriceChanged, OccurredAt: now},
-	} {
-		if err := db.Create(&log).Error; err != nil {
-			t.Fatalf("create change log: %v", err)
+		if err := db.Exec("CREATE TABLE " + table + " (id INTEGER PRIMARY KEY)").Error; err != nil {
+			t.Fatalf("create legacy table %s: %v", table, err)
 		}
-	}
-	for _, log := range []PriceAISyncLog{
-		{JobKind: PriceAISyncJobFeed, Success: true, StartedAt: old, FinishedAt: old},
-		{JobKind: PriceAISyncJobFeed, Success: true, StartedAt: now, FinishedAt: now},
-	} {
-		if err := db.Create(&log).Error; err != nil {
-			t.Fatalf("create sync log: %v", err)
+		if !db.Migrator().HasTable(table) {
+			t.Fatalf("legacy table %s was not created", table)
 		}
 	}
 
-	cutoff := now.AddDate(0, 0, -5)
-	for _, deletion := range []struct {
-		name string
-		fn   func(time.Time) (int64, error)
-	}{
-		{"history", repo.DeleteProductHistoryBefore},
-		{"change logs", repo.DeleteChangeLogsBefore},
-		{"sync logs", repo.DeleteSyncLogsBefore},
-	} {
-		deleted, err := deletion.fn(cutoff)
-		if err != nil {
-			t.Fatalf("delete %s: %v", deletion.name, err)
-		}
-		if deleted != 1 {
-			t.Fatalf("deleted %s = %d, want 1", deletion.name, deleted)
+	seedSyncLog := func(jobKind PriceAISyncJobKind, seq int) {
+		t.Helper()
+		startedAt := base.Add(time.Duration(seq) * time.Minute)
+		if err := db.Create(&PriceAISyncLog{
+			JobKind:    jobKind,
+			SnapshotID: fmt.Sprintf("%s-%d", jobKind, seq),
+			Success:    seq%2 == 0,
+			StartedAt:  startedAt,
+			FinishedAt: startedAt.Add(3 * time.Second),
+		}).Error; err != nil {
+			t.Fatalf("seed %s sync log %d: %v", jobKind, seq, err)
 		}
 	}
-	for _, item := range []struct {
-		name  string
-		model any
-		want  int64
-	}{
-		{"products", &PriceAIProduct{}, 1},
-		{"offers", &PriceAIOffer{}, 1},
-		{"watch targets", &PriceAIWatchTarget{}, 1},
-		{"risk feedback", &PriceAIRiskFeedback{}, 1},
-		{"history", &PriceAIProductHistory{}, 1},
-		{"change logs", &PriceAIChangeLog{}, 1},
-		{"sync logs", &PriceAISyncLog{}, 1},
-	} {
-		var count int64
-		if err := db.Model(item.model).Count(&count).Error; err != nil {
-			t.Fatalf("count %s: %v", item.name, err)
+	for i := 0; i < 7; i++ {
+		seedSyncLog(PriceAISyncJobFeed, i)
+	}
+	for i := 0; i < 6; i++ {
+		seedSyncLog(PriceAISyncJobRisk, i)
+	}
+
+	if err := AutoMigrate(db); err != nil {
+		t.Fatalf("auto migrate with legacy tables: %v", err)
+	}
+
+	for _, table := range []string{"priceai_product_history", "priceai_change_logs"} {
+		if db.Migrator().HasTable(table) {
+			t.Fatalf("legacy table %s still exists after auto migrate", table)
 		}
-		if count != item.want {
-			t.Fatalf("%s count = %d, want %d", item.name, count, item.want)
+	}
+
+	assertJobLogs := func(jobKind PriceAISyncJobKind, want []string) {
+		t.Helper()
+		logs, total, err := repo.ListSyncLogs(jobKind, 1, 10)
+		if err != nil {
+			t.Fatalf("list %s sync logs after migrate: %v", jobKind, err)
 		}
+		if total != int64(len(want)) || len(logs) != len(want) {
+			t.Fatalf("%s sync log total=%d len=%d after migrate, want %d", jobKind, total, len(logs), len(want))
+		}
+		for i, snapshotID := range want {
+			if logs[i].SnapshotID != snapshotID {
+				t.Fatalf("%s sync log %d snapshot_id=%q after migrate, want %q", jobKind, i, logs[i].SnapshotID, snapshotID)
+			}
+		}
+	}
+
+	assertJobLogs(PriceAISyncJobFeed, []string{"feed-6", "feed-5", "feed-4", "feed-3", "feed-2"})
+	assertJobLogs(PriceAISyncJobRisk, []string{"risk-5", "risk-4", "risk-3", "risk-2", "risk-1"})
+}
+
+func TestPriceAIAppendSyncLogKeepsFivePerJobKind(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewPriceAI(db)
+	base := time.Date(2026, time.July, 26, 11, 0, 0, 0, time.UTC)
+
+	appendLog := func(jobKind PriceAISyncJobKind, seq int) {
+		t.Helper()
+		startedAt := base.Add(time.Duration(seq) * time.Minute)
+		if err := repo.AppendSyncLog(&PriceAISyncLog{
+			JobKind:    jobKind,
+			SnapshotID: fmt.Sprintf("%s-%d", jobKind, seq),
+			Success:    seq%2 == 0,
+			StartedAt:  startedAt,
+			FinishedAt: startedAt.Add(3 * time.Second),
+		}); err != nil {
+			t.Fatalf("append %s sync log %d: %v", jobKind, seq, err)
+		}
+	}
+
+	for i := 0; i < 7; i++ {
+		appendLog(PriceAISyncJobFeed, i)
+	}
+	for i := 0; i < 6; i++ {
+		appendLog(PriceAISyncJobRisk, i)
+	}
+
+	assertJobLogs := func(jobKind PriceAISyncJobKind, want []string) {
+		t.Helper()
+		logs, total, err := repo.ListSyncLogs(jobKind, 1, 10)
+		if err != nil {
+			t.Fatalf("list %s sync logs: %v", jobKind, err)
+		}
+		if total != int64(len(want)) || len(logs) != len(want) {
+			t.Fatalf("%s sync log total=%d len=%d, want %d", jobKind, total, len(logs), len(want))
+		}
+		for i, snapshotID := range want {
+			if logs[i].SnapshotID != snapshotID {
+				t.Fatalf("%s sync log %d snapshot_id=%q, want %q", jobKind, i, logs[i].SnapshotID, snapshotID)
+			}
+		}
+	}
+
+	assertJobLogs(PriceAISyncJobFeed, []string{"feed-6", "feed-5", "feed-4", "feed-3", "feed-2"})
+	assertJobLogs(PriceAISyncJobRisk, []string{"risk-5", "risk-4", "risk-3", "risk-2", "risk-1"})
+
+	logs, total, err := repo.ListSyncLogs("", 1, 20)
+	if err != nil {
+		t.Fatalf("list all sync logs: %v", err)
+	}
+	if total != 10 || len(logs) != 10 {
+		t.Fatalf("all sync log total=%d len=%d, want 10", total, len(logs))
 	}
 }
 

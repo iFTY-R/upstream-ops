@@ -420,6 +420,12 @@ export interface PriceAIQuoteGroup {
   quotes: PriceAIQuote[]
 }
 
+export interface PriceAIQuoteGroupPage extends PageResult<PriceAIQuoteGroup> {
+  board: string
+  preset_id?: string
+  coverage: string
+}
+
 export interface PriceAIProductDetail {
   product: PriceAIProduct
   watch_target?: PriceAIWatchTarget | null
@@ -427,29 +433,6 @@ export interface PriceAIProductDetail {
   risk_feedback: PriceAIRiskFeedback[]
   source_product_url: string
   coverage: string
-}
-
-export interface PriceAIProductHistory {
-  id: number
-  product_id: number
-  snapshot_id: string
-  lowest_price?: number | null
-  lowest_price_currency?: string | null
-  in_stock_count: number
-  offer_count: number
-  product_snapshot_generated_at: string
-  feed_stale: boolean
-  captured_at: string
-}
-
-export interface PriceAIChangeLog {
-  id: number
-  product_id: number
-  watch_target_id: number
-  event: string
-  snapshot_id?: string
-  message?: string
-  occurred_at: string
 }
 
 export interface PriceAIWatchTargetWithProduct {
@@ -793,9 +776,6 @@ export interface SystemSchedulerRetentionConfig {
   shopOtherChangeLogsDays: number
   shopMonitorLogsDays: number
   shopSyncJobsDays: number
-  priceAIProductHistoryDays: number
-  priceAIChangeLogsDays: number
-  priceAISyncLogsDays: number
 }
 
 export interface ShopRetentionResult {

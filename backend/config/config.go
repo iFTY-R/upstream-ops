@@ -131,9 +131,6 @@ type RetentionConfig struct {
 	ShopOtherChangeLogsDays         int    `mapstructure:"shopOtherChangeLogsDays" yaml:"shopOtherChangeLogsDays" json:"shopOtherChangeLogsDays"`
 	ShopMonitorLogsDays             int    `mapstructure:"shopMonitorLogsDays" yaml:"shopMonitorLogsDays" json:"shopMonitorLogsDays"`
 	ShopSyncJobsDays                int    `mapstructure:"shopSyncJobsDays" yaml:"shopSyncJobsDays" json:"shopSyncJobsDays"`
-	PriceAIProductHistoryDays       int    `mapstructure:"priceAIProductHistoryDays" yaml:"priceAIProductHistoryDays" json:"priceAIProductHistoryDays"`
-	PriceAIChangeLogsDays           int    `mapstructure:"priceAIChangeLogsDays" yaml:"priceAIChangeLogsDays" json:"priceAIChangeLogsDays"`
-	PriceAISyncLogsDays             int    `mapstructure:"priceAISyncLogsDays" yaml:"priceAISyncLogsDays" json:"priceAISyncLogsDays"`
 }
 
 // NotificationsConfig 通知去抖策略。所有字段都是"少烦我"取向，默认不丢消息只合并。
@@ -502,9 +499,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("scheduler.retention.shopOtherChangeLogsDays", 90)
 	v.SetDefault("scheduler.retention.shopMonitorLogsDays", 30)
 	v.SetDefault("scheduler.retention.shopSyncJobsDays", 30)
-	v.SetDefault("scheduler.retention.priceAIProductHistoryDays", 90)
-	v.SetDefault("scheduler.retention.priceAIChangeLogsDays", 90)
-	v.SetDefault("scheduler.retention.priceAISyncLogsDays", 30)
 
 	v.SetDefault("auth.enabled", true)
 	v.SetDefault("auth.username", DefaultAuthUsername)

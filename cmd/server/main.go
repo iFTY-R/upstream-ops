@@ -140,7 +140,7 @@ func main() {
 		shopMonitorSvc.UpdateProxyConfig(pcfg)
 		sch := scheduler.New(scfg, monitorSvc, shopMonitorSvc, autoGroupSvc, monLogs, rates, notifies, announcements, shopGoods, shopSyncJobs, captchas, cipher, pcfg, log)
 		sch.SetShopSyncRunner(shopSyncRunner)
-		sch.SetPriceAIService(priceAISvc, priceAIRepo)
+		sch.SetPriceAIService(priceAISvc)
 		return sch
 	}
 	sch := schedulerFactory(cfg.Scheduler, cfg.Proxy)

@@ -193,13 +193,16 @@ func Open(cfg DBConfig) (*gorm.DB, error) {
 
 // AutoMigrate 启动时自动同步表结构。
 func AutoMigrate(db *gorm.DB) error {
+	if err := dropObsoletePriceAIHistoryTables(db); err != nil {
+		return err
+	}
 	if err := dropDeletedAtColumns(db); err != nil {
 		return err
 	}
 	if err := migrateAutoGroupPolicyIndexes(db); err != nil {
 		return err
 	}
-	return db.AutoMigrate(
+	if err := db.AutoMigrate(
 		&Channel{},
 		&AuthSession{},
 		&CaptchaConfig{},
@@ -226,8 +229,6 @@ func AutoMigrate(db *gorm.DB) error {
 		&PriceAIPreset{},
 		&PriceAIOffer{},
 		&PriceAIOfferRanking{},
-		&PriceAIProductHistory{},
-		&PriceAIChangeLog{},
 		&PriceAISyncLog{},
 		&PriceAIRiskFeedback{},
 		&PriceAILDXPTargetBinding{},
@@ -236,7 +237,38 @@ func AutoMigrate(db *gorm.DB) error {
 		&AutoGroupCandidate{},
 		&AutoGroupEvaluationLog{},
 		&AutoGroupSwitchLog{},
-	)
+	); err != nil {
+		return err
+	}
+	return trimPriceAISyncLogs(db)
+}
+
+// PriceAI now keeps only current catalog state. Drop the retired audit tables
+// during startup so existing deployments immediately stop carrying old data.
+func dropObsoletePriceAIHistoryTables(db *gorm.DB) error {
+	for _, table := range []string{"priceai_product_history", "priceai_change_logs"} {
+		if !db.Migrator().HasTable(table) {
+			continue
+		}
+		if err := db.Migrator().DropTable(table); err != nil {
+			return fmt.Errorf("drop obsolete %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
+func trimPriceAISyncLogs(db *gorm.DB) error {
+	var jobKinds []PriceAISyncJobKind
+	if err := db.Model(&PriceAISyncLog{}).Distinct("job_kind").Pluck("job_kind", &jobKinds).Error; err != nil {
+		return fmt.Errorf("list priceai sync log job kinds: %w", err)
+	}
+	repo := NewPriceAI(db)
+	for _, jobKind := range jobKinds {
+		if err := repo.trimSyncLogs(jobKind); err != nil {
+			return fmt.Errorf("trim priceai %s sync logs: %w", jobKind, err)
+		}
+	}
+	return nil
 }
 
 func migrateAutoGroupPolicyIndexes(db *gorm.DB) error {

@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
-  CircleAlert,
   ExternalLink,
   Eye,
   Link2,
@@ -53,8 +52,6 @@ import type {
 import { dateTime, decimal, relativeTime } from "@/lib/format"
 import {
   type PriceAIProductFilters,
-  usePriceAIChangeLogs,
-  usePriceAIHistory,
   usePriceAIOffers,
   usePriceAIProduct,
   usePriceAIProducts,
@@ -112,8 +109,6 @@ export default function PriceAIPage() {
   const products = usePriceAIProducts(page, PAGE_SIZE, activeFilters)
   const detail = usePriceAIProduct(selectedSlug)
   const offers = usePriceAIOffers(selectedSlug, board, deferredQuoteSearch, quoteSort)
-  const history = usePriceAIHistory(selectedSlug)
-  const changes = usePriceAIChangeLogs(selectedSlug)
 
   useEffect(() => {
     setPage(1)
@@ -129,8 +124,12 @@ export default function PriceAIPage() {
   }, [detail.data?.product.slug, detail.data?.watch_target?.id])
 
   const items = products.data?.items ?? []
-  const platforms = Array.from(new Set(items.map((item) => item.platform).filter(Boolean))).sort()
-  const productTypes = Array.from(new Set(items.map((item) => item.product_type).filter(Boolean))).sort()
+  const platforms = Array.from(
+    new Set(items.map((item) => item.platform).filter((value): value is string => Boolean(value))),
+  ).sort()
+  const productTypes = Array.from(
+    new Set(items.map((item) => item.product_type).filter((value): value is string => Boolean(value))),
+  ).sort()
   const platformKey = platforms.join("\u0000")
   const productTypeKey = productTypes.join("\u0000")
   const platformFacetValues = mergeFacetValues(knownPlatforms, platforms)
@@ -314,13 +313,8 @@ export default function PriceAIPage() {
             {detail.data ? (
               <>
                 <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,0.72fr)]">
-                  <AggregatePanel product={detail.data.product} history={history.data?.items ?? []} />
+                  <AggregatePanel product={detail.data.product} />
                   <WatchTargetPanel target={selectedTarget} price={targetPrice} currency={targetCurrency} saving={savingTarget} onCreate={() => saveWatchTarget({}, true)} onRemove={removeWatchTarget} onToggleMonitor={(monitor_enabled) => saveWatchTarget({ monitor_enabled })} onToggleNotify={(notify_enabled) => saveWatchTarget({ notify_enabled })} onPriceChange={setTargetPrice} onCurrencyChange={setTargetCurrency} onSavePrice={saveTargetPrice} />
-                </div>
-
-                <div className="grid gap-4 xl:grid-cols-2">
-                  <HistoryPanel items={history.data?.items ?? []} loading={history.loading} />
-                  <ChangePanel items={changes.data?.items ?? []} loading={changes.loading} />
                 </div>
 
                 <section className="space-y-3">
@@ -348,7 +342,7 @@ export default function PriceAIPage() {
           </CardContent>
         </Card>
       ) : (
-        <Card className="border-dashed"><CardContent className="flex min-h-36 flex-col items-center justify-center gap-2 text-center"><Radar className="size-6 text-muted-foreground" /><p className="text-sm font-medium">选择一个目录商品以查看公开报价与监控历史</p><p className="text-xs text-muted-foreground">当前目录来自已同步的 PriceAI Feed。</p></CardContent></Card>
+        <Card className="border-dashed"><CardContent className="flex min-h-36 flex-col items-center justify-center gap-2 text-center"><Radar className="size-6 text-muted-foreground" /><p className="text-sm font-medium">选择一个目录商品以查看公开报价与监控状态</p><p className="text-xs text-muted-foreground">当前目录来自已同步的 PriceAI Feed。</p></CardContent></Card>
       )}
     </div>
   )
@@ -422,21 +416,17 @@ function Pager({ page, pages, total, onPageChange }: { page: number; pages: numb
   return <div className="flex items-center justify-between border-t border-border px-4 py-3 text-xs text-muted-foreground"><span>共 {total} 项，第 {page}/{pages} 页</span><div className="flex gap-2"><Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>上一页</Button><Button variant="outline" size="sm" disabled={page >= pages} onClick={() => onPageChange(page + 1)}>下一页</Button></div></div>
 }
 
-function AggregatePanel({ product, history }: { product: NonNullable<ReturnType<typeof usePriceAIProduct>["data"]>["product"]; history: Array<{ lowest_price?: number | null; lowest_price_currency?: string | null; captured_at: string; in_stock_count: number; offer_count: number }> }) {
-  return <section className="rounded-lg border border-border p-4"><h3 className="text-sm font-semibold">当前聚合</h3><div className="mt-3 grid grid-cols-3 gap-3"><Metric label="最低公开价" value={priceText(product.lowest_price, product.lowest_price_currency)} /><Metric label="有库存报价" value={String(product.in_stock_count)} /><Metric label="公开报价数" value={String(product.offer_count)} /></div><p className="mt-3 text-xs text-muted-foreground">商品快照 {dateTime(product.product_snapshot_generated_at)}，仅反映 PriceAI 已发布的 Feed 聚合值。</p>{history.length > 1 ? <div className="mt-3 flex h-8 items-end gap-1" aria-label="最近历史价格趋势">{history.slice(0, 12).reverse().map((point) => <span key={point.captured_at} className="min-w-1 flex-1 rounded-sm bg-sky-500/50" style={{ height: `${Math.max(12, Math.min(100, 100 - ((point.lowest_price ?? 0) / Math.max(...history.map((item) => item.lowest_price ?? 0), 1)) * 80))}%` }} title={`${dateTime(point.captured_at)} · ${priceText(point.lowest_price, point.lowest_price_currency)}`} />)}</div> : null}</section>
+function AggregatePanel({ product }: { product: NonNullable<ReturnType<typeof usePriceAIProduct>["data"]>["product"] }) {
+  return <section className="rounded-lg border border-border p-4"><h3 className="text-sm font-semibold">当前聚合</h3><div className="mt-3 grid grid-cols-3 gap-3"><Metric label="最低公开价" value={priceText(product.lowest_price, product.lowest_price_currency)} /><Metric label="有库存报价" value={String(product.in_stock_count)} /><Metric label="公开报价数" value={String(product.offer_count)} /></div><p className="mt-3 text-xs text-muted-foreground">商品快照 {dateTime(product.product_snapshot_generated_at)}，仅反映 PriceAI 已发布的 Feed 聚合值。</p></section>
 }
 
 function Metric({ label, value }: { label: string; value: string }) { return <div><p className="text-[11px] text-muted-foreground">{label}</p><p className="mt-1 truncate text-sm font-semibold">{value}</p></div> }
 
 function WatchTargetPanel({ target, price, currency, saving, onCreate, onRemove, onToggleMonitor, onToggleNotify, onPriceChange, onCurrencyChange, onSavePrice }: { target?: PriceAIWatchTarget | null; price: string; currency: string; saving: boolean; onCreate: () => void; onRemove: () => void; onToggleMonitor: (value: boolean) => void; onToggleNotify: (value: boolean) => void; onPriceChange: (value: string) => void; onCurrencyChange: (value: string) => void; onSavePrice: () => void }) {
-  return <section className="rounded-lg border border-border p-4"><div className="flex items-center justify-between gap-3"><div><h3 className="flex items-center gap-2 text-sm font-semibold"><Target className="size-4 text-sky-600" />监控目标</h3><p className="mt-1 text-xs text-muted-foreground">通知独立于店铺监控，默认关闭。</p></div>{target ? <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive" disabled={saving} onClick={onRemove} aria-label="停止监控"><Trash2 className="size-4" /></Button> : null}</div>{target ? <div className="mt-4 space-y-3"><ToggleRow label="记录价格与可用性变化" description="保留本商品的 Feed 历史和变更记录" checked={target.monitor_enabled} disabled={saving} onCheckedChange={onToggleMonitor} /><ToggleRow label="发送 PriceAI 通知" description="价格下降、目标价、库存和 Feed 健康变化" checked={target.notify_enabled} disabled={saving} onCheckedChange={onToggleNotify} /><div className="space-y-2 border-t border-border pt-3"><Label className="text-xs">目标公开价</Label><div className="flex gap-2"><Input type="number" min="0" step="any" value={price} onChange={(event) => onPriceChange(event.target.value)} placeholder="可选" /><Input value={currency} onChange={(event) => onCurrencyChange(event.target.value)} placeholder="币种" className="w-24" /><Button size="sm" variant="outline" disabled={saving || !price} onClick={onSavePrice}>保存</Button></div>{target.target_price != null ? <p className="text-[11px] text-muted-foreground">当前阈值：{priceText(target.target_price, target.target_price_currency)}</p> : null}</div></div> : <div className="mt-4 rounded-md border border-dashed border-border p-3"><p className="text-sm font-medium">尚未监控此商品</p><p className="mt-1 text-xs text-muted-foreground">建立目标会以当前快照作为基线，不会补发历史通知。</p><Button className="mt-3" size="sm" onClick={onCreate} disabled={saving}><Eye className="size-3.5" />开始监控</Button></div>}</section>
+  return <section className="rounded-lg border border-border p-4"><div className="flex items-center justify-between gap-3"><div><h3 className="flex items-center gap-2 text-sm font-semibold"><Target className="size-4 text-sky-600" />监控目标</h3><p className="mt-1 text-xs text-muted-foreground">通知独立于店铺监控，默认关闭。</p></div>{target ? <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive" disabled={saving} onClick={onRemove} aria-label="停止监控"><Trash2 className="size-4" /></Button> : null}</div>{target ? <div className="mt-4 space-y-3"><ToggleRow label="启用价格与库存监控" description="根据当前快照计算降价、目标价和库存状态。" checked={target.monitor_enabled} disabled={saving} onCheckedChange={onToggleMonitor} /><ToggleRow label="发送 PriceAI 通知" description="价格下降、目标价、库存和 Feed 健康变化" checked={target.notify_enabled} disabled={saving} onCheckedChange={onToggleNotify} /><div className="space-y-2 border-t border-border pt-3"><Label className="text-xs">目标公开价</Label><div className="flex gap-2"><Input type="number" min="0" step="any" value={price} onChange={(event) => onPriceChange(event.target.value)} placeholder="可选" /><Input value={currency} onChange={(event) => onCurrencyChange(event.target.value)} placeholder="币种" className="w-24" /><Button size="sm" variant="outline" disabled={saving || !price} onClick={onSavePrice}>保存</Button></div>{target.target_price != null ? <p className="text-[11px] text-muted-foreground">当前阈值：{priceText(target.target_price, target.target_price_currency)}</p> : null}</div></div> : <div className="mt-4 rounded-md border border-dashed border-border p-3"><p className="text-sm font-medium">尚未监控此商品</p><p className="mt-1 text-xs text-muted-foreground">建立目标会以当前快照作为基线，不会补发历史通知。</p><Button className="mt-3" size="sm" onClick={onCreate} disabled={saving}><Eye className="size-3.5" />开始监控</Button></div>}</section>
 }
 
 function ToggleRow({ label, description, checked, disabled, onCheckedChange }: { label: string; description: string; checked: boolean; disabled: boolean; onCheckedChange: (value: boolean) => void }) { return <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-medium">{label}</p><p className="text-[11px] text-muted-foreground">{description}</p></div><Switch checked={checked} disabled={disabled} onCheckedChange={onCheckedChange} /></div> }
-
-function HistoryPanel({ items, loading }: { items: Array<{ id: number; captured_at: string; lowest_price?: number | null; lowest_price_currency?: string | null; in_stock_count: number; offer_count: number; feed_stale: boolean }>; loading: boolean }) { return <section className="rounded-lg border border-border p-4"><h3 className="text-sm font-semibold">价格历史</h3>{loading ? <div className="mt-3"><LoadingLine /></div> : items.length === 0 ? <p className="mt-3 text-xs text-muted-foreground">暂无已提交的历史快照。</p> : <div className="mt-3 space-y-2">{items.slice(0, 6).map((item) => <div key={item.id} className="flex items-center justify-between text-xs"><span>{dateTime(item.captured_at)}</span><span className="font-medium">{priceText(item.lowest_price, item.lowest_price_currency)}</span><span className="text-muted-foreground">库存 {item.in_stock_count} / 报价 {item.offer_count}{item.feed_stale ? " · 过期 Feed" : ""}</span></div>)}</div>}</section> }
-
-function ChangePanel({ items, loading }: { items: Array<{ id: number; event: string; message?: string; occurred_at: string }>; loading: boolean }) { return <section className="rounded-lg border border-border p-4"><h3 className="text-sm font-semibold">聚合变更</h3>{loading ? <div className="mt-3"><LoadingLine /></div> : items.length === 0 ? <p className="mt-3 text-xs text-muted-foreground">暂无变更记录，首次观察只建立基线。</p> : <div className="mt-3 space-y-2">{items.slice(0, 6).map((item) => <div key={item.id} className="flex gap-2 text-xs"><CircleAlert className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" /><div><p className="font-medium">{item.message || item.event}</p><p className="text-muted-foreground">{dateTime(item.occurred_at)}</p></div></div>)}</div>}</section> }
 
 function QuoteGroups({ groups, loading, error, expandedGroups, onToggle }: { groups: PriceAIQuoteGroup[]; loading: boolean; error: string | null; expandedGroups: string[]; onToggle: (group: PriceAIQuoteGroup) => void }) {
   if (error) return <InlineError message={error} />

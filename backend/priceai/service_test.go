@@ -76,20 +76,6 @@ func TestServiceImportsChangedSnapshotsAndUsesConditionalPointer(t *testing.T) {
 	if product.LowestPrice == nil || *product.LowestPrice != 18 || product.LastSnapshotID != "snapshot-2" {
 		t.Fatalf("updated product mismatch: %#v", product)
 	}
-	history, total, err := repo.ListProductHistory(product.ID, 1, 10)
-	if err != nil {
-		t.Fatalf("list history: %v", err)
-	}
-	if total != 2 || len(history) != 2 {
-		t.Fatalf("history total=%d len=%d, want 2", total, len(history))
-	}
-	changes, _, err := repo.ListChangeLogs(product.ID, 1, 20)
-	if err != nil {
-		t.Fatalf("list changes: %v", err)
-	}
-	if !containsChange(changes, storage.PriceAIChangeLowestPriceChanged) {
-		t.Fatalf("price change was not recorded: %#v", changes)
-	}
 }
 
 func TestTruncatePriceAIRawJSONKeepsAuditRowsBounded(t *testing.T) {
@@ -523,15 +509,6 @@ func validSnapshot(snapshotID string, at time.Time, price float64, slug string) 
 			TopOffers:           []FeedOffer{offer},
 		}},
 	}
-}
-
-func containsChange(changes []storage.PriceAIChangeLog, event storage.PriceAIChangeEvent) bool {
-	for _, change := range changes {
-		if change.Event == event {
-			return true
-		}
-	}
-	return false
 }
 
 func stringPointer(value string) *string { return &value }

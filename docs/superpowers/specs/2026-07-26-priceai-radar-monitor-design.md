@@ -51,11 +51,11 @@ The discovery document currently declares a 300-second refresh interval. The API
 The synchronization contract is:
 
 1. Fetch `latest.json` with `If-None-Match` and `If-Modified-Since` when prior validators are available.
-2. On `304 Not Modified`, update only attempt/log metadata. Do not change products, offers, history, or notify.
+2. On `304 Not Modified`, update only attempt/log metadata. Do not change products or offers, and do not notify.
 3. On `200`, validate the pointer and compare `snapshot_id` with the locally committed snapshot.
 4. Download the immutable `snapshot_url` only when `snapshot_id` changed.
 5. Validate the complete snapshot before opening the database transaction.
-6. Atomically apply the snapshot, calculate watched-product changes, write history and logs, then dispatch notifications after commit.
+6. Atomically apply the snapshot, calculate watched-product changes, write the sync log, then dispatch notifications after commit.
 
 The pointer and snapshot must be HTTPS and on the expected PriceAI data host. The snapshot ID in the downloaded object must equal the pointer snapshot ID. The importer must reject unsupported schema versions, duplicate product IDs or slugs, negative counts or prices, malformed timestamps, and malformed public offer URLs.
 
@@ -121,7 +121,7 @@ Existing `shopmonitor` remains the owner of LDXP provider calls and exact-produc
 
 ## Storage Model
 
-All new tables use the `priceai_` prefix. Current-state tables are retained; history and logs use retention settings rather than deleting current data.
+All new tables use the `priceai_` prefix. PriceAI retains current-state tables only; it does not store product history or durable aggregate-change records.
 
 ### `priceai_feed_state`
 
@@ -275,42 +275,9 @@ Unique index: `(product_id, board_kind, preset_id, offer_id)`. `board_kind` is `
 
 This table allows one offer shown in both the default board and a preset to appear only once in an `all public boards` grouping while retaining its board memberships and ranks.
 
-### History, Events, And Logs
+### Sync Logs
 
-`priceai_product_history` stores one aggregate point per `(product_id, snapshot_id)`:
-
-```text
-lowest_price
-in_stock_count
-offer_count
-product_snapshot_generated_at
-lowest_price_currency
-feed_stale
-captured_at
-```
-
-`priceai_change_logs` stores durable, user-visible events. Event values include:
-
-```text
-baseline_created
-catalog_product_missing
-lowest_price_changed
-lowest_price_currency_changed
-in_stock_count_changed
-offer_count_changed
-public_board_changed
-target_price_hit
-feed_became_stale
-feed_recovered
-sync_failed
-sync_recovered
-```
-
-`public_board_changed` describes a change in the **published board** only. It must never be worded as removal from all PriceAI offers.
-
-After a valid Feed import has calculated the prior board digest, it removes current-state preset, ranking, and offer rows that were not seen in the committed `snapshot_id`: rankings first, then offers with no remaining current ranking, then presets. The importer never presents those rows as current public boards or permits them to create a new LDXP target. The corresponding `public_board_changed` event preserves audit context without pretending to retain a full offer history.
-
-`priceai_sync_logs` stores every Feed or risk-enrichment attempt:
+`priceai_sync_logs` stores the five most recent Feed attempts and the five most recent risk-enrichment attempts for diagnostics:
 
 ```text
 id
@@ -327,6 +294,8 @@ finished_at
 duration_ms
 created_at
 ```
+
+After a valid Feed import has calculated the prior board digest, it removes current-state preset, ranking, and offer rows that were not seen in the committed `snapshot_id`: rankings first, then offers with no remaining current ranking, then presets. The importer never presents those rows as current public boards or permits them to create a new LDXP target. Notifications are calculated from the prior current state before it is replaced, without persisting an audit trail.
 
 ### `priceai_risk_feedback`
 
@@ -362,14 +331,14 @@ Unique index: `(product_id, scope, subject_remote_id)`. `subject_remote_id` is a
 4. Fetch and validate the immutable snapshot in memory. Do not write partial product or offer data.
 5. Begin one transaction.
 6. Upsert products, presets, current public offers, and board memberships.
-7. Mark prior products absent from a valid full catalog as missing without deleting their history.
-8. Compare each watched product with its prior committed aggregate point and prior published-board digest.
-9. Write aggregate history, change logs, sync log, and feed state in the same transaction.
+7. Mark prior products absent from a valid full catalog as missing while retaining their latest current row.
+8. Compare each watched product with its prior current aggregate values and prior published-board digest.
+9. Write the sync log and feed state in the same transaction.
 10. Commit. Only then issue one aggregated notification digest for each affected watched product.
 
-The first successful observation of a product creates a baseline and history point. It sends no price, stock, or board-change notifications.
+The first successful observation of a product creates a baseline. It sends no price, stock, or board-change notifications.
 
-A newly created watch target also starts at its `baseline_snapshot_id`. Product changes are eligible for that target only from a later committed snapshot, so adding a target never replays prior history as a new alert.
+A newly created watch target also starts at its `baseline_snapshot_id`. Product changes are eligible for that target only from a later committed snapshot, so adding a target never treats an earlier snapshot as a new alert.
 
 ### Comparison Rules
 
@@ -380,17 +349,9 @@ A newly created watch target also starts at its `baseline_snapshot_id`. Product 
 - A newly published offer below the prior Feed lowest price is eligible for a high-signal notification when it is in the public board and the watch target permits notifications.
 - A Feed `stale` transition, three consecutive Feed failures, and recovery each create a separate health event with cooldown protection.
 
-### Retention
+### Current-State Storage
 
-Add PriceAI retention values next to existing scheduler retention settings:
-
-```text
-priceAIProductHistoryDays: 90
-priceAIChangeLogsDays: 90
-priceAISyncLogsDays: 30
-```
-
-Current product, offer, preset, watch-target, and latest risk-feedback records are retained. Retention deletion must never delete the data needed for the next diff or a watch target.
+Current product, offer, preset, watch-target, and latest risk-feedback records are retained because they are required for the next comparison and active monitoring. Startup migration removes the retired `priceai_product_history` and `priceai_change_logs` tables. Sync logs have no scheduler retention setting: the repository enforces five records per job kind.
 
 ## Local Search, Classification, And Quote Grouping
 
@@ -545,8 +506,6 @@ POST   /api/priceai/sync
 GET    /api/priceai/products
 GET    /api/priceai/products/:slug
 GET    /api/priceai/products/:slug/offers
-GET    /api/priceai/products/:slug/history
-GET    /api/priceai/products/:slug/change-logs
 
 GET    /api/priceai/watch-targets
 POST   /api/priceai/watch-targets
@@ -562,8 +521,6 @@ Key query parameters:
 ```text
 GET /products?query=&platform=&product_type=&watch_state=&availability=&sort=&page=&page_size=
 GET /products/:slug/offers?board=default|all|preset:<id>&query=&group_by=title&sort=&page=&page_size=
-GET /products/:slug/history?days=30
-GET /products/:slug/change-logs?page=&page_size=
 ```
 
 `POST /sync` coalesces with an active Feed run and returns its result rather than issuing parallel network requests. `POST /risk-refresh` is a manual best-effort enrichment trigger; it cannot refresh prices and returns queued/attempt status separately.
@@ -589,7 +546,7 @@ The first screen is the operational view, not a landing page:
 - Compact source-health strip: latest snapshot time, current snapshot ID, stale state, last success, and manual sync icon button.
 - Catalog filters: text search, platform, product type, watch state, availability, and product sort.
 - Product table/list: name, platform/type, aggregate lowest price, in-stock/offer counts, product freshness, watched state, and risk-data freshness.
-- Selected product detail: price history, aggregate changes, public-board selector, grouped quote table, and watch settings.
+- Selected product detail: current aggregate values, public-board selector, grouped quote table, and watch settings.
 - Grouped quote table: original title, merchant/source, price/currency, published status, board membership, risk badges, and outbound source link.
 - `精确监控` icon action appears only for stored offers that pass the LDXP eligibility check. A tooltip explains that it monitors this exact shop item.
 
@@ -687,7 +644,7 @@ pnpm build
 
 ## Implementation Sequence
 
-1. Add GORM models, repositories, migration coverage, and retention hooks.
+1. Add GORM models, repositories, migration coverage, current-board pruning, and sync-log caps.
 2. Implement the documented Feed client, validator, importer, baseline/diff logic, and scheduler integration.
 3. Add PriceAI API handlers, target settings, notifications, and backend tests.
 4. Add the independent risk-enrichment adapter, strict association logic, cache behavior, and tests.

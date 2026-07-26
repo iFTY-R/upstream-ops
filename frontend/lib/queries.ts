@@ -21,12 +21,10 @@ import type {
   RateChangeLogPage,
   RateSnapshot,
   PageResult,
-  PriceAIChangeLog,
   PriceAIProductDetail,
-  PriceAIProductHistory,
   PriceAIProductListItem,
   PriceAIProductSort,
-  PriceAIQuoteGroup,
+  PriceAIQuoteGroupPage,
   PriceAIQuoteSort,
   PriceAIStatus,
   PriceAIWatchTargetWithProduct,
@@ -347,20 +345,8 @@ export function usePriceAIOffers(
   q.set("page", String(page))
   q.set("page_size", String(pageSize))
   if (query.trim()) q.set("query", query.trim())
-  return useApi<PageResult<PriceAIQuoteGroup>>(
+  return useApi<PriceAIQuoteGroupPage>(
     slug ? `/priceai/products/${encodeURIComponent(slug)}/offers?${q.toString()}` : null,
-  )
-}
-
-export function usePriceAIHistory(slug: string | null, page = 1, pageSize = 12) {
-  return useApi<PageResult<PriceAIProductHistory>>(
-    slug ? `/priceai/products/${encodeURIComponent(slug)}/history?page=${page}&page_size=${pageSize}` : null,
-  )
-}
-
-export function usePriceAIChangeLogs(slug: string | null, page = 1, pageSize = 8) {
-  return useApi<PageResult<PriceAIChangeLog>>(
-    slug ? `/priceai/products/${encodeURIComponent(slug)}/change-logs?page=${page}&page_size=${pageSize}` : null,
   )
 }
 

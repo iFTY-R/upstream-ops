@@ -710,37 +710,6 @@ type PriceAIOfferRanking struct {
 
 func (PriceAIOfferRanking) TableName() string { return "priceai_offer_rankings" }
 
-type PriceAIProductHistory struct {
-	ID                         uint      `gorm:"primaryKey" json:"id"`
-	ProductID                  uint      `gorm:"not null;uniqueIndex:uq_priceai_product_history_snapshot;index" json:"product_id"`
-	SnapshotID                 string    `gorm:"size:256;not null;uniqueIndex:uq_priceai_product_history_snapshot" json:"snapshot_id"`
-	LowestPrice                *float64  `json:"lowest_price,omitempty"`
-	LowestPriceCurrency        *string   `gorm:"size:32" json:"lowest_price_currency,omitempty"`
-	InStockCount               int       `gorm:"not null;default:0" json:"in_stock_count"`
-	OfferCount                 int       `gorm:"not null;default:0" json:"offer_count"`
-	ProductSnapshotGeneratedAt time.Time `gorm:"not null;index" json:"product_snapshot_generated_at"`
-	FeedStale                  bool      `gorm:"not null;default:false" json:"feed_stale"`
-	CapturedAt                 time.Time `gorm:"not null;index" json:"captured_at"`
-	CreatedAt                  time.Time `json:"created_at"`
-}
-
-func (PriceAIProductHistory) TableName() string { return "priceai_product_history" }
-
-type PriceAIChangeLog struct {
-	ID                uint               `gorm:"primaryKey" json:"id"`
-	ProductID         uint               `gorm:"not null;default:0;index" json:"product_id,omitempty"`
-	WatchTargetID     uint               `gorm:"not null;default:0;index" json:"watch_target_id,omitempty"`
-	Event             PriceAIChangeEvent `gorm:"size:64;not null;index" json:"event"`
-	SnapshotID        string             `gorm:"size:256;index" json:"snapshot_id,omitempty"`
-	PreviousValueJSON string             `gorm:"type:text" json:"previous_value_json,omitempty"`
-	CurrentValueJSON  string             `gorm:"type:text" json:"current_value_json,omitempty"`
-	Message           string             `gorm:"type:text" json:"message,omitempty"`
-	OccurredAt        time.Time          `gorm:"not null;index" json:"occurred_at"`
-	CreatedAt         time.Time          `json:"created_at"`
-}
-
-func (PriceAIChangeLog) TableName() string { return "priceai_change_logs" }
-
 type PriceAISyncLog struct {
 	ID                   uint               `gorm:"primaryKey" json:"id"`
 	JobKind              PriceAISyncJobKind `gorm:"size:16;not null;index" json:"job_kind"`

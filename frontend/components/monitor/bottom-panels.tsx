@@ -82,6 +82,14 @@ const eventMeta: Record<NotificationEvent, { icon: LucideIcon; cls: string }> = 
   auto_group_target_update_failed: { icon: ShieldX, cls: "text-danger" },
   auto_group_probe_failed: { icon: TestTube2, cls: "text-warning" },
   auto_group_policy_error: { icon: ShieldX, cls: "text-danger" },
+  priceai_lowest_price_dropped: { icon: ArrowUpRight, cls: "text-success" },
+  priceai_target_price_hit: { icon: CheckCircle2, cls: "text-success" },
+  priceai_out_of_stock: { icon: AlertTriangle, cls: "text-warning" },
+  priceai_restocked: { icon: RefreshCw, cls: "text-success" },
+  priceai_new_public_lowest_offer: { icon: ArrowUpRight, cls: "text-success" },
+  priceai_feed_stale: { icon: AlertTriangle, cls: "text-warning" },
+  priceai_sync_failed: { icon: ShieldX, cls: "text-danger" },
+  priceai_sync_recovered: { icon: CheckCircle2, cls: "text-success" },
 }
 
 const FEED_PREVIEW_SIZE = 10

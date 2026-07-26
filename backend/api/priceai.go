@@ -28,8 +28,6 @@ func registerPriceAI(g *gin.RouterGroup, d *Deps) {
 	group.GET("/products", func(c *gin.Context) { listPriceAIProducts(c, d) })
 	group.GET("/products/:slug", func(c *gin.Context) { getPriceAIProduct(c, d) })
 	group.GET("/products/:slug/offers", func(c *gin.Context) { listPriceAIOffers(c, d) })
-	group.GET("/products/:slug/history", func(c *gin.Context) { listPriceAIHistory(c, d) })
-	group.GET("/products/:slug/change-logs", func(c *gin.Context) { listPriceAIChangeLogs(c, d) })
 	group.POST("/offers/:offer_id/shop-target", func(c *gin.Context) { createPriceAIOfferShopTarget(c, d) })
 	group.GET("/watch-targets", func(c *gin.Context) { listPriceAIWatchTargets(c, d) })
 	group.POST("/watch-targets", func(c *gin.Context) { createPriceAIWatchTarget(c, d) })
@@ -457,48 +455,6 @@ func getPriceAIProduct(c *gin.Context, d *Deps) {
 		"source_product_url": "https://priceai.cc/products/" + url.PathEscape(product.Slug),
 		"coverage":           priceAIPublicBoardCoverage,
 	}})
-}
-
-func listPriceAIHistory(c *gin.Context, d *Deps) {
-	if !priceAIReady(c, d) {
-		return
-	}
-	product, err := findPriceAIProduct(c, d)
-	if err != nil {
-		return
-	}
-	page, pageSize, err := parsePageQuery(c)
-	if err != nil {
-		fail(c, http.StatusBadRequest, err)
-		return
-	}
-	items, total, err := d.PriceAI.ListProductHistory(product.ID, page, pageSize)
-	if err != nil {
-		fail(c, http.StatusInternalServerError, err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"data": priceAIPage(items, total, page, pageSize)})
-}
-
-func listPriceAIChangeLogs(c *gin.Context, d *Deps) {
-	if !priceAIReady(c, d) {
-		return
-	}
-	product, err := findPriceAIProduct(c, d)
-	if err != nil {
-		return
-	}
-	page, pageSize, err := parsePageQuery(c)
-	if err != nil {
-		fail(c, http.StatusBadRequest, err)
-		return
-	}
-	items, total, err := d.PriceAI.ListChangeLogs(product.ID, page, pageSize)
-	if err != nil {
-		fail(c, http.StatusInternalServerError, err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"data": priceAIPage(items, total, page, pageSize)})
 }
 
 func findPriceAIProduct(c *gin.Context, d *Deps) (*storage.PriceAIProduct, error) {

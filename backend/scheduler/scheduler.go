@@ -36,7 +36,6 @@ type Scheduler struct {
 	cipher         *crypto.Cipher
 	proxy          config.ProxyConfig
 	priceAI        *priceai.Service
-	priceAIRepo    *storage.PriceAI
 }
 
 // retentionExecutionMu spans scheduler instances so a hot reload cannot start
@@ -95,9 +94,8 @@ func (s *Scheduler) SetShopSyncRunner(runner *shopmonitor.SyncJobRunner) {
 
 // SetPriceAIService keeps the scheduler on the same singleton Feed service
 // used by manual API calls, so coalescing and persisted cadence apply equally.
-func (s *Scheduler) SetPriceAIService(service *priceai.Service, repo *storage.PriceAI) {
+func (s *Scheduler) SetPriceAIService(service *priceai.Service) {
 	s.priceAI = service
-	s.priceAIRepo = repo
 }
 
 func (s *Scheduler) Start() error {
@@ -260,10 +258,7 @@ func (s *Scheduler) hasRetention() bool {
 		r.ShopHighFrequencyChangeLogsDays > 0 ||
 		r.ShopOtherChangeLogsDays > 0 ||
 		r.ShopMonitorLogsDays > 0 ||
-		r.ShopSyncJobsDays > 0 ||
-		r.PriceAIProductHistoryDays > 0 ||
-		r.PriceAIChangeLogsDays > 0 ||
-		r.PriceAISyncLogsDays > 0
+		r.ShopSyncJobsDays > 0
 }
 
 // runRetention 按配置删除过期历史。任一表失败不影响其它，全部错误写日志。
@@ -322,39 +317,6 @@ func (s *Scheduler) runRetention() {
 	}
 
 	s.runShopRetention(r, now)
-	s.runPriceAIRetention(r, now)
-}
-
-func (s *Scheduler) runPriceAIRetention(retention config.RetentionConfig, now time.Time) {
-	if s.priceAIRepo == nil {
-		if (retention.PriceAIProductHistoryDays > 0 || retention.PriceAIChangeLogsDays > 0 || retention.PriceAISyncLogsDays > 0) && s.log != nil {
-			s.log.Warn("priceai retention skipped because repository is unavailable")
-		}
-		return
-	}
-	for _, item := range []struct {
-		name string
-		days int
-		fn   func(time.Time) (int64, error)
-	}{
-		{"priceai product history", retention.PriceAIProductHistoryDays, s.priceAIRepo.DeleteProductHistoryBefore},
-		{"priceai change logs", retention.PriceAIChangeLogsDays, s.priceAIRepo.DeleteChangeLogsBefore},
-		{"priceai sync logs", retention.PriceAISyncLogsDays, s.priceAIRepo.DeleteSyncLogsBefore},
-	} {
-		if item.days <= 0 {
-			continue
-		}
-		cutoff := now.AddDate(0, 0, -item.days)
-		rows, err := item.fn(cutoff)
-		if s.log == nil {
-			continue
-		}
-		if err != nil {
-			s.log.Warn("retention "+item.name+" failed", "err", err)
-		} else if rows > 0 {
-			s.log.Info("retention "+item.name+" deleted", "rows", rows, "before", cutoff)
-		}
-	}
 }
 
 // RunShopRetention immediately applies the supplied shop-only policy. Manual

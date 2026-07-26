@@ -232,9 +232,6 @@ func (s *Service) persistSuccess(ctx context.Context, state *storage.PriceAIFeed
 		if err := tx.UpsertFeedState(&next); err != nil {
 			return err
 		}
-		if err := appendFeedHealthChanges(tx, previous, next, finished); err != nil {
-			return err
-		}
 		return tx.AppendSyncLog(&storage.PriceAISyncLog{
 			JobKind:     storage.PriceAISyncJobFeed,
 			SnapshotID:  next.SnapshotID,
@@ -263,16 +260,6 @@ func (s *Service) recordFailure(ctx context.Context, state *storage.PriceAIFeedS
 	persistErr := s.repo.Transaction(func(tx *storage.PriceAI) error {
 		if err := tx.UpsertFeedState(&next); err != nil {
 			return err
-		}
-		if previousFailures < 3 && next.ConsecutiveFailures >= 3 {
-			if err := tx.AppendChangeLog(&storage.PriceAIChangeLog{
-				Event:      storage.PriceAIChangeSyncFailed,
-				SnapshotID: next.SnapshotID,
-				Message:    "PriceAI Feed 连续同步失败三次",
-				OccurredAt: finished,
-			}); err != nil {
-				return err
-			}
 		}
 		return tx.AppendSyncLog(&storage.PriceAISyncLog{
 			JobKind:      storage.PriceAISyncJobFeed,
@@ -470,34 +457,6 @@ func applyPointerCacheHeaders(state *storage.PriceAIFeedState, fetched *PointerF
 	}
 }
 
-func appendFeedHealthChanges(tx *storage.PriceAI, previous, next storage.PriceAIFeedState, at time.Time) error {
-	if previous.SnapshotID != "" && previous.FeedStale != next.FeedStale {
-		event := storage.PriceAIChangeFeedRecovered
-		message := "PriceAI Feed 已恢复新鲜"
-		if next.FeedStale {
-			event = storage.PriceAIChangeFeedBecameStale
-			message = "PriceAI Feed 标记为陈旧"
-		}
-		if err := tx.AppendChangeLog(&storage.PriceAIChangeLog{
-			Event:      event,
-			SnapshotID: next.SnapshotID,
-			Message:    message,
-			OccurredAt: at,
-		}); err != nil {
-			return err
-		}
-	}
-	if previous.ConsecutiveFailures >= 3 && next.ConsecutiveFailures == 0 {
-		return tx.AppendChangeLog(&storage.PriceAIChangeLog{
-			Event:      storage.PriceAIChangeSyncRecovered,
-			SnapshotID: next.SnapshotID,
-			Message:    "PriceAI Feed 同步已恢复",
-			OccurredAt: at,
-		})
-	}
-	return nil
-}
-
 func (s *Service) importSnapshot(ctx context.Context, state *storage.PriceAIFeedState, pointer *Pointer, fetched *PointerFetch, prepared *preparedSnapshot, started time.Time) (SyncResult, error) {
 	next := *state
 	previousState := *state
@@ -528,33 +487,17 @@ func (s *Service) importSnapshot(ctx context.Context, state *storage.PriceAIFeed
 			if err := importPreparedBoards(tx, stored.ID, pointer.SnapshotID, product, finished); err != nil {
 				return err
 			}
-			if err := tx.UpsertProductHistory(&storage.PriceAIProductHistory{
-				ProductID:                  stored.ID,
-				SnapshotID:                 pointer.SnapshotID,
-				LowestPrice:                stored.LowestPrice,
-				LowestPriceCurrency:        stored.LowestPriceCurrency,
-				InStockCount:               stored.InStockCount,
-				OfferCount:                 stored.OfferCount,
-				ProductSnapshotGeneratedAt: stored.ProductSnapshotGeneratedAt,
-				FeedStale:                  pointer.Stale,
-				CapturedAt:                 finished,
-			}); err != nil {
-				return err
-			}
 			changes := productChanges(existing, stored, oldBoard, product.boards)
 			watch, err := tx.FindWatchTargetByProductID(stored.ID)
 			if err != nil {
 				return err
 			}
 			if targetPriceHit(existing, stored, watch) {
-				changes = append(changes, priceAIChange{event: storage.PriceAIChangeTargetPriceHit, previous: productValue(existing), current: productValue(stored)})
+				changes = append(changes, priceAIChange{event: storage.PriceAIChangeTargetPriceHit})
 			}
 			if len(changes) > 0 {
 				if existing != nil {
 					result.ChangedProductsCount++
-				}
-				if err := appendProductChanges(tx, stored.ID, watchTargetID(watch), pointer.SnapshotID, changes, finished); err != nil {
-					return err
 				}
 			}
 			if candidate := notificationCandidate(existing, stored, watch, pointer.SnapshotID, changes, oldBoard, product.boards, finished); candidate != nil {
@@ -562,21 +505,6 @@ func (s *Service) importSnapshot(ctx context.Context, state *storage.PriceAIFeed
 			}
 		}
 
-		missing, err := tx.ListProductsMissingFromLatest(pointer.SnapshotID)
-		if err != nil {
-			return err
-		}
-		for _, product := range missing {
-			if err := tx.AppendChangeLog(&storage.PriceAIChangeLog{
-				ProductID:  product.ID,
-				Event:      storage.PriceAIChangeCatalogProductMissing,
-				SnapshotID: pointer.SnapshotID,
-				Message:    "产品未出现在最新 PriceAI Feed 目录中",
-				OccurredAt: finished,
-			}); err != nil {
-				return err
-			}
-		}
 		if _, err := tx.MarkProductsMissingFromLatest(pointer.SnapshotID, finished); err != nil {
 			return err
 		}
@@ -592,9 +520,6 @@ func (s *Service) importSnapshot(ctx context.Context, state *storage.PriceAIFeed
 			return err
 		}
 		if err := tx.UpsertFeedState(&next); err != nil {
-			return err
-		}
-		if err := appendFeedHealthChanges(tx, previousState, next, finished); err != nil {
 			return err
 		}
 		healthEvents = feedHealthNotificationEvents(previousState, next)
@@ -984,43 +909,29 @@ func productCurrency(product FeedProduct) *string {
 }
 
 type priceAIChange struct {
-	event    storage.PriceAIChangeEvent
-	previous any
-	current  any
+	event storage.PriceAIChangeEvent
 }
 
 func productChanges(previous, current *storage.PriceAIProduct, oldBoard []storage.PriceAIPublicBoardEntry, newBoard []preparedBoardOffer) []priceAIChange {
 	if previous == nil {
-		return []priceAIChange{{event: storage.PriceAIChangeBaselineCreated, current: productValue(current)}}
+		return []priceAIChange{{event: storage.PriceAIChangeBaselineCreated}}
 	}
 	changes := make([]priceAIChange, 0, 5)
 	if !sameCurrency(previous.LowestPriceCurrency, current.LowestPriceCurrency) {
-		changes = append(changes, priceAIChange{event: storage.PriceAIChangeCurrencyChanged, previous: productValue(previous), current: productValue(current)})
+		changes = append(changes, priceAIChange{event: storage.PriceAIChangeCurrencyChanged})
 	} else if comparablePriceChanged(previous, current) {
-		changes = append(changes, priceAIChange{event: storage.PriceAIChangeLowestPriceChanged, previous: productValue(previous), current: productValue(current)})
+		changes = append(changes, priceAIChange{event: storage.PriceAIChangeLowestPriceChanged})
 	}
 	if previous.InStockCount != current.InStockCount {
-		changes = append(changes, priceAIChange{event: storage.PriceAIChangeInStockCountChanged, previous: productValue(previous), current: productValue(current)})
+		changes = append(changes, priceAIChange{event: storage.PriceAIChangeInStockCountChanged})
 	}
 	if previous.OfferCount != current.OfferCount {
-		changes = append(changes, priceAIChange{event: storage.PriceAIChangeOfferCountChanged, previous: productValue(previous), current: productValue(current)})
+		changes = append(changes, priceAIChange{event: storage.PriceAIChangeOfferCountChanged})
 	}
 	if !sameBoardEntries(oldBoard, newBoard) {
-		changes = append(changes, priceAIChange{event: storage.PriceAIChangePublicBoardChanged, previous: map[string]int{"entries": len(oldBoard)}, current: map[string]int{"entries": len(newBoard)}})
+		changes = append(changes, priceAIChange{event: storage.PriceAIChangePublicBoardChanged})
 	}
 	return changes
-}
-
-func productValue(product *storage.PriceAIProduct) map[string]any {
-	if product == nil {
-		return nil
-	}
-	return map[string]any{
-		"lowest_price":          product.LowestPrice,
-		"lowest_price_currency": product.LowestPriceCurrency,
-		"in_stock_count":        product.InStockCount,
-		"offer_count":           product.OfferCount,
-	}
 }
 
 func sameCurrency(left, right *string) bool {
@@ -1156,46 +1067,11 @@ func isMeaningfulPriceDrop(previous, current *storage.PriceAIProduct, target *st
 	return drop > 0 && drop >= *target.PriceDropPercent
 }
 
-func appendProductChanges(tx *storage.PriceAI, productID, watchTargetID uint, snapshotID string, changes []priceAIChange, at time.Time) error {
-	for _, change := range changes {
-		if err := tx.AppendChangeLog(&storage.PriceAIChangeLog{
-			ProductID:         productID,
-			WatchTargetID:     watchTargetID,
-			Event:             change.event,
-			SnapshotID:        snapshotID,
-			PreviousValueJSON: marshalChangeValue(change.previous),
-			CurrentValueJSON:  marshalChangeValue(change.current),
-			OccurredAt:        at,
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func marshalChangeValue(value any) string {
-	if value == nil {
-		return ""
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return ""
-	}
-	return string(encoded)
-}
-
 func stringValue(value *string) string {
 	if value == nil {
 		return ""
 	}
 	return *value
-}
-
-func watchTargetID(target *storage.PriceAIWatchTarget) uint {
-	if target == nil {
-		return 0
-	}
-	return target.ID
 }
 
 func (s *Service) currentTime() time.Time {
