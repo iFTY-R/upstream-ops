@@ -2,7 +2,9 @@ package storage
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,8 +13,17 @@ import (
 	"gorm.io/gorm"
 )
 
+// testMySQLDBCounter 让并行测试各自拿到独立的 MySQL 数据库名。
+var testMySQLDBCounter atomic.Int64
+
 func openTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
+
+	// CI 在 MySQL service 上跑同一批仓储测试时设置该环境变量；
+	// 本地默认仍用一次性 SQLite 文件。
+	if host := os.Getenv("UPSTREAM_OPS_TEST_MYSQL_HOST"); host != "" {
+		return openTestMySQLDB(t, host)
+	}
 
 	db, err := Open(DBConfig{
 		Driver:       DBDriverSQLite,
@@ -36,8 +47,76 @@ func openTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func openTestMySQLDB(t *testing.T, host string) *gorm.DB {
+	t.Helper()
+
+	port := 3306
+	if raw := os.Getenv("UPSTREAM_OPS_TEST_MYSQL_PORT"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			t.Fatalf("invalid UPSTREAM_OPS_TEST_MYSQL_PORT %q", raw)
+		}
+		port = parsed
+	}
+	user := os.Getenv("UPSTREAM_OPS_TEST_MYSQL_USER")
+	if user == "" {
+		user = "root"
+	}
+	base := DBConfig{
+		Driver:       DBDriverMySQL,
+		Host:         host,
+		Port:         port,
+		User:         user,
+		Password:     os.Getenv("UPSTREAM_OPS_TEST_MYSQL_PASSWORD"),
+		MaxOpenConns: 10,
+		MaxIdleConns: 2,
+	}
+
+	admin, err := Open(base)
+	if err != nil {
+		t.Fatalf("open mysql server connection: %v", err)
+	}
+	adminDB, err := admin.DB()
+	if err != nil {
+		t.Fatalf("get admin sql.DB: %v", err)
+	}
+
+	dbName := fmt.Sprintf("upstream_ops_test_%d_%d", os.Getpid(), testMySQLDBCounter.Add(1))
+	if err := admin.Exec("CREATE DATABASE " + dbName + " CHARACTER SET utf8mb4").Error; err != nil {
+		_ = adminDB.Close()
+		t.Fatalf("create test database %s: %v", dbName, err)
+	}
+
+	cfg := base
+	cfg.Name = dbName
+	db, err := Open(cfg)
+	if err != nil {
+		_ = admin.Exec("DROP DATABASE " + dbName)
+		_ = adminDB.Close()
+		t.Fatalf("open test database %s: %v", dbName, err)
+	}
+	if err := AutoMigrate(db); err != nil {
+		t.Fatalf("auto migrate mysql test database: %v", err)
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sql.DB: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sqlDB.Close()
+		_ = admin.Exec("DROP DATABASE " + dbName).Error
+		_ = adminDB.Close()
+	})
+
+	return db
+}
+
 func TestCompactSQLiteReclaimsFreePages(t *testing.T) {
 	db := openTestDB(t)
+	if db.Dialector.Name() != "sqlite" {
+		t.Skip("compaction is a sqlite-only maintenance action")
+	}
 	if err := db.Exec("CREATE TABLE compaction_test (payload BLOB NOT NULL)").Error; err != nil {
 		t.Fatalf("create compaction test table: %v", err)
 	}
