@@ -699,13 +699,13 @@ type PriceAIOffer struct {
 	ID              uint      `gorm:"primaryKey" json:"id"`
 	ProductID       uint      `gorm:"not null;uniqueIndex:uq_priceai_offers_product_dedupe;index" json:"product_id"`
 	RemoteID        string    `gorm:"size:256;index" json:"remote_id,omitempty"`
-	DedupeKey       string    `gorm:"size:1024;not null;uniqueIndex:uq_priceai_offers_product_dedupe" json:"dedupe_key"`
+	DedupeKey       string    `gorm:"size:1024;not null;uniqueIndex:uq_priceai_offers_product_dedupe,length:700" json:"dedupe_key"`
 	SourceID        string    `gorm:"size:256;index" json:"source_id,omitempty"`
 	SourceName      string    `gorm:"size:512" json:"source_name,omitempty"`
 	SourceStoreName string    `gorm:"size:512" json:"source_store_name,omitempty"`
-	MerchantKey     string    `gorm:"size:1024;not null;index" json:"merchant_key"`
+	MerchantKey     string    `gorm:"size:1024;not null;index:,length:700" json:"merchant_key"`
 	Title           string    `gorm:"type:text;not null" json:"title"`
-	NormalizedTitle string    `gorm:"size:1024;not null;index" json:"normalized_title"`
+	NormalizedTitle string    `gorm:"size:1024;not null;index:,length:700" json:"normalized_title"`
 	Price           float64   `gorm:"not null" json:"price"`
 	Currency        string    `gorm:"size:32" json:"currency,omitempty"`
 	Status          string    `gorm:"size:128;index" json:"status,omitempty"`
