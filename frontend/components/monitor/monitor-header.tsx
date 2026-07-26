@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { useTheme } from "next-themes"
-import { Activity, Github, Home, LogOut, PackageSearch, RefreshCw, Sun, Moon, Settings, Store, SlidersHorizontal, type LucideIcon } from "lucide-react"
+import { Activity, Github, Home, LogOut, PackageSearch, Radar, RefreshCw, Sun, Moon, Settings, Store, SlidersHorizontal, type LucideIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -39,12 +39,14 @@ export function MonitorHeader() {
     { label: "主页", path: "/", icon: Home },
     { label: "商品", path: "/shop-goods", icon: PackageSearch },
     { label: "店铺", path: "/shops", icon: Store },
+    { label: "雷达", path: "/priceai", icon: Radar },
     { label: "分组", path: "/auto-groups", icon: SlidersHorizontal },
     { label: "设置", path: "/settings", icon: Settings },
   ]
   const fullNavLabels: Record<string, string> = {
     商品: "商品总览",
     店铺: "店铺监控",
+    雷达: "PriceAI 雷达",
     分组: "智能分组",
   }
 

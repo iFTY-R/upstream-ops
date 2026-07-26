@@ -22,6 +22,7 @@ import (
 	"github.com/ifty-r/upstream-ops/backend/logger"
 	"github.com/ifty-r/upstream-ops/backend/monitor"
 	"github.com/ifty-r/upstream-ops/backend/notify"
+	"github.com/ifty-r/upstream-ops/backend/priceai"
 	"github.com/ifty-r/upstream-ops/backend/runtimeconfig"
 	"github.com/ifty-r/upstream-ops/backend/scheduler"
 	"github.com/ifty-r/upstream-ops/backend/shopmonitor"
@@ -108,6 +109,7 @@ func main() {
 	announcements := storage.NewUpstreamAnnouncements(db)
 	rates := storage.NewRates(db)
 	monLogs := storage.NewMonitorLogs(db)
+	priceAIRepo := storage.NewPriceAI(db)
 
 	channelSvc := channel.NewService(channels, authSessions, captchas, rates, monLogs, cipher)
 	channelSvc.UpdateProxyConfig(cfg.Proxy)
@@ -126,6 +128,8 @@ func main() {
 		SendMaxAttempts:                          cfg.Notifications.SendMaxAttempts,
 	})
 	dispatcher.UpdateProxyConfig(cfg.Proxy)
+	priceAISvc := priceai.NewService(priceAIRepo, log)
+	priceAISvc.SetDispatcher(dispatcher)
 	monitorSvc := monitor.NewService(channels, announcements, rates, monLogs, upstreamCapSvc, dispatcher, log)
 	shopMonitorSvc := shopmonitor.NewService(shopTargets, shopWatchRules, shopGoods, dispatcher, log, cfg.Proxy, cfg.Upstream)
 	shopSyncJobs := storage.NewShopSyncJobs(db)
@@ -136,6 +140,7 @@ func main() {
 		shopMonitorSvc.UpdateProxyConfig(pcfg)
 		sch := scheduler.New(scfg, monitorSvc, shopMonitorSvc, autoGroupSvc, monLogs, rates, notifies, announcements, shopGoods, shopSyncJobs, captchas, cipher, pcfg, log)
 		sch.SetShopSyncRunner(shopSyncRunner)
+		sch.SetPriceAIService(priceAISvc, priceAIRepo)
 		return sch
 	}
 	sch := schedulerFactory(cfg.Scheduler, cfg.Proxy)
@@ -196,6 +201,8 @@ func main() {
 		Announcements:    announcements,
 		Rates:            rates,
 		MonLogs:          monLogs,
+		PriceAI:          priceAIRepo,
+		PriceAISvc:       priceAISvc,
 		ChannelSvc:       channelSvc,
 		UpstreamCap:      upstreamCapSvc,
 		UpstreamOps:      upstreamCapSvc,

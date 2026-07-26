@@ -12,6 +12,7 @@ import (
 	"github.com/ifty-r/upstream-ops/backend/config"
 	"github.com/ifty-r/upstream-ops/backend/crypto"
 	"github.com/ifty-r/upstream-ops/backend/monitor"
+	"github.com/ifty-r/upstream-ops/backend/priceai"
 	"github.com/ifty-r/upstream-ops/backend/shopmonitor"
 	"github.com/ifty-r/upstream-ops/backend/storage"
 	"github.com/robfig/cron/v3"
@@ -34,6 +35,8 @@ type Scheduler struct {
 	captchas       *storage.Captchas
 	cipher         *crypto.Cipher
 	proxy          config.ProxyConfig
+	priceAI        *priceai.Service
+	priceAIRepo    *storage.PriceAI
 }
 
 // retentionExecutionMu spans scheduler instances so a hot reload cannot start
@@ -90,7 +93,17 @@ func (s *Scheduler) SetShopSyncRunner(runner *shopmonitor.SyncJobRunner) {
 	s.shopSyncRunner = runner
 }
 
+// SetPriceAIService keeps the scheduler on the same singleton Feed service
+// used by manual API calls, so coalescing and persisted cadence apply equally.
+func (s *Scheduler) SetPriceAIService(service *priceai.Service, repo *storage.PriceAI) {
+	s.priceAI = service
+	s.priceAIRepo = repo
+}
+
 func (s *Scheduler) Start() error {
+	if err := config.ValidateSchedulerConfig(s.cfg); err != nil {
+		return err
+	}
 	if s.cfg.BalanceCron != "" {
 		if _, err := s.cron.AddFunc(s.cfg.BalanceCron, s.runBalance); err != nil {
 			return err
@@ -111,6 +124,16 @@ func (s *Scheduler) Start() error {
 			return err
 		}
 	}
+	if s.cfg.PriceAIFeedCron != "" && s.priceAI != nil {
+		if _, err := s.cron.AddFunc(s.cfg.PriceAIFeedCron, s.runPriceAIFeed); err != nil {
+			return err
+		}
+	}
+	if s.cfg.PriceAIRiskCron != "" && s.priceAI != nil {
+		if _, err := s.cron.AddFunc(s.cfg.PriceAIRiskCron, s.runPriceAIRisk); err != nil {
+			return err
+		}
+	}
 	if s.cfg.Retention.Cron != "" && s.hasRetention() {
 		if _, err := s.cron.AddFunc(s.cfg.Retention.Cron, s.runRetention); err != nil {
 			return err
@@ -121,6 +144,8 @@ func (s *Scheduler) Start() error {
 		"balanceCron", s.cfg.BalanceCron,
 		"rateCron", s.cfg.RateCron,
 		"shopCron", s.cfg.ShopCron,
+		"priceAIFeedCron", s.cfg.PriceAIFeedCron,
+		"priceAIRiskCron", s.cfg.PriceAIRiskCron,
 		"autoGroupEnabled", s.cfg.AutoGroup.Enabled,
 		"autoGroupCron", s.cfg.AutoGroup.Cron,
 		"autoGroupConcurrency", s.cfg.AutoGroup.Concurrency,
@@ -186,6 +211,46 @@ func (s *Scheduler) runShops() {
 	s.shopMonitor.SyncAllWithConcurrency(ctx, concurrency)
 }
 
+func (s *Scheduler) runPriceAIFeed() {
+	if s.priceAI == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	result, err := s.priceAI.Sync(ctx)
+	if err != nil {
+		if s.log != nil {
+			s.log.Warn("priceai feed sync failed", "err", err)
+		}
+		return
+	}
+	if s.log != nil {
+		s.log.Debug("priceai feed sync completed", "snapshot_id", result.SnapshotID, "not_modified", result.NotModified, "skipped", result.Skipped, "products", result.ProductsCount)
+	}
+}
+
+func (s *Scheduler) runPriceAIRisk() {
+	if s.priceAI == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	concurrency := s.cfg.PriceAIRiskConcurrency
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	result, err := s.priceAI.RefreshRiskWithConcurrency(ctx, concurrency)
+	if err != nil {
+		if s.log != nil {
+			s.log.Warn("priceai risk refresh failed", "err", err, "attempted", result.ProductsAttempted, "failures", result.Failures)
+		}
+		return
+	}
+	if s.log != nil {
+		s.log.Debug("priceai risk refresh completed", "snapshot_id", result.SnapshotID, "attempted", result.ProductsAttempted, "updated", result.FeedbackUpdated, "skipped", result.ProductsSkipped)
+	}
+}
+
 func (s *Scheduler) hasRetention() bool {
 	r := s.cfg.Retention
 	return r.MonitorLogsDays > 0 ||
@@ -195,7 +260,10 @@ func (s *Scheduler) hasRetention() bool {
 		r.ShopHighFrequencyChangeLogsDays > 0 ||
 		r.ShopOtherChangeLogsDays > 0 ||
 		r.ShopMonitorLogsDays > 0 ||
-		r.ShopSyncJobsDays > 0
+		r.ShopSyncJobsDays > 0 ||
+		r.PriceAIProductHistoryDays > 0 ||
+		r.PriceAIChangeLogsDays > 0 ||
+		r.PriceAISyncLogsDays > 0
 }
 
 // runRetention 按配置删除过期历史。任一表失败不影响其它，全部错误写日志。
@@ -254,6 +322,39 @@ func (s *Scheduler) runRetention() {
 	}
 
 	s.runShopRetention(r, now)
+	s.runPriceAIRetention(r, now)
+}
+
+func (s *Scheduler) runPriceAIRetention(retention config.RetentionConfig, now time.Time) {
+	if s.priceAIRepo == nil {
+		if (retention.PriceAIProductHistoryDays > 0 || retention.PriceAIChangeLogsDays > 0 || retention.PriceAISyncLogsDays > 0) && s.log != nil {
+			s.log.Warn("priceai retention skipped because repository is unavailable")
+		}
+		return
+	}
+	for _, item := range []struct {
+		name string
+		days int
+		fn   func(time.Time) (int64, error)
+	}{
+		{"priceai product history", retention.PriceAIProductHistoryDays, s.priceAIRepo.DeleteProductHistoryBefore},
+		{"priceai change logs", retention.PriceAIChangeLogsDays, s.priceAIRepo.DeleteChangeLogsBefore},
+		{"priceai sync logs", retention.PriceAISyncLogsDays, s.priceAIRepo.DeleteSyncLogsBefore},
+	} {
+		if item.days <= 0 {
+			continue
+		}
+		cutoff := now.AddDate(0, 0, -item.days)
+		rows, err := item.fn(cutoff)
+		if s.log == nil {
+			continue
+		}
+		if err != nil {
+			s.log.Warn("retention "+item.name+" failed", "err", err)
+		} else if rows > 0 {
+			s.log.Info("retention "+item.name+" deleted", "rows", rows, "before", cutoff)
+		}
+	}
 }
 
 // RunShopRetention immediately applies the supplied shop-only policy. Manual

@@ -98,12 +98,16 @@ type Sub2APIEmbedConfig struct {
 }
 
 type SchedulerConfig struct {
-	BalanceCron string          `mapstructure:"balanceCron" yaml:"balanceCron" json:"balanceCron"`
-	RateCron    string          `mapstructure:"rateCron" yaml:"rateCron" json:"rateCron"`
-	ShopCron    string          `mapstructure:"shopCron" yaml:"shopCron" json:"shopCron"`
-	Concurrency int             `mapstructure:"concurrency" yaml:"concurrency" json:"concurrency"`
-	AutoGroup   AutoGroupConfig `mapstructure:"autoGroup" yaml:"autoGroup" json:"autoGroup"`
-	Retention   RetentionConfig `mapstructure:"retention" yaml:"retention" json:"retention"`
+	BalanceCron            string          `mapstructure:"balanceCron" yaml:"balanceCron" json:"balanceCron"`
+	RateCron               string          `mapstructure:"rateCron" yaml:"rateCron" json:"rateCron"`
+	ShopCron               string          `mapstructure:"shopCron" yaml:"shopCron" json:"shopCron"`
+	PriceAIFeedCron        string          `mapstructure:"priceAIFeedCron" yaml:"priceAIFeedCron" json:"priceAIFeedCron"`
+	PriceAIRiskCron        string          `mapstructure:"priceAIRiskCron" yaml:"priceAIRiskCron" json:"priceAIRiskCron"`
+	Concurrency            int             `mapstructure:"concurrency" yaml:"concurrency" json:"concurrency"`
+	PriceAIConcurrency     int             `mapstructure:"priceAIConcurrency" yaml:"priceAIConcurrency" json:"priceAIConcurrency"`
+	PriceAIRiskConcurrency int             `mapstructure:"priceAIRiskConcurrency" yaml:"priceAIRiskConcurrency" json:"priceAIRiskConcurrency"`
+	AutoGroup              AutoGroupConfig `mapstructure:"autoGroup" yaml:"autoGroup" json:"autoGroup"`
+	Retention              RetentionConfig `mapstructure:"retention" yaml:"retention" json:"retention"`
 }
 
 type AutoGroupConfig struct {
@@ -127,6 +131,9 @@ type RetentionConfig struct {
 	ShopOtherChangeLogsDays         int    `mapstructure:"shopOtherChangeLogsDays" yaml:"shopOtherChangeLogsDays" json:"shopOtherChangeLogsDays"`
 	ShopMonitorLogsDays             int    `mapstructure:"shopMonitorLogsDays" yaml:"shopMonitorLogsDays" json:"shopMonitorLogsDays"`
 	ShopSyncJobsDays                int    `mapstructure:"shopSyncJobsDays" yaml:"shopSyncJobsDays" json:"shopSyncJobsDays"`
+	PriceAIProductHistoryDays       int    `mapstructure:"priceAIProductHistoryDays" yaml:"priceAIProductHistoryDays" json:"priceAIProductHistoryDays"`
+	PriceAIChangeLogsDays           int    `mapstructure:"priceAIChangeLogsDays" yaml:"priceAIChangeLogsDays" json:"priceAIChangeLogsDays"`
+	PriceAISyncLogsDays             int    `mapstructure:"priceAISyncLogsDays" yaml:"priceAISyncLogsDays" json:"priceAISyncLogsDays"`
 }
 
 // NotificationsConfig 通知去抖策略。所有字段都是"少烦我"取向，默认不丢消息只合并。
@@ -376,6 +383,8 @@ func load(path string, withEnv bool) (*Config, string, error) {
 		_ = v.BindEnv("server.port", "SERVER_PORT")
 		_ = v.BindEnv("server.mode", "SERVER_MODE")
 		_ = v.BindEnv("scheduler.shopCron", "SCHEDULER_SHOPCRON")
+		_ = v.BindEnv("scheduler.priceAIFeedCron", "SCHEDULER_PRICEAI_FEED_CRON", "SCHEDULER_PRICEAIFEEDCRON")
+		_ = v.BindEnv("scheduler.priceAIRiskCron", "SCHEDULER_PRICEAI_RISK_CRON", "SCHEDULER_PRICEAIRISKCRON")
 		_ = v.BindEnv("log.level", "LOG_LEVEL")
 	}
 
@@ -396,12 +405,21 @@ func load(path string, withEnv bool) (*Config, string, error) {
 		return nil, "", fmt.Errorf("unmarshal config: %w", err)
 	}
 	cfg.Upstream = cfg.Upstream.WithDefaults()
+	if err := ValidateSchedulerConfig(cfg.Scheduler); err != nil {
+		return nil, "", err
+	}
 	return cfg, v.ConfigFileUsed(), nil
 }
 
 func Save(path string, cfg *Config) error {
 	if path == "" {
 		return fmt.Errorf("config path is empty")
+	}
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if err := ValidateSchedulerConfig(cfg.Scheduler); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("mkdir config dir: %w", err)
@@ -462,7 +480,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("scheduler.balanceCron", "37 */15 * * * *")
 	v.SetDefault("scheduler.rateCron", "13 */30 * * * *")
 	v.SetDefault("scheduler.shopCron", "41 7,37 8-22 * * *")
+	v.SetDefault("scheduler.priceAIFeedCron", "23 */5 * * * *")
+	v.SetDefault("scheduler.priceAIRiskCron", "47 11 */6 * * *")
 	v.SetDefault("scheduler.concurrency", 4)
+	v.SetDefault("scheduler.priceAIConcurrency", 1)
+	v.SetDefault("scheduler.priceAIRiskConcurrency", 1)
 	v.SetDefault("scheduler.autoGroup.enabled", false)
 	v.SetDefault("scheduler.autoGroup.cron", "29 */5 * * * *")
 	v.SetDefault("scheduler.autoGroup.concurrency", 2)
@@ -480,6 +502,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("scheduler.retention.shopOtherChangeLogsDays", 90)
 	v.SetDefault("scheduler.retention.shopMonitorLogsDays", 30)
 	v.SetDefault("scheduler.retention.shopSyncJobsDays", 30)
+	v.SetDefault("scheduler.retention.priceAIProductHistoryDays", 90)
+	v.SetDefault("scheduler.retention.priceAIChangeLogsDays", 90)
+	v.SetDefault("scheduler.retention.priceAISyncLogsDays", 30)
 
 	v.SetDefault("auth.enabled", true)
 	v.SetDefault("auth.username", DefaultAuthUsername)

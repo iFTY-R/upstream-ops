@@ -32,11 +32,12 @@ import {
 import { ChevronsUpDown } from "lucide-react"
 import { apiFetch } from "@/lib/api"
 import { useTriggerRefresh } from "@/lib/refresh-context"
-import { useChannels, useMultiChannelRates } from "@/lib/queries"
+import { useChannels, useMultiChannelRates, usePriceAIWatchTargets } from "@/lib/queries"
 import type {
   NotificationChannel,
   NotificationChannelType,
   NotificationEvent,
+  PriceAIWatchTargetWithProduct,
 } from "@/lib/api-types"
 
 interface NotificationFormDialogProps {
@@ -75,6 +76,7 @@ interface SubRow {
   events: NotificationEvent[]
   mode: "all" | "groups"
   groups: string[]
+  priceai_target_ids: number[]
 }
 
 interface FormState {
@@ -157,6 +159,20 @@ const notificationEventOptions: Array<{ id: string; label: string; events: Notif
       "shop_monitor_failed",
     ],
   },
+  {
+    id: "priceai_notice",
+    label: "PriceAI 雷达",
+    events: [
+      "priceai_lowest_price_dropped",
+      "priceai_target_price_hit",
+      "priceai_out_of_stock",
+      "priceai_restocked",
+      "priceai_new_public_lowest_offer",
+      "priceai_feed_stale",
+      "priceai_sync_failed",
+      "priceai_sync_recovered",
+    ],
+  },
 ]
 
 const allNotificationEvents = Array.from(
@@ -179,8 +195,23 @@ const rateEventSet = new Set<NotificationEvent>([
   "auto_group_policy_error",
 ])
 
+const priceAIEventSet = new Set<NotificationEvent>([
+  "priceai_lowest_price_dropped",
+  "priceai_target_price_hit",
+  "priceai_out_of_stock",
+  "priceai_restocked",
+  "priceai_new_public_lowest_offer",
+  "priceai_feed_stale",
+  "priceai_sync_failed",
+  "priceai_sync_recovered",
+])
+
 function hasRateEvents(row: SubRow) {
   return row.event_mode === "all" || row.events.some((event) => rateEventSet.has(event))
+}
+
+function hasPriceAIEvents(row: SubRow) {
+  return row.event_mode === "custom" && row.events.some((event) => priceAIEventSet.has(event))
 }
 
 function initialState(c?: NotificationChannel | null): FormState {
@@ -201,6 +232,7 @@ function initialState(c?: NotificationChannel | null): FormState {
           events,
           mode: s.mode === "groups" ? "groups" : "all",
           groups: (s.groups as string[] | undefined) ?? [],
+          priceai_target_ids: (s.priceai_target_ids as number[] | undefined) ?? [],
         }
       })
     } catch {
@@ -281,6 +313,7 @@ export function NotificationFormDialog({
   const [error, setError] = useState<string | null>(null)
   const refresh = useTriggerRefresh()
   const channels = useChannels()
+  const priceAITargets = usePriceAIWatchTargets()
 
   useEffect(() => {
     if (open) {
@@ -298,7 +331,7 @@ export function NotificationFormDialog({
   function addSub() {
     setForm((f) => ({
       ...f,
-      subs: [...f.subs, { channel_ids: [], event_mode: "all", events: [], mode: "all", groups: [] }],
+      subs: [...f.subs, { channel_ids: [], event_mode: "all", events: [], mode: "all", groups: [], priceai_target_ids: [] }],
     }))
   }
 
@@ -356,6 +389,7 @@ export function NotificationFormDialog({
             mode,
             groups: mode === "groups" ? s.groups : [],
             events: s.event_mode === "custom" ? s.events : [],
+            priceai_target_ids: hasPriceAIEvents(s) ? s.priceai_target_ids : [],
           }
         }),
       )
@@ -505,6 +539,7 @@ export function NotificationFormDialog({
                     rowIndex={idx}
                     row={row}
                     channels={(channels.data ?? []).map((c) => ({ id: c.id, name: c.name }))}
+                    priceAITargets={priceAITargets.data ?? []}
                     onChange={(patch) => updateSub(idx, patch)}
                     onRemove={() => removeSub(idx)}
                     disabled={submitting}
@@ -790,12 +825,13 @@ interface SubRowEditorProps {
   rowIndex: number
   row: SubRow
   channels: Array<{ id: number; name: string }>
+  priceAITargets: PriceAIWatchTargetWithProduct[]
   onChange: (patch: Partial<SubRow>) => void
   onRemove: () => void
   disabled: boolean
 }
 
-function SubRowEditor({ rowIndex, row, channels, onChange, onRemove, disabled }: SubRowEditorProps) {
+function SubRowEditor({ rowIndex, row, channels, priceAITargets, onChange, onRemove, disabled }: SubRowEditorProps) {
   // 只有真正展开 "指定分组" 时才拉 rates，避免每行都打一次接口
   const showRateGroupFilter = hasRateEvents(row)
   const rateFetchIDs =
@@ -874,6 +910,19 @@ function SubRowEditor({ rowIndex, row, channels, onChange, onRemove, disabled }:
       ? Array.from(new Set([...row.channel_ids, id]))
       : row.channel_ids.filter((c) => c !== id)
     onChange({ channel_ids: next })
+  }
+
+  const showPriceAITargetFilter = hasPriceAIEvents(row)
+  const selectedPriceAITargetCount = row.priceai_target_ids.length
+  const allPriceAITargetsSelected = priceAITargets.length > 0 && selectedPriceAITargetCount === priceAITargets.length
+  const somePriceAITargetsSelected = selectedPriceAITargetCount > 0 && !allPriceAITargetsSelected
+  const allPriceAITargetsChecked = allPriceAITargetsSelected ? true : somePriceAITargetsSelected ? "indeterminate" : false
+
+  function togglePriceAITarget(id: number, checked: boolean) {
+    const next = checked
+      ? Array.from(new Set([...row.priceai_target_ids, id]))
+      : row.priceai_target_ids.filter((targetID) => targetID !== id)
+    onChange({ priceai_target_ids: next })
   }
 
   return (
@@ -1030,6 +1079,41 @@ function SubRowEditor({ rowIndex, row, channels, onChange, onRemove, disabled }:
               })}
             </div>
           </ScrollArea>
+        </div>
+      ) : null}
+
+      {showPriceAITargetFilter ? (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between gap-2 text-xs">
+            <span className="font-medium text-muted-foreground">PriceAI 监控目标（可选）</span>
+            <span className="text-[11px] text-muted-foreground">已选 {selectedPriceAITargetCount}/{priceAITargets.length}</span>
+          </div>
+          {priceAITargets.length === 0 ? (
+            <p className="rounded border border-dashed border-border px-2 py-2 text-[11px] text-muted-foreground">暂无 PriceAI 监控目标；留空将接收所有 PriceAI 事件。</p>
+          ) : (
+            <ScrollArea className="max-h-40 rounded border border-border bg-muted/30">
+              <div className="space-y-1 p-2">
+                <label className="flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-xs hover:bg-accent/50">
+                  <Checkbox
+                    checked={allPriceAITargetsChecked}
+                    onCheckedChange={(value) => onChange({ priceai_target_ids: value === true ? priceAITargets.map((item) => item.target.id) : [] })}
+                    disabled={disabled}
+                  />
+                  <span className="font-medium">全部 PriceAI 目标</span>
+                </label>
+                {priceAITargets.map((item) => {
+                  const id = `priceai-target-${rowIndex}-${item.target.id}`
+                  const checked = row.priceai_target_ids.includes(item.target.id)
+                  return (
+                    <label key={item.target.id} htmlFor={id} className="flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-xs hover:bg-accent/50">
+                      <Checkbox id={id} checked={checked} onCheckedChange={(value) => togglePriceAITarget(item.target.id, value === true)} disabled={disabled} />
+                      <span className="truncate">{item.product?.name ?? `商品 #${item.target.product_id}`}</span>
+                    </label>
+                  )
+                })}
+              </div>
+            </ScrollArea>
+          )}
         </div>
       ) : null}
 

@@ -632,6 +632,9 @@ func (s *Service) fetchGoods(ctx context.Context, provider shopprovider.Provider
 					if strings.TrimSpace(item.GoodsKey) == "" {
 						continue
 					}
+					if expected := strings.TrimSpace(req.ExpectedGoodsKey); expected != "" && item.GoodsKey != expected {
+						continue
+					}
 					if len(wantedKeys) > 0 {
 						if _, ok := wantedKeys[item.GoodsKey]; !ok {
 							continue
@@ -684,6 +687,9 @@ func (s *Service) buildGoodsRequests(ctx context.Context, provider shopprovider.
 		for _, keyword := range parseStringList(target.KeywordsJSON) {
 			requests = append(requests, shopprovider.GoodsRequest{GoodsType: goodsType, CategoryID: 0, Keywords: keyword})
 		}
+		for _, key := range parseStringList(target.GoodsKeysJSON) {
+			requests = append(requests, shopprovider.GoodsRequest{GoodsType: goodsType, CategoryID: 0, Keywords: key, ExpectedGoodsKey: key})
+		}
 		if len(requests) > 0 {
 			return requests, nil
 		}
@@ -692,7 +698,7 @@ func (s *Service) buildGoodsRequests(ctx context.Context, provider shopprovider.
 		if len(keys) > 0 {
 			requests := make([]shopprovider.GoodsRequest, 0)
 			for _, key := range keys {
-				requests = append(requests, shopprovider.GoodsRequest{GoodsType: goodsType, CategoryID: 0, Keywords: key})
+				requests = append(requests, shopprovider.GoodsRequest{GoodsType: goodsType, CategoryID: 0, Keywords: key, ExpectedGoodsKey: key})
 			}
 			return requests, nil
 		}

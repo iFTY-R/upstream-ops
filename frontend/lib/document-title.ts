@@ -2,6 +2,7 @@ const routeTitles: Record<string, string> = {
   "/": "主页",
   "/shop-goods": "商品总览",
   "/shops": "店铺监控",
+  "/priceai": "PriceAI 雷达",
   "/auto-groups": "智能分组",
   "/captcha": "打码平台",
   "/notifications": "通知渠道",

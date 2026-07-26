@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -422,6 +423,36 @@ func TestFetchGoodsReadsPastFiftyPages(t *testing.T) {
 	}
 }
 
+func TestFetchGoodsMergesFilterScopeWithExactGoodsKeys(t *testing.T) {
+	provider := filterAwareShopProvider{goods: []shopprovider.Goods{
+		{GoodsKey: "category-match", CategoryID: 7, Name: "category item"},
+		{GoodsKey: "exact-key", CategoryID: 0, Name: "exact item"},
+		{GoodsKey: "exact-key-lookalike", CategoryID: 0, Name: "similar item"},
+	}}
+	service := NewService(nil, nil, nil, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	result, err := service.fetchGoods(context.Background(), provider, shopprovider.Target{}, &storage.ShopTarget{
+		ScopeMode:       storage.ShopScopeFilters,
+		GoodsTypesJSON:  `["card"]`,
+		CategoryIDsJSON: `[7]`,
+		GoodsKeysJSON:   `["exact-key"]`,
+	})
+	if err != nil {
+		t.Fatalf("fetch goods: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("result count=%d, want 2: %#v", len(result), result)
+	}
+	if _, ok := result["category-match"]; !ok {
+		t.Fatalf("filter result was lost: %#v", result)
+	}
+	if _, ok := result["exact-key"]; !ok {
+		t.Fatalf("explicit key result missing: %#v", result)
+	}
+	if _, ok := result["exact-key-lookalike"]; ok {
+		t.Fatalf("fuzzy key candidate was incorrectly included: %#v", result)
+	}
+}
+
 func TestSyncAllSkipsRemainingTargetsAfterUpstreamBlock(t *testing.T) {
 	platform := storage.ShopPlatform("sync-all-circuit-test")
 	provider := &batchBlockingShopProvider{infoCalls: map[string]int{}}
@@ -669,6 +700,36 @@ func (p fakeShopProvider) Goods(context.Context, shopprovider.Target, shopprovid
 }
 
 func (p fakeShopProvider) Price(context.Context, shopprovider.Target, shopprovider.PriceRequest) (*shopprovider.PriceResult, error) {
+	return nil, nil
+}
+
+type filterAwareShopProvider struct {
+	goods []shopprovider.Goods
+}
+
+func (p filterAwareShopProvider) Info(context.Context, shopprovider.Target) (*shopprovider.ShopInfo, error) {
+	return &shopprovider.ShopInfo{}, nil
+}
+
+func (p filterAwareShopProvider) Categories(context.Context, shopprovider.Target, shopprovider.CategoryRequest) ([]shopprovider.Category, error) {
+	return nil, nil
+}
+
+func (p filterAwareShopProvider) Goods(_ context.Context, _ shopprovider.Target, req shopprovider.GoodsRequest) (*shopprovider.GoodsPage, error) {
+	items := make([]shopprovider.Goods, 0, len(p.goods))
+	for _, item := range p.goods {
+		if req.CategoryID != 0 && item.CategoryID != req.CategoryID {
+			continue
+		}
+		if keyword := strings.TrimSpace(req.Keywords); keyword != "" && !strings.Contains(item.GoodsKey, keyword) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return &shopprovider.GoodsPage{Total: len(items), List: items}, nil
+}
+
+func (p filterAwareShopProvider) Price(context.Context, shopprovider.Target, shopprovider.PriceRequest) (*shopprovider.PriceResult, error) {
 	return nil, nil
 }
 

@@ -119,34 +119,14 @@ func TestBuildShopTargetDefaultsNotifyEnabledForCreate(t *testing.T) {
 	}
 }
 
-func TestBuildShopTargetNormalizesLDXPItemURL(t *testing.T) {
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/shopApi/Shop/goodsInfo":
-			_, _ = w.Write([]byte(strings.ReplaceAll(`{"code":1,"msg":"success","data":{"user":{"nickname":"测试店铺","token":"ITEMSHOP","link":"__SERVER__/shop/ITEMSHOP"}}}`, "__SERVER__", server.URL)))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	next, err := buildShopTarget(shopTargetInput{
+func TestBuildShopTargetRejectsUntrustedLDXPItemURL(t *testing.T) {
+	_, err := buildShopTarget(shopTargetInput{
 		Name:     "shop",
 		Platform: storage.ShopPlatformLDXP,
-		SiteURL:  server.URL + "/item/9l814h",
+		SiteURL:  "https://example.invalid/item/9l814h",
 	}, nil)
-	if err != nil {
-		t.Fatalf("build target: %v", err)
-	}
-	if next.SiteURL != server.URL+"/shop/ITEMSHOP" {
-		t.Fatalf("site_url = %q", next.SiteURL)
-	}
-	if next.BaseURL != server.URL {
-		t.Fatalf("base_url = %q", next.BaseURL)
-	}
-	if next.Token != "ITEMSHOP" {
-		t.Fatalf("token = %q", next.Token)
+	if err == nil {
+		t.Fatal("untrusted item URL unexpectedly built a target")
 	}
 }
 
@@ -193,59 +173,19 @@ func TestBuildShopTargetLeavesSortOrderUnsetWhenOmitted(t *testing.T) {
 	}
 }
 
-func TestParseShopURLAPIResolvesLDXPItemURL(t *testing.T) {
+func TestParseShopURLAPIRejectsUntrustedLDXPItemURL(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/shopApi/Shop/goodsInfo":
-			_, _ = w.Write([]byte(strings.ReplaceAll(`{"code":1,"msg":"success","data":{"user":{"nickname":"商品店铺","token":"ITEMSHOP","link":"__SERVER__/shop/ITEMSHOP"}}}`, "__SERVER__", server.URL)))
-		case "/shopApi/Shop/info":
-			_, _ = w.Write([]byte(strings.ReplaceAll(`{"code":1,"msg":"success","data":{"nickname":"商品店铺","link":"__SERVER__/shop/ITEMSHOP","goods_count":2}}`, "__SERVER__", server.URL)))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
 
 	router := gin.New()
 	router.POST("/api/shop-targets/parse-url", func(c *gin.Context) { parseShopURL(c, &Deps{}) })
 
-	req := httptest.NewRequest(http.MethodPost, "/api/shop-targets/parse-url", bytes.NewBufferString(`{"site_url":"`+server.URL+`/item/9l814h"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/shop-targets/parse-url", bytes.NewBufferString(`{"site_url":"https://example.invalid/item/9l814h"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
-	}
-	var body struct {
-		Data struct {
-			Platform string `json:"platform"`
-			SiteURL  string `json:"site_url"`
-			BaseURL  string `json:"base_url"`
-			Token    string `json:"token"`
-			Name     string `json:"name"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if body.Data.Platform != string(storage.ShopPlatformLDXP) {
-		t.Fatalf("platform = %q", body.Data.Platform)
-	}
-	if body.Data.SiteURL != server.URL+"/shop/ITEMSHOP" {
-		t.Fatalf("site_url = %q", body.Data.SiteURL)
-	}
-	if body.Data.BaseURL != server.URL {
-		t.Fatalf("base_url = %q", body.Data.BaseURL)
-	}
-	if body.Data.Token != "ITEMSHOP" {
-		t.Fatalf("token = %q", body.Data.Token)
-	}
-	if body.Data.Name != "商品店铺" {
-		t.Fatalf("name = %q", body.Data.Name)
 	}
 }
 

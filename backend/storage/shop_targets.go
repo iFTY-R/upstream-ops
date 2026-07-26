@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -98,6 +99,24 @@ func (r *ShopTargets) Transaction(fn func(targets *ShopTargets, rules *ShopWatch
 	})
 }
 
+// TransactionWithPriceAI keeps a shop-target mutation and a PriceAI-owned
+// binding in one database transaction. The PriceAI repository is rebuilt from
+// the transaction handle so neither side can commit independently.
+func (r *ShopTargets) TransactionWithPriceAI(priceAI *PriceAI, fn func(targets *ShopTargets, priceAI *PriceAI) error) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("shop targets repository is not configured")
+	}
+	if priceAI == nil || priceAI.db == nil {
+		return fmt.Errorf("priceai repository is not configured")
+	}
+	if fn == nil {
+		return fmt.Errorf("shop and priceai transaction callback is nil")
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return fn(newShopTargets(tx, r.orderMu), NewPriceAI(tx))
+	})
+}
+
 func (r *ShopTargets) UpdateSortOrders(orders map[uint]int) error {
 	if len(orders) == 0 {
 		return nil
@@ -120,6 +139,9 @@ func (r *ShopTargets) UpdateSortOrders(orders map[uint]int) error {
 func (r *ShopTargets) Delete(id uint) error {
 	return r.withOrderLock(func() error {
 		return r.db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("shop_target_id = ?", id).Delete(&PriceAILDXPTargetBinding{}).Error; err != nil {
+				return err
+			}
 			for _, model := range []any{
 				&ShopWatchRule{},
 				&ShopGoodsSnapshot{},

@@ -9,6 +9,7 @@ import (
 
 	"github.com/ifty-r/upstream-ops/backend/config"
 	"github.com/ifty-r/upstream-ops/backend/monitor"
+	"github.com/ifty-r/upstream-ops/backend/priceai"
 	"github.com/ifty-r/upstream-ops/backend/storage"
 	"gorm.io/gorm"
 )
@@ -79,6 +80,41 @@ func TestRunRetentionDeletesAnnouncements(t *testing.T) {
 	}
 	if total != 0 || len(list) != 0 {
 		t.Fatalf("announcements not cleaned: total=%d list=%#v", total, list)
+	}
+}
+
+func TestStartRegistersPriceAIFeedAndRiskJobs(t *testing.T) {
+	db := openTestDB(t)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	repo := storage.NewPriceAI(db)
+	service := priceai.NewService(repo, log)
+	s := New(
+		config.SchedulerConfig{
+			PriceAIFeedCron:        "23 */5 * * * *",
+			PriceAIRiskCron:        "47 11 */6 * * *",
+			PriceAIRiskConcurrency: 2,
+		},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		config.ProxyConfig{},
+		log,
+	)
+	s.SetPriceAIService(service, repo)
+	if err := s.Start(); err != nil {
+		t.Fatalf("start scheduler: %v", err)
+	}
+	defer s.Stop()
+	if entries := s.cron.Entries(); len(entries) != 2 {
+		t.Fatalf("registered cron jobs=%d, want 2", len(entries))
 	}
 }
 

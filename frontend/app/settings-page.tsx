@@ -94,6 +94,10 @@ function normalizeSystemConfig(config: SystemConfig): SystemConfig {
     scheduler: {
       ...config.scheduler,
       shopCron: config.scheduler.shopCron ?? "",
+      priceAIFeedCron: config.scheduler.priceAIFeedCron ?? "23 */5 * * * *",
+      priceAIRiskCron: config.scheduler.priceAIRiskCron ?? "47 11 */6 * * *",
+      priceAIConcurrency: config.scheduler.priceAIConcurrency ?? 1,
+      priceAIRiskConcurrency: config.scheduler.priceAIRiskConcurrency ?? 1,
       autoGroup: {
         enabled: config.scheduler.autoGroup?.enabled ?? false,
         cron: config.scheduler.autoGroup?.cron ?? "29 */5 * * * *",
@@ -106,6 +110,9 @@ function normalizeSystemConfig(config: SystemConfig): SystemConfig {
         shopOtherChangeLogsDays: config.scheduler.retention.shopOtherChangeLogsDays ?? 90,
         shopMonitorLogsDays: config.scheduler.retention.shopMonitorLogsDays ?? 30,
         shopSyncJobsDays: config.scheduler.retention.shopSyncJobsDays ?? 30,
+        priceAIProductHistoryDays: config.scheduler.retention.priceAIProductHistoryDays ?? 90,
+        priceAIChangeLogsDays: config.scheduler.retention.priceAIChangeLogsDays ?? 90,
+        priceAISyncLogsDays: config.scheduler.retention.priceAISyncLogsDays ?? 30,
       },
     },
     upstream: {
@@ -846,6 +853,94 @@ export default function SettingsPage() {
                     }
                   />
                 </Field>
+                <Field
+                  label="PriceAI Feed Cron"
+                  description="PriceAI 公开 Feed 的同步周期；不得设置为每分钟多次。"
+                >
+                  <Input
+                    value={form.scheduler.priceAIFeedCron}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                priceAIFeedCron: e.target.value,
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
+                <Field
+                  label="PriceAI 风险刷新 Cron"
+                  description="从 PriceAI 商品页更新风险反馈缓存，不会更新公开价格。"
+                >
+                  <Input
+                    value={form.scheduler.priceAIRiskCron}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                priceAIRiskCron: e.target.value,
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
+                <Field
+                  label="PriceAI Feed 并发"
+                  description="Feed 同步会合并并发请求，通常保持为 1。"
+                >
+                  <Input
+                    type="number"
+                    min={1}
+                    value={String(form.scheduler.priceAIConcurrency)}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                priceAIConcurrency: Math.max(1, num(e.target.value)),
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
+                <Field
+                  label="PriceAI 风险并发"
+                  description="限制商品页风险标记的并行提取数量。"
+                >
+                  <Input
+                    type="number"
+                    min={1}
+                    value={String(form.scheduler.priceAIRiskConcurrency)}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                priceAIRiskConcurrency: Math.max(1, num(e.target.value)),
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
                 <InlineSwitch
                   id="autogroup-scheduler-enabled"
                   label="智能分组独立调度"
@@ -1145,6 +1240,84 @@ export default function SettingsPage() {
                                 retention: {
                                   ...prev.scheduler.retention,
                                   shopSyncJobsDays: Math.max(0, num(e.target.value)),
+                                },
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
+                <Field
+                  label="PriceAI 商品历史保留天数"
+                  description="公开最低价、库存和报价数的历史快照；0 表示永久保留。"
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    value={String(form.scheduler.retention.priceAIProductHistoryDays)}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                retention: {
+                                  ...prev.scheduler.retention,
+                                  priceAIProductHistoryDays: Math.max(0, num(e.target.value)),
+                                },
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
+                <Field
+                  label="PriceAI 变更记录保留天数"
+                  description="公开榜单、价格、可用性和 Feed 健康变化；0 表示永久保留。"
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    value={String(form.scheduler.retention.priceAIChangeLogsDays)}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                retention: {
+                                  ...prev.scheduler.retention,
+                                  priceAIChangeLogsDays: Math.max(0, num(e.target.value)),
+                                },
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
+                <Field
+                  label="PriceAI 同步日志保留天数"
+                  description="Feed 与风险提取作业记录；0 表示永久保留。"
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    value={String(form.scheduler.retention.priceAISyncLogsDays)}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                retention: {
+                                  ...prev.scheduler.retention,
+                                  priceAISyncLogsDays: Math.max(0, num(e.target.value)),
                                 },
                               },
                             }

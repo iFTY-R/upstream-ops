@@ -21,6 +21,15 @@ import type {
   RateChangeLogPage,
   RateSnapshot,
   PageResult,
+  PriceAIChangeLog,
+  PriceAIProductDetail,
+  PriceAIProductHistory,
+  PriceAIProductListItem,
+  PriceAIProductSort,
+  PriceAIQuoteGroup,
+  PriceAIQuoteSort,
+  PriceAIStatus,
+  PriceAIWatchTargetWithProduct,
   SavedSearchCondition,
   SavedSearchConditionField,
   ShopGoodsSort,
@@ -283,6 +292,80 @@ export function useCaptchaConfigs(enabled = true) {
 
 export function useSystemConfig() {
   return useApi<SystemConfigResponse>("/settings/config")
+}
+
+export interface PriceAIProductFilters {
+  query?: string
+  platform?: string
+  productType?: string
+  watchState?: "all" | "watched" | "unwatched"
+  availability?: "all" | "in_stock" | "out_of_stock"
+  includeMissing?: boolean
+  sort?: PriceAIProductSort
+}
+
+function priceAIProductQuery(page: number, pageSize: number, filters?: PriceAIProductFilters) {
+  const q = new URLSearchParams()
+  q.set("page", String(page))
+  q.set("page_size", String(pageSize))
+  if (filters?.query?.trim()) q.set("query", filters.query.trim())
+  if (filters?.platform && filters.platform !== "all") q.set("platform", filters.platform)
+  if (filters?.productType && filters.productType !== "all") q.set("product_type", filters.productType)
+  if (filters?.watchState && filters.watchState !== "all") q.set("watch_state", filters.watchState)
+  if (filters?.availability && filters.availability !== "all") q.set("availability", filters.availability)
+  if (filters?.includeMissing) q.set("include_missing", "true")
+  if (filters?.sort) q.set("sort", filters.sort)
+  return q.toString()
+}
+
+export function usePriceAIStatus() {
+  return useApi<PriceAIStatus>("/priceai/status")
+}
+
+export function usePriceAIProducts(page = 1, pageSize = 20, filters?: PriceAIProductFilters) {
+  return useApi<PageResult<PriceAIProductListItem>>(
+    `/priceai/products?${priceAIProductQuery(page, pageSize, filters)}`,
+  )
+}
+
+export function usePriceAIProduct(slug: string | null) {
+  return useApi<PriceAIProductDetail>(slug ? `/priceai/products/${encodeURIComponent(slug)}` : null)
+}
+
+export function usePriceAIOffers(
+  slug: string | null,
+  board = "default",
+  query = "",
+  sort: PriceAIQuoteSort = "price_asc",
+  page = 1,
+  pageSize = 20,
+) {
+  const q = new URLSearchParams()
+  q.set("board", board)
+  q.set("group_by", "title")
+  q.set("sort", sort)
+  q.set("page", String(page))
+  q.set("page_size", String(pageSize))
+  if (query.trim()) q.set("query", query.trim())
+  return useApi<PageResult<PriceAIQuoteGroup>>(
+    slug ? `/priceai/products/${encodeURIComponent(slug)}/offers?${q.toString()}` : null,
+  )
+}
+
+export function usePriceAIHistory(slug: string | null, page = 1, pageSize = 12) {
+  return useApi<PageResult<PriceAIProductHistory>>(
+    slug ? `/priceai/products/${encodeURIComponent(slug)}/history?page=${page}&page_size=${pageSize}` : null,
+  )
+}
+
+export function usePriceAIChangeLogs(slug: string | null, page = 1, pageSize = 8) {
+  return useApi<PageResult<PriceAIChangeLog>>(
+    slug ? `/priceai/products/${encodeURIComponent(slug)}/change-logs?page=${page}&page_size=${pageSize}` : null,
+  )
+}
+
+export function usePriceAIWatchTargets() {
+  return useApi<PriceAIWatchTargetWithProduct[]>("/priceai/watch-targets")
 }
 
 export function useShopTargets() {

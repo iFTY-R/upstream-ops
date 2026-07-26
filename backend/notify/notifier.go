@@ -15,16 +15,18 @@ import (
 
 // Message 待发送的通知消息。
 //
-// ChannelID / ModelName 用于 Dispatcher 做订阅过滤：
-//   - ChannelID = 来源上游 ID，0 表示系统消息或测试发送，跳过订阅过滤
+// ChannelID / ModelName / PriceAITargetID 用于 Dispatcher 做订阅过滤：
+//   - ChannelID = 来源上游 ID；0 表示没有上游渠道归属的系统或 PriceAI 消息
 //   - ModelName = 倍率相关事件填写当前分组名
+//   - PriceAITargetID 仅用于 PriceAI 事件的可选目标过滤
 type Message struct {
-	Event     storage.NotificationEvent
-	ChannelID uint
-	ModelName string
-	Subject   string
-	Body      string
-	Extra     map[string]any
+	Event           storage.NotificationEvent
+	ChannelID       uint
+	ModelName       string
+	PriceAITargetID uint
+	Subject         string
+	Body            string
+	Extra           map[string]any
 }
 
 // Notifier 通知渠道抽象。

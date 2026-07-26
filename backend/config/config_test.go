@@ -32,6 +32,12 @@ func TestLoadAppliesStaggeredShopCronDefault(t *testing.T) {
 	if cfg.Scheduler.ShopCron != "41 7,37 8-22 * * *" {
 		t.Fatalf("shop cron = %q", cfg.Scheduler.ShopCron)
 	}
+	if cfg.Scheduler.PriceAIFeedCron != "23 */5 * * * *" {
+		t.Fatalf("priceai feed cron = %q", cfg.Scheduler.PriceAIFeedCron)
+	}
+	if cfg.Scheduler.PriceAIRiskCron != "47 11 */6 * * *" {
+		t.Fatalf("priceai risk cron = %q", cfg.Scheduler.PriceAIRiskCron)
+	}
 }
 
 func TestLoadAppliesShopRetentionDefaults(t *testing.T) {
@@ -51,6 +57,18 @@ func TestLoadAppliesShopRetentionDefaults(t *testing.T) {
 	}
 	if retention.ShopSyncJobsDays != 30 {
 		t.Fatalf("shop sync jobs days = %d", retention.ShopSyncJobsDays)
+	}
+	if retention.PriceAIProductHistoryDays != 90 || retention.PriceAIChangeLogsDays != 90 || retention.PriceAISyncLogsDays != 30 {
+		t.Fatalf("unexpected priceai retention: %#v", retention)
+	}
+}
+
+func TestValidatePriceAIFeedCronRejectsSubMinuteSchedule(t *testing.T) {
+	if err := ValidatePriceAIFeedCron("0,30 * * * * *"); err == nil {
+		t.Fatal("sub-minute PriceAI Feed cron unexpectedly passed validation")
+	}
+	if err := ValidatePriceAIFeedCron("23 */5 * * * *"); err != nil {
+		t.Fatalf("valid PriceAI Feed cron rejected: %v", err)
 	}
 }
 

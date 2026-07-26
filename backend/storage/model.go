@@ -259,6 +259,14 @@ const (
 	EventAutoGroupTargetUpdateFailed NotificationEvent = "auto_group_target_update_failed"
 	EventAutoGroupProbeFailed        NotificationEvent = "auto_group_probe_failed"
 	EventAutoGroupPolicyError        NotificationEvent = "auto_group_policy_error"
+	EventPriceAILowestPriceDropped   NotificationEvent = "priceai_lowest_price_dropped"
+	EventPriceAITargetPriceHit       NotificationEvent = "priceai_target_price_hit"
+	EventPriceAIOutOfStock           NotificationEvent = "priceai_out_of_stock"
+	EventPriceAIRestocked            NotificationEvent = "priceai_restocked"
+	EventPriceAINewPublicLowestOffer NotificationEvent = "priceai_new_public_lowest_offer"
+	EventPriceAIFeedStale            NotificationEvent = "priceai_feed_stale"
+	EventPriceAISyncFailed           NotificationEvent = "priceai_sync_failed"
+	EventPriceAISyncRecovered        NotificationEvent = "priceai_sync_recovered"
 )
 
 // NotificationLog 通知发送记录。
@@ -530,6 +538,260 @@ type ShopSyncBatchItem struct {
 }
 
 func (ShopSyncBatchItem) TableName() string { return "shop_sync_batch_items" }
+
+// PriceAI public-board and catalog values are stored independently from shop
+// monitoring. The records below describe only PriceAI's documented Feed and
+// the narrowly scoped page-derived risk cache.
+type PriceAIBoardKind string
+
+const (
+	PriceAIBoardDefault PriceAIBoardKind = "default"
+	PriceAIBoardPreset  PriceAIBoardKind = "preset"
+)
+
+type PriceAIChangeEvent string
+
+const (
+	PriceAIChangeBaselineCreated       PriceAIChangeEvent = "baseline_created"
+	PriceAIChangeCatalogProductMissing PriceAIChangeEvent = "catalog_product_missing"
+	PriceAIChangeLowestPriceChanged    PriceAIChangeEvent = "lowest_price_changed"
+	PriceAIChangeCurrencyChanged       PriceAIChangeEvent = "lowest_price_currency_changed"
+	PriceAIChangeInStockCountChanged   PriceAIChangeEvent = "in_stock_count_changed"
+	PriceAIChangeOfferCountChanged     PriceAIChangeEvent = "offer_count_changed"
+	PriceAIChangePublicBoardChanged    PriceAIChangeEvent = "public_board_changed"
+	PriceAIChangeTargetPriceHit        PriceAIChangeEvent = "target_price_hit"
+	PriceAIChangeFeedBecameStale       PriceAIChangeEvent = "feed_became_stale"
+	PriceAIChangeFeedRecovered         PriceAIChangeEvent = "feed_recovered"
+	PriceAIChangeSyncFailed            PriceAIChangeEvent = "sync_failed"
+	PriceAIChangeSyncRecovered         PriceAIChangeEvent = "sync_recovered"
+)
+
+type PriceAISyncJobKind string
+
+const (
+	PriceAISyncJobFeed PriceAISyncJobKind = "feed"
+	PriceAISyncJobRisk PriceAISyncJobKind = "risk"
+)
+
+type PriceAIRiskScope string
+
+const (
+	PriceAIRiskScopeSource PriceAIRiskScope = "source"
+	PriceAIRiskScopeOffer  PriceAIRiskScope = "offer"
+)
+
+// PriceAIFeedState keeps conditional request metadata and import health for
+// one documented PriceAI Feed source.
+type PriceAIFeedState struct {
+	SourceKey                   string     `gorm:"primaryKey;size:64" json:"source_key"`
+	LatestURL                   string     `gorm:"size:1024;not null" json:"latest_url"`
+	SchemaURL                   string     `gorm:"size:1024;not null" json:"schema_url"`
+	ETag                        string     `gorm:"column:etag;size:512" json:"etag,omitempty"`
+	LastModified                string     `gorm:"size:512" json:"last_modified,omitempty"`
+	SnapshotID                  string     `gorm:"size:256" json:"snapshot_id,omitempty"`
+	SnapshotURL                 string     `gorm:"size:1024" json:"snapshot_url,omitempty"`
+	SchemaVersion               string     `gorm:"size:64" json:"schema_version,omitempty"`
+	GeneratedAt                 *time.Time `json:"generated_at,omitempty"`
+	PublishedAt                 *time.Time `json:"published_at,omitempty"`
+	FeedStale                   bool       `gorm:"not null;default:false" json:"feed_stale"`
+	LastAttemptAt               *time.Time `gorm:"index" json:"last_attempt_at,omitempty"`
+	LastSuccessAt               *time.Time `gorm:"index" json:"last_success_at,omitempty"`
+	ConsecutiveFailures         int        `gorm:"not null;default:0" json:"consecutive_failures"`
+	LastError                   string     `gorm:"type:text" json:"last_error,omitempty"`
+	DefaultWatchSeededSlugsJSON string     `gorm:"type:text;not null;default:'[]'" json:"default_watch_seeded_slugs_json"`
+	CreatedAt                   time.Time  `json:"created_at"`
+	UpdatedAt                   time.Time  `json:"updated_at"`
+}
+
+func (PriceAIFeedState) TableName() string { return "priceai_feed_state" }
+
+// PriceAIProduct is the imported Feed catalog, not an assertion about the
+// complete PriceAI marketplace.
+type PriceAIProduct struct {
+	ID                         uint       `gorm:"primaryKey" json:"id"`
+	RemoteID                   string     `gorm:"size:256;not null;uniqueIndex:uq_priceai_products_remote_id" json:"remote_id"`
+	Slug                       string     `gorm:"size:256;not null;uniqueIndex:uq_priceai_products_slug" json:"slug"`
+	Name                       string     `gorm:"size:512;not null;index" json:"name"`
+	Platform                   string     `gorm:"size:128;index" json:"platform,omitempty"`
+	ProductType                string     `gorm:"size:128;index" json:"product_type,omitempty"`
+	Spec                       string     `gorm:"type:text" json:"spec,omitempty"`
+	Summary                    string     `gorm:"type:text" json:"summary,omitempty"`
+	OfferCount                 int        `gorm:"not null;default:0" json:"offer_count"`
+	InStockCount               int        `gorm:"not null;default:0" json:"in_stock_count"`
+	LowestPrice                *float64   `json:"lowest_price,omitempty"`
+	LowestPriceCurrency        *string    `gorm:"size:32" json:"lowest_price_currency,omitempty"`
+	LatestSeenAt               time.Time  `gorm:"not null;index" json:"latest_seen_at"`
+	ProductSnapshotGeneratedAt time.Time  `gorm:"not null;index" json:"product_snapshot_generated_at"`
+	LastSnapshotID             string     `gorm:"size:256;not null;index" json:"last_snapshot_id"`
+	FirstSeenAt                time.Time  `gorm:"not null;index" json:"first_seen_at"`
+	LastSeenAt                 time.Time  `gorm:"not null;index" json:"last_seen_at"`
+	MissingFromLatestAt        *time.Time `gorm:"index" json:"missing_from_latest_at,omitempty"`
+	RawJSON                    string     `gorm:"type:text" json:"-"`
+	CreatedAt                  time.Time  `json:"created_at"`
+	UpdatedAt                  time.Time  `json:"updated_at"`
+}
+
+func (PriceAIProduct) TableName() string { return "priceai_products" }
+
+// PriceAIWatchTarget is intentionally separate from ShopTarget so monitoring
+// and notification preferences do not cross domains.
+type PriceAIWatchTarget struct {
+	ID                          uint       `gorm:"primaryKey" json:"id"`
+	ProductID                   uint       `gorm:"not null;uniqueIndex:uq_priceai_watch_targets_product_id" json:"product_id"`
+	MonitorEnabled              bool       `gorm:"not null;default:true" json:"monitor_enabled"`
+	NotifyEnabled               bool       `gorm:"not null;default:false" json:"notify_enabled"`
+	TargetPrice                 *float64   `json:"target_price,omitempty"`
+	TargetPriceCurrency         *string    `gorm:"size:32" json:"target_price_currency,omitempty"`
+	PriceDropPercent            *float64   `json:"price_drop_percent,omitempty"`
+	NotificationCooldownMinutes int        `gorm:"not null;default:0" json:"notification_cooldown_minutes"`
+	BaselineSnapshotID          string     `gorm:"size:256;not null" json:"baseline_snapshot_id"`
+	LastNotifiedSnapshotID      *string    `gorm:"size:256" json:"last_notified_snapshot_id,omitempty"`
+	LastNotifiedAt              *time.Time `json:"last_notified_at,omitempty"`
+	CreatedAt                   time.Time  `json:"created_at"`
+	UpdatedAt                   time.Time  `json:"updated_at"`
+}
+
+func (PriceAIWatchTarget) TableName() string { return "priceai_watch_targets" }
+
+type PriceAIPreset struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	ProductID      uint      `gorm:"not null;uniqueIndex:uq_priceai_presets_product_remote_id;index" json:"product_id"`
+	RemoteID       string    `gorm:"size:256;not null;uniqueIndex:uq_priceai_presets_product_remote_id" json:"remote_id"`
+	Label          string    `gorm:"size:512;not null" json:"label"`
+	GroupName      string    `gorm:"size:256" json:"group_name,omitempty"`
+	Description    string    `gorm:"type:text" json:"description,omitempty"`
+	Total          int       `gorm:"not null;default:0" json:"total"`
+	GeneratedAt    time.Time `gorm:"not null;index" json:"generated_at"`
+	LastSnapshotID string    `gorm:"size:256;not null;index" json:"last_snapshot_id"`
+	RawJSON        string    `gorm:"type:text" json:"-"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func (PriceAIPreset) TableName() string { return "priceai_presets" }
+
+type PriceAIOffer struct {
+	ID              uint      `gorm:"primaryKey" json:"id"`
+	ProductID       uint      `gorm:"not null;uniqueIndex:uq_priceai_offers_product_dedupe;index" json:"product_id"`
+	RemoteID        string    `gorm:"size:256;index" json:"remote_id,omitempty"`
+	DedupeKey       string    `gorm:"size:1024;not null;uniqueIndex:uq_priceai_offers_product_dedupe" json:"dedupe_key"`
+	SourceID        string    `gorm:"size:256;index" json:"source_id,omitempty"`
+	SourceName      string    `gorm:"size:512" json:"source_name,omitempty"`
+	SourceStoreName string    `gorm:"size:512" json:"source_store_name,omitempty"`
+	MerchantKey     string    `gorm:"size:1024;not null;index" json:"merchant_key"`
+	Title           string    `gorm:"type:text;not null" json:"title"`
+	NormalizedTitle string    `gorm:"size:1024;not null;index" json:"normalized_title"`
+	Price           float64   `gorm:"not null" json:"price"`
+	Currency        string    `gorm:"size:32" json:"currency,omitempty"`
+	Status          string    `gorm:"size:128;index" json:"status,omitempty"`
+	URL             string    `gorm:"size:2048;not null" json:"url"`
+	LastSnapshotID  string    `gorm:"size:256;not null;index" json:"last_snapshot_id"`
+	FirstSeenAt     time.Time `gorm:"not null;index" json:"first_seen_at"`
+	LastSeenAt      time.Time `gorm:"not null;index" json:"last_seen_at"`
+	RawJSON         string    `gorm:"type:text" json:"-"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+func (PriceAIOffer) TableName() string { return "priceai_offers" }
+
+type PriceAIOfferRanking struct {
+	ID               uint             `gorm:"primaryKey" json:"id"`
+	ProductID        uint             `gorm:"not null;uniqueIndex:uq_priceai_offer_rankings_membership;index" json:"product_id"`
+	OfferID          uint             `gorm:"not null;uniqueIndex:uq_priceai_offer_rankings_membership;index" json:"offer_id"`
+	BoardKind        PriceAIBoardKind `gorm:"size:16;not null;uniqueIndex:uq_priceai_offer_rankings_membership" json:"board_kind"`
+	PresetID         string           `gorm:"size:256;not null;uniqueIndex:uq_priceai_offer_rankings_membership" json:"preset_id,omitempty"`
+	Rank             int              `gorm:"not null" json:"rank"`
+	BoardGeneratedAt time.Time        `gorm:"not null;index" json:"board_generated_at"`
+	LastSnapshotID   string           `gorm:"size:256;not null;index" json:"last_snapshot_id"`
+	CreatedAt        time.Time        `json:"created_at"`
+	UpdatedAt        time.Time        `json:"updated_at"`
+}
+
+func (PriceAIOfferRanking) TableName() string { return "priceai_offer_rankings" }
+
+type PriceAIProductHistory struct {
+	ID                         uint      `gorm:"primaryKey" json:"id"`
+	ProductID                  uint      `gorm:"not null;uniqueIndex:uq_priceai_product_history_snapshot;index" json:"product_id"`
+	SnapshotID                 string    `gorm:"size:256;not null;uniqueIndex:uq_priceai_product_history_snapshot" json:"snapshot_id"`
+	LowestPrice                *float64  `json:"lowest_price,omitempty"`
+	LowestPriceCurrency        *string   `gorm:"size:32" json:"lowest_price_currency,omitempty"`
+	InStockCount               int       `gorm:"not null;default:0" json:"in_stock_count"`
+	OfferCount                 int       `gorm:"not null;default:0" json:"offer_count"`
+	ProductSnapshotGeneratedAt time.Time `gorm:"not null;index" json:"product_snapshot_generated_at"`
+	FeedStale                  bool      `gorm:"not null;default:false" json:"feed_stale"`
+	CapturedAt                 time.Time `gorm:"not null;index" json:"captured_at"`
+	CreatedAt                  time.Time `json:"created_at"`
+}
+
+func (PriceAIProductHistory) TableName() string { return "priceai_product_history" }
+
+type PriceAIChangeLog struct {
+	ID                uint               `gorm:"primaryKey" json:"id"`
+	ProductID         uint               `gorm:"not null;default:0;index" json:"product_id,omitempty"`
+	WatchTargetID     uint               `gorm:"not null;default:0;index" json:"watch_target_id,omitempty"`
+	Event             PriceAIChangeEvent `gorm:"size:64;not null;index" json:"event"`
+	SnapshotID        string             `gorm:"size:256;index" json:"snapshot_id,omitempty"`
+	PreviousValueJSON string             `gorm:"type:text" json:"previous_value_json,omitempty"`
+	CurrentValueJSON  string             `gorm:"type:text" json:"current_value_json,omitempty"`
+	Message           string             `gorm:"type:text" json:"message,omitempty"`
+	OccurredAt        time.Time          `gorm:"not null;index" json:"occurred_at"`
+	CreatedAt         time.Time          `json:"created_at"`
+}
+
+func (PriceAIChangeLog) TableName() string { return "priceai_change_logs" }
+
+type PriceAISyncLog struct {
+	ID                   uint               `gorm:"primaryKey" json:"id"`
+	JobKind              PriceAISyncJobKind `gorm:"size:16;not null;index" json:"job_kind"`
+	SnapshotID           string             `gorm:"size:256;index" json:"snapshot_id,omitempty"`
+	Success              bool               `gorm:"not null" json:"success"`
+	NotModified          bool               `gorm:"not null;default:false" json:"not_modified"`
+	ProductsCount        int                `gorm:"not null;default:0" json:"products_count"`
+	OffersCount          int                `gorm:"not null;default:0" json:"offers_count"`
+	ChangedProductsCount int                `gorm:"not null;default:0" json:"changed_products_count"`
+	ErrorMessage         string             `gorm:"type:text" json:"error_message,omitempty"`
+	StartedAt            time.Time          `gorm:"not null;index" json:"started_at"`
+	FinishedAt           time.Time          `gorm:"not null" json:"finished_at"`
+	DurationMS           int64              `gorm:"not null;default:0" json:"duration_ms"`
+	CreatedAt            time.Time          `json:"created_at"`
+}
+
+func (PriceAISyncLog) TableName() string { return "priceai_sync_logs" }
+
+type PriceAIRiskFeedback struct {
+	ID              uint             `gorm:"primaryKey" json:"id"`
+	ProductID       uint             `gorm:"not null;uniqueIndex:uq_priceai_risk_feedback_subject;index" json:"product_id"`
+	Scope           PriceAIRiskScope `gorm:"size:16;not null;uniqueIndex:uq_priceai_risk_feedback_subject" json:"scope"`
+	SubjectRemoteID string           `gorm:"size:256;not null;uniqueIndex:uq_priceai_risk_feedback_subject" json:"subject_remote_id"`
+	Status          string           `gorm:"size:128;index" json:"status,omitempty"`
+	FeedbackCount   int              `gorm:"not null;default:0" json:"feedback_count"`
+	ReasonsJSON     string           `gorm:"type:text" json:"reasons_json,omitempty"`
+	SummariesJSON   string           `gorm:"type:text" json:"summaries_json,omitempty"`
+	LatestAt        *time.Time       `json:"latest_at,omitempty"`
+	PageURL         string           `gorm:"size:1024" json:"page_url,omitempty"`
+	FetchedAt       *time.Time       `gorm:"index" json:"fetched_at,omitempty"`
+	LastError       string           `gorm:"type:text" json:"last_error,omitempty"`
+	RawJSON         string           `gorm:"type:text" json:"-"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+}
+
+func (PriceAIRiskFeedback) TableName() string { return "priceai_risk_feedback" }
+
+// PriceAILDXPTargetBinding is the exclusive ownership marker for automatic
+// PriceAI-created exact LDXP targets. Manual targets must never gain a row.
+type PriceAILDXPTargetBinding struct {
+	ID           uint         `gorm:"primaryKey" json:"id"`
+	Platform     ShopPlatform `gorm:"size:32;not null;uniqueIndex:uq_priceai_ldxp_target_identity" json:"platform"`
+	BaseURL      string       `gorm:"size:512;not null;uniqueIndex:uq_priceai_ldxp_target_identity" json:"base_url"`
+	Token        string       `gorm:"size:128;not null;uniqueIndex:uq_priceai_ldxp_target_identity" json:"token"`
+	ShopTargetID uint         `gorm:"not null;uniqueIndex:uq_priceai_ldxp_target_shop_target" json:"shop_target_id"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
+}
+
+func (PriceAILDXPTargetBinding) TableName() string { return "priceai_ldxp_target_bindings" }
 
 type SavedSearchConditionField string
 

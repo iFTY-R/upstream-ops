@@ -58,6 +58,14 @@ export type NotificationEvent =
   | "auto_group_target_update_failed"
   | "auto_group_probe_failed"
   | "auto_group_policy_error"
+  | "priceai_lowest_price_dropped"
+  | "priceai_target_price_hit"
+  | "priceai_out_of_stock"
+  | "priceai_restocked"
+  | "priceai_new_public_lowest_offer"
+  | "priceai_feed_stale"
+  | "priceai_sync_failed"
+  | "priceai_sync_recovered"
 
 export type ShopGoodsChangeEvent =
   | "goods_added"
@@ -267,6 +275,196 @@ export interface SavedSearchCondition {
   updated_at: string
 }
 
+export type PriceAIProductSort =
+  | "latest_seen_desc"
+  | "lowest_price_asc"
+  | "lowest_price_desc"
+  | "name_asc"
+  | "in_stock_desc"
+
+export type PriceAIQuoteSort = "price_asc" | "price_desc" | "rank_asc" | "risk_first"
+
+export interface PriceAIFeedState {
+  source_key: string
+  snapshot_id?: string
+  generated_at?: string
+  published_at?: string
+  feed_stale: boolean
+  last_attempt_at?: string
+  last_success_at?: string
+  consecutive_failures: number
+  last_error?: string
+}
+
+export interface PriceAISyncLog {
+  id: number
+  job_kind: "feed" | "risk"
+  snapshot_id?: string
+  success: boolean
+  not_modified: boolean
+  products_count: number
+  offers_count: number
+  changed_products_count: number
+  error_message?: string
+  started_at: string
+  finished_at: string
+  duration_ms: number
+}
+
+export interface PriceAIStatus {
+  state: PriceAIFeedState
+  feed_log?: PriceAISyncLog | null
+  risk_log?: PriceAISyncLog | null
+}
+
+export interface PriceAIProduct {
+  id: number
+  remote_id: string
+  slug: string
+  name: string
+  platform?: string
+  product_type?: string
+  spec?: string
+  summary?: string
+  offer_count: number
+  in_stock_count: number
+  lowest_price?: number | null
+  lowest_price_currency?: string | null
+  latest_seen_at: string
+  product_snapshot_generated_at: string
+  last_snapshot_id: string
+  first_seen_at: string
+  last_seen_at: string
+  missing_from_latest_at?: string | null
+}
+
+export interface PriceAIProductListItem extends PriceAIProduct {
+  watch_target_id?: number
+  watched: boolean
+  risk_fetched_at?: string
+}
+
+export interface PriceAIWatchTarget {
+  id: number
+  product_id: number
+  monitor_enabled: boolean
+  notify_enabled: boolean
+  target_price?: number | null
+  target_price_currency?: string | null
+  price_drop_percent?: number | null
+  notification_cooldown_minutes: number
+  baseline_snapshot_id: string
+  last_notified_snapshot_id?: string | null
+  last_notified_at?: string | null
+}
+
+export interface PriceAIPreset {
+  id: number
+  product_id: number
+  remote_id: string
+  label: string
+  group_name?: string
+  description?: string
+  total: number
+  generated_at: string
+}
+
+export interface PriceAIRiskFeedback {
+  scope: "source" | "offer" | string
+  subject_remote_id: string
+  status?: string
+  feedback_count: number
+  reasons_json?: string
+  summaries_json?: string
+  latest_at?: string
+  page_url?: string
+  fetched_at?: string
+  last_error?: string
+}
+
+export interface PriceAIQuoteMembership {
+  board_kind: "default" | "preset"
+  preset_id?: string
+  rank: number
+  generated_at: string
+}
+
+export interface PriceAIQuote {
+  id: number
+  remote_id?: string
+  source_id?: string
+  source_name?: string
+  source_store_name?: string
+  merchant_key: string
+  title: string
+  normalized_title: string
+  price: number
+  currency?: string
+  status?: string
+  url: string
+  memberships: PriceAIQuoteMembership[]
+  risk_feedback?: PriceAIRiskFeedback[]
+  ldxp_eligible: boolean
+}
+
+export interface PriceAIQuoteGroup {
+  title: string
+  normalized_title: string
+  merchant_count: number
+  visible_quote_count: number
+  min_price?: number | null
+  max_price?: number | null
+  price_spread?: number | null
+  currency?: string
+  risk_badge_count: number
+  quotes: PriceAIQuote[]
+}
+
+export interface PriceAIProductDetail {
+  product: PriceAIProduct
+  watch_target?: PriceAIWatchTarget | null
+  presets: PriceAIPreset[]
+  risk_feedback: PriceAIRiskFeedback[]
+  source_product_url: string
+  coverage: string
+}
+
+export interface PriceAIProductHistory {
+  id: number
+  product_id: number
+  snapshot_id: string
+  lowest_price?: number | null
+  lowest_price_currency?: string | null
+  in_stock_count: number
+  offer_count: number
+  product_snapshot_generated_at: string
+  feed_stale: boolean
+  captured_at: string
+}
+
+export interface PriceAIChangeLog {
+  id: number
+  product_id: number
+  watch_target_id: number
+  event: string
+  snapshot_id?: string
+  message?: string
+  occurred_at: string
+}
+
+export interface PriceAIWatchTargetWithProduct {
+  target: PriceAIWatchTarget
+  product: PriceAIProduct | null
+}
+
+export interface PriceAIShopTargetResult {
+	target: ShopTarget
+	goods_key: string
+	created: boolean
+	reused: boolean
+	already_included: boolean
+}
+
 export interface ShopSnapshotCategory {
   category_id: number
   category_name: string
@@ -473,6 +671,7 @@ export interface NotificationSubscription {
   mode: "all" | "groups"
   groups?: string[]
   events?: NotificationEvent[]
+  priceai_target_ids?: number[]
 }
 
 export interface NotificationChannel {
@@ -594,6 +793,9 @@ export interface SystemSchedulerRetentionConfig {
   shopOtherChangeLogsDays: number
   shopMonitorLogsDays: number
   shopSyncJobsDays: number
+  priceAIProductHistoryDays: number
+  priceAIChangeLogsDays: number
+  priceAISyncLogsDays: number
 }
 
 export interface ShopRetentionResult {
@@ -616,7 +818,11 @@ export interface SystemSchedulerConfig {
   balanceCron: string
   rateCron: string
   shopCron: string
+  priceAIFeedCron: string
+  priceAIRiskCron: string
   concurrency: number
+  priceAIConcurrency: number
+  priceAIRiskConcurrency: number
   autoGroup: SystemSchedulerAutoGroupConfig
   retention: SystemSchedulerRetentionConfig
 }

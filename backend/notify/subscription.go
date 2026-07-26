@@ -24,21 +24,23 @@ const (
 // ChannelIDs 支持多选：一条规则可同时覆盖多个上游，避免为每个上游重复配置。
 // 兼容历史数据：解析时若仅有旧字段 channel_id（单值），自动转为 [channel_id]。
 type Subscription struct {
-	ChannelIDs []uint                      `json:"channel_ids"`
-	Mode       SubscriptionMode            `json:"mode"`
-	Groups     []string                    `json:"groups,omitempty"`
-	Events     []storage.NotificationEvent `json:"events,omitempty"`
+	ChannelIDs       []uint                      `json:"channel_ids"`
+	PriceAITargetIDs []uint                      `json:"priceai_target_ids,omitempty"`
+	Mode             SubscriptionMode            `json:"mode"`
+	Groups           []string                    `json:"groups,omitempty"`
+	Events           []storage.NotificationEvent `json:"events,omitempty"`
 }
 
 // UnmarshalJSON 兼容旧的 channel_id 单值格式：
 // 旧数据 {"channel_id":1} 会被规整为 ChannelIDs=[1]，新数据直接用 channel_ids。
 func (s *Subscription) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		ChannelIDs []uint                      `json:"channel_ids"`
-		ChannelID  uint                        `json:"channel_id"`
-		Mode       SubscriptionMode            `json:"mode"`
-		Groups     []string                    `json:"groups"`
-		Events     []storage.NotificationEvent `json:"events"`
+		ChannelIDs       []uint                      `json:"channel_ids"`
+		ChannelID        uint                        `json:"channel_id"`
+		PriceAITargetIDs []uint                      `json:"priceai_target_ids"`
+		Mode             SubscriptionMode            `json:"mode"`
+		Groups           []string                    `json:"groups"`
+		Events           []storage.NotificationEvent `json:"events"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -48,6 +50,7 @@ func (s *Subscription) UnmarshalJSON(data []byte) error {
 		s.ChannelIDs = []uint{raw.ChannelID}
 	}
 	s.Mode = raw.Mode
+	s.PriceAITargetIDs = raw.PriceAITargetIDs
 	s.Groups = raw.Groups
 	s.Events = raw.Events
 	return nil
@@ -75,6 +78,11 @@ func (s Subscription) Matches(msg Message) bool {
 	if !s.matchesEvent(msg.Event) {
 		return false
 	}
+	if isPriceAIEvent(msg.Event) && len(s.PriceAITargetIDs) > 0 {
+		if msg.PriceAITargetID == 0 || !s.matchesPriceAITarget(msg.PriceAITargetID) {
+			return false
+		}
+	}
 	if len(s.ChannelIDs) > 0 {
 		if msg.ChannelID == 0 || !s.matchesChannel(msg.ChannelID) {
 			return false
@@ -85,6 +93,15 @@ func (s Subscription) Matches(msg Message) bool {
 	}
 	for _, g := range s.Groups {
 		if g == msg.ModelName {
+			return true
+		}
+	}
+	return false
+}
+
+func (s Subscription) matchesPriceAITarget(id uint) bool {
+	for _, targetID := range s.PriceAITargetIDs {
+		if targetID == id {
 			return true
 		}
 	}
@@ -126,6 +143,22 @@ func isRateEvent(event storage.NotificationEvent) bool {
 		event == storage.EventAutoGroupTargetUpdateFailed ||
 		event == storage.EventAutoGroupProbeFailed ||
 		event == storage.EventAutoGroupPolicyError
+}
+
+func isPriceAIEvent(event storage.NotificationEvent) bool {
+	switch event {
+	case storage.EventPriceAILowestPriceDropped,
+		storage.EventPriceAITargetPriceHit,
+		storage.EventPriceAIOutOfStock,
+		storage.EventPriceAIRestocked,
+		storage.EventPriceAINewPublicLowestOffer,
+		storage.EventPriceAIFeedStale,
+		storage.EventPriceAISyncFailed,
+		storage.EventPriceAISyncRecovered:
+		return true
+	default:
+		return false
+	}
 }
 
 // AnyMatch 任意一条订阅命中即视为该通知渠道关心此消息。

@@ -21,6 +21,7 @@ const NotificationsPage = lazy(() => import('@/app/notifications-page'))
 const AutoGroupsPage = lazy(() => import('@/app/auto-groups-page'))
 const ShopsPage = lazy(() => import('@/app/shops-page'))
 const ShopGoodsPage = lazy(() => import('@/app/shop-goods-page'))
+const PriceAIPage = lazy(() => import('@/app/priceai-page'))
 const SettingsPage = lazy(() => import('@/app/settings-page'))
 
 function ProtectedApplication() {
@@ -37,6 +38,7 @@ function ProtectedApplication() {
                 <Route path="auto-groups" element={<AutoGroupsPage />} />
                 <Route path="shops" element={<ShopsPage />} />
                 <Route path="shop-goods" element={<ShopGoodsPage />} />
+                <Route path="priceai" element={<PriceAIPage />} />
                 <Route path="settings" element={<SettingsPage />} />
               </Route>
             </Routes>

@@ -118,3 +118,30 @@ func TestSubscriptionMatchesGlobalSourceShopEvents(t *testing.T) {
 		t.Fatal("global-source subscription should still respect selected events")
 	}
 }
+
+func TestSubscriptionMatchesPriceAITargetFiltersWithoutChangingLegacySemantics(t *testing.T) {
+	legacy := Subscription{
+		ChannelIDs: []uint{1},
+		Events:     []storage.NotificationEvent{storage.EventAnnouncement},
+	}
+	if !legacy.Matches(Message{ChannelID: 1, Event: storage.EventAnnouncement}) {
+		t.Fatal("legacy upstream subscription should still match")
+	}
+
+	sub := Subscription{
+		PriceAITargetIDs: []uint{7},
+		Events:           []storage.NotificationEvent{storage.EventPriceAITargetPriceHit},
+	}
+	if !sub.Matches(Message{ChannelID: 0, PriceAITargetID: 7, Event: storage.EventPriceAITargetPriceHit}) {
+		t.Fatal("PriceAI target subscription should match its exact target")
+	}
+	if sub.Matches(Message{ChannelID: 0, PriceAITargetID: 8, Event: storage.EventPriceAITargetPriceHit}) {
+		t.Fatal("PriceAI target subscription should reject another target")
+	}
+	if sub.Matches(Message{ChannelID: 0, Event: storage.EventPriceAITargetPriceHit}) {
+		t.Fatal("PriceAI target subscription should not bypass the filter for target zero")
+	}
+	if sub.Matches(Message{ChannelID: 0, PriceAITargetID: 7, Event: storage.EventShopStockChanged}) {
+		t.Fatal("PriceAI target filter should not bypass event filtering")
+	}
+}

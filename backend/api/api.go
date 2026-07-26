@@ -18,6 +18,7 @@ import (
 	"github.com/ifty-r/upstream-ops/backend/connector"
 	"github.com/ifty-r/upstream-ops/backend/crypto"
 	"github.com/ifty-r/upstream-ops/backend/notify"
+	"github.com/ifty-r/upstream-ops/backend/priceai"
 	"github.com/ifty-r/upstream-ops/backend/runtimeconfig"
 	"github.com/ifty-r/upstream-ops/backend/shopmonitor"
 	"github.com/ifty-r/upstream-ops/backend/storage"
@@ -85,6 +86,8 @@ type Deps struct {
 	Announcements    *storage.UpstreamAnnouncements
 	Rates            *storage.Rates
 	MonLogs          *storage.MonitorLogs
+	PriceAI          *storage.PriceAI
+	PriceAISvc       *priceai.Service
 	ChannelSvc       channelService
 	UpstreamCap      upstreamCapabilityService
 	UpstreamOps      any
@@ -132,6 +135,7 @@ func Register(r *gin.Engine, d *Deps) {
 		registerAnnouncements(api, d)
 		registerRates(api, d)
 		registerMonitorLogs(api, d)
+		registerPriceAI(api, d)
 		registerDashboard(api, d)
 		registerSettings(api, d)
 	}
