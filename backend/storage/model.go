@@ -1,6 +1,11 @@
 package storage
 
-import "time"
+import (
+	"strings"
+	"time"
+
+	"gorm.io/gorm"
+)
 
 // ChannelType 上游渠道类型。
 type ChannelType string
@@ -394,6 +399,7 @@ type ShopGoodsSnapshot struct {
 	GoodsKey      string     `gorm:"size:128;not null;uniqueIndex:idx_shop_goods_target_key" json:"goods_key"`
 	GoodsType     string     `gorm:"size:32;not null;index" json:"goods_type"`
 	Name          string     `gorm:"size:512;not null" json:"name"`
+	NameKey       string     `gorm:"size:512;not null;default:'';index" json:"-"`
 	CategoryID    int64      `gorm:"index" json:"category_id"`
 	CategoryName  string     `gorm:"size:256" json:"category_name"`
 	Link          string     `gorm:"size:512" json:"link"`
@@ -413,6 +419,23 @@ type ShopGoodsSnapshot struct {
 }
 
 func (ShopGoodsSnapshot) TableName() string { return "shop_goods_snapshots" }
+
+// ShopGoodsNameKey 返回同名分组使用的规范化键：名称去首尾空白并按 Unicode 规则小写，
+// 空名称回退到商品键。键在写入侧由 Go 统一计算并持久化到 name_key 列，
+// 避免分组查询依赖各数据库 LOWER/TRIM 的方言差异，也免去逐次表达式全表扫描。
+func ShopGoodsNameKey(name, goodsKey string) string {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if key == "" {
+		key = strings.ToLower(strings.TrimSpace(goodsKey))
+	}
+	return key
+}
+
+// BeforeSave 保证 name_key 始终与 name/goods_key 同步；Create 与 Save 都会经过这里。
+func (s *ShopGoodsSnapshot) BeforeSave(*gorm.DB) error {
+	s.NameKey = ShopGoodsNameKey(s.Name, s.GoodsKey)
+	return nil
+}
 
 type ShopGoodsChangeEvent string
 

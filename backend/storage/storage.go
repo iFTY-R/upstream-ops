@@ -240,6 +240,9 @@ func AutoMigrate(db *gorm.DB) error {
 	); err != nil {
 		return err
 	}
+	if err := backfillShopGoodsNameKeys(db); err != nil {
+		return err
+	}
 	return trimPriceAISyncLogs(db)
 }
 
@@ -255,6 +258,48 @@ func dropObsoletePriceAIHistoryTables(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+// backfillShopGoodsNameKeys 为升级前的历史行补齐 name_key。
+// keyset 分页保证即使某行计算结果仍为空也不会反复扫描同一批。
+func backfillShopGoodsNameKeys(db *gorm.DB) error {
+	type snapshotRow struct {
+		ID       uint
+		Name     string
+		GoodsKey string
+	}
+	lastID := uint(0)
+	for {
+		var rows []snapshotRow
+		if err := db.Model(&ShopGoodsSnapshot{}).
+			Select("id", "name", "goods_key").
+			Where("id > ? AND (name_key = '' OR name_key IS NULL)", lastID).
+			Order("id ASC").
+			Limit(500).
+			Find(&rows).Error; err != nil {
+			return fmt.Errorf("list shop goods rows missing name_key: %w", err)
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		writer := db.Session(&gorm.Session{SkipHooks: true})
+		if err := writer.Transaction(func(tx *gorm.DB) error {
+			for _, row := range rows {
+				key := ShopGoodsNameKey(row.Name, row.GoodsKey)
+				if key == "" {
+					continue
+				}
+				if err := tx.Model(&ShopGoodsSnapshot{}).Where("id = ?", row.ID).
+					Update("name_key", key).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			return fmt.Errorf("backfill shop goods name_key: %w", err)
+		}
+		lastID = rows[len(rows)-1].ID
+	}
 }
 
 func trimPriceAISyncLogs(db *gorm.DB) error {

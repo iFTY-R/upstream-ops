@@ -644,7 +644,9 @@ type shopGoodsQuoteWithGroupKey struct {
 }
 
 const (
-	shopGoodsNameGroupKeyExpr = "COALESCE(NULLIF(LOWER(TRIM(s.name)), ''), LOWER(TRIM(s.goods_key)))"
+	// name_key 在写入侧由 Go 规范化后持久化（见 ShopGoodsNameKey），带索引；
+	// 分组计数、分页与取报价共用该列，避免对 name 做表达式全表扫描。
+	shopGoodsNameGroupKeyExpr = "s.name_key"
 	shopGoodsWithTargetSelect = `s.*,
 		t.name AS target_name,
 		t.last_shop_name AS target_last_shop_name,

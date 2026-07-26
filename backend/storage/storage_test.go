@@ -1254,6 +1254,79 @@ func TestShopGoodsListAllPageFilteredIncludesTargetAndFilters(t *testing.T) {
 	}
 }
 
+func TestShopGoodsNameKeyHookAndBackfill(t *testing.T) {
+	db := openTestDB(t)
+	targets := NewShopTargets(db)
+	goods := NewShopGoods(db)
+	target := &ShopTarget{
+		Name:           "shop-namekey",
+		Platform:       ShopPlatformLDXP,
+		SiteURL:        "https://example.invalid/shop/E",
+		BaseURL:        "https://example.invalid",
+		Token:          "E",
+		MonitorEnabled: true,
+		ScopeMode:      ShopScopeAll,
+	}
+	if err := targets.Create(target); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	base := time.Date(2026, 7, 26, 2, 0, 0, 0, time.UTC)
+	rows := []ShopGoodsSnapshot{
+		{TargetID: target.ID, GoodsKey: "umlaut-upper", GoodsType: "card", Name: "ÄPFEL Konto", Price: 3, StockCount: 1, FirstSeenAt: base, LastSeenAt: base},
+		{TargetID: target.ID, GoodsKey: "umlaut-lower", GoodsType: "card", Name: " äpfel konto ", Price: 2, StockCount: 1, FirstSeenAt: base, LastSeenAt: base},
+	}
+	for i := range rows {
+		if err := goods.CreateSnapshot(&rows[i]); err != nil {
+			t.Fatalf("create snapshot %q: %v", rows[i].GoodsKey, err)
+		}
+	}
+
+	// 写入钩子按 Unicode 规则小写归一，两条报价应归入同一组（SQL LOWER 只处理 ASCII）。
+	groups, total, err := goods.ListAllNameGroupsPageFiltered(1, 10, ShopGoodsFilter{})
+	if err != nil {
+		t.Fatalf("list groups: %v", err)
+	}
+	if total != 1 || len(groups) != 1 || groups[0].GroupKey != "äpfel konto" || groups[0].QuoteCount != 2 {
+		t.Fatalf("unicode names should fold into one group: total=%d groups=%#v", total, groups)
+	}
+
+	// 改名保存后 name_key 必须跟着变。
+	renamed := rows[0]
+	renamed.Name = "Neues Paket"
+	if err := goods.SaveSnapshot(&renamed); err != nil {
+		t.Fatalf("save renamed snapshot: %v", err)
+	}
+	var renamedKeys []string
+	if err := db.Model(&ShopGoodsSnapshot{}).Where("id = ?", renamed.ID).Pluck("name_key", &renamedKeys).Error; err != nil {
+		t.Fatalf("read renamed name_key: %v", err)
+	}
+	if len(renamedKeys) != 1 || renamedKeys[0] != "neues paket" {
+		t.Fatalf("renamed name_key = %#v, want [neues paket]", renamedKeys)
+	}
+
+	// 升级场景：历史行没有 name_key，启动迁移必须补齐。
+	if err := db.Exec("UPDATE shop_goods_snapshots SET name_key = ''").Error; err != nil {
+		t.Fatalf("clear name_key: %v", err)
+	}
+	if err := AutoMigrate(db); err != nil {
+		t.Fatalf("re-run auto migrate: %v", err)
+	}
+	var missing int64
+	if err := db.Model(&ShopGoodsSnapshot{}).Where("name_key = ''").Count(&missing).Error; err != nil {
+		t.Fatalf("count missing name_key: %v", err)
+	}
+	if missing != 0 {
+		t.Fatalf("backfill left %d rows without name_key", missing)
+	}
+	var backfilledKeys []string
+	if err := db.Model(&ShopGoodsSnapshot{}).Where("goods_key = ?", "umlaut-lower").Pluck("name_key", &backfilledKeys).Error; err != nil {
+		t.Fatalf("read backfilled name_key: %v", err)
+	}
+	if len(backfilledKeys) != 1 || backfilledKeys[0] != "äpfel konto" {
+		t.Fatalf("backfilled name_key = %#v, want [äpfel konto]", backfilledKeys)
+	}
+}
+
 func TestShopGoodsListAllNameGroupsPageFiltered(t *testing.T) {
 	db := openTestDB(t)
 	targets := NewShopTargets(db)
