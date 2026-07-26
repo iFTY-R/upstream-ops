@@ -28,7 +28,6 @@ import {
 import { deleteSavedSearchCondition, saveSavedSearchCondition, savedSearchConditionsForField } from "@/lib/search-conditions"
 import { cn } from "@/lib/utils"
 import type {
-  SavedSearchCondition,
   SavedSearchConditionField,
   ShopGoodsListItem,
   ShopGoodsNameGroup,

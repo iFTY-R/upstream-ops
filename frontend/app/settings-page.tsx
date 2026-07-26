@@ -15,7 +15,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -48,7 +48,6 @@ import type {
 import { decimal, money, relativeTime } from "@/lib/format";
 import {
   useCaptchaConfigs,
-  useDashboardSummary,
   useNotificationLogs,
   useNotificationChannels,
   useAppVersion,
@@ -140,7 +139,6 @@ export default function SettingsPage() {
   const query = useSystemConfig();
   const notifications = useNotificationChannels();
   const captchas = useCaptchaConfigs();
-  const summary = useDashboardSummary();
   const notificationLogs = useNotificationLogs(1, 10);
   const appVersion = useAppVersion();
   const refresh = useTriggerRefresh();
@@ -2156,33 +2154,6 @@ function NoteBox({
         {title}
       </p>
       <p className="mt-1 leading-6">{children}</p>
-    </div>
-  );
-}
-
-function StatusBox({
-  title,
-  value,
-  hint,
-  danger = false,
-}: {
-  title: string;
-  value: string;
-  hint: string;
-  danger?: boolean;
-}) {
-  return (
-    <div className="rounded-xl border border-border bg-background px-3 py-2.5">
-      <p className="text-[11px] text-muted-foreground">{title}</p>
-      <p
-        className={cn(
-          "mt-1 text-sm font-semibold",
-          danger ? "text-destructive" : "text-foreground",
-        )}
-      >
-        {value}
-      </p>
-      <p className="mt-1 text-[11px] text-muted-foreground">{hint}</p>
     </div>
   );
 }
