@@ -606,24 +606,26 @@ const (
 // PriceAIFeedState keeps conditional request metadata and import health for
 // one documented PriceAI Feed source.
 type PriceAIFeedState struct {
-	SourceKey                   string     `gorm:"primaryKey;size:64" json:"source_key"`
-	LatestURL                   string     `gorm:"size:1024;not null" json:"latest_url"`
-	SchemaURL                   string     `gorm:"size:1024;not null" json:"schema_url"`
-	ETag                        string     `gorm:"column:etag;size:512" json:"etag,omitempty"`
-	LastModified                string     `gorm:"size:512" json:"last_modified,omitempty"`
-	SnapshotID                  string     `gorm:"size:256" json:"snapshot_id,omitempty"`
-	SnapshotURL                 string     `gorm:"size:1024" json:"snapshot_url,omitempty"`
-	SchemaVersion               string     `gorm:"size:64" json:"schema_version,omitempty"`
-	GeneratedAt                 *time.Time `json:"generated_at,omitempty"`
-	PublishedAt                 *time.Time `json:"published_at,omitempty"`
-	FeedStale                   bool       `gorm:"not null;default:false" json:"feed_stale"`
-	LastAttemptAt               *time.Time `gorm:"index" json:"last_attempt_at,omitempty"`
-	LastSuccessAt               *time.Time `gorm:"index" json:"last_success_at,omitempty"`
-	ConsecutiveFailures         int        `gorm:"not null;default:0" json:"consecutive_failures"`
-	LastError                   string     `gorm:"type:text" json:"last_error,omitempty"`
-	DefaultWatchSeededSlugsJSON string     `gorm:"type:text;not null;default:'[]'" json:"default_watch_seeded_slugs_json"`
-	CreatedAt                   time.Time  `json:"created_at"`
-	UpdatedAt                   time.Time  `json:"updated_at"`
+	SourceKey           string     `gorm:"primaryKey;size:64" json:"source_key"`
+	LatestURL           string     `gorm:"size:1024;not null" json:"latest_url"`
+	SchemaURL           string     `gorm:"size:1024;not null" json:"schema_url"`
+	ETag                string     `gorm:"column:etag;size:512" json:"etag,omitempty"`
+	LastModified        string     `gorm:"size:512" json:"last_modified,omitempty"`
+	SnapshotID          string     `gorm:"size:256" json:"snapshot_id,omitempty"`
+	SnapshotURL         string     `gorm:"size:1024" json:"snapshot_url,omitempty"`
+	SchemaVersion       string     `gorm:"size:64" json:"schema_version,omitempty"`
+	GeneratedAt         *time.Time `json:"generated_at,omitempty"`
+	PublishedAt         *time.Time `json:"published_at,omitempty"`
+	FeedStale           bool       `gorm:"not null;default:false" json:"feed_stale"`
+	LastAttemptAt       *time.Time `gorm:"index" json:"last_attempt_at,omitempty"`
+	LastSuccessAt       *time.Time `gorm:"index" json:"last_success_at,omitempty"`
+	ConsecutiveFailures int        `gorm:"not null;default:0" json:"consecutive_failures"`
+	LastError           string     `gorm:"type:text" json:"last_error,omitempty"`
+	// MySQL 不允许 TEXT 列带 default，这里不设默认值；创建路径由 Go 显式写 "[]"，
+	// 读取侧 decodeSeededSlugs 兼容空串。
+	DefaultWatchSeededSlugsJSON string    `gorm:"type:text;not null" json:"default_watch_seeded_slugs_json"`
+	CreatedAt                   time.Time `json:"created_at"`
+	UpdatedAt                   time.Time `json:"updated_at"`
 }
 
 func (PriceAIFeedState) TableName() string { return "priceai_feed_state" }
