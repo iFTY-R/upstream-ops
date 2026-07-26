@@ -21,7 +21,13 @@ jobs:
       - name: go vet
         run: go vet ./...
       - name: go test
-        run: go test ./...
+        run: |
+          set -o pipefail
+          go test ./... 2>&1 | tee /tmp/gotest.log || {
+            grep -E '^(--- FAIL|FAIL|panic:)' /tmp/gotest.log | head -8 | sed 's/^/::error::/'
+            grep -E '_test\.go:[0-9]+:' /tmp/gotest.log | head -8 | sed 's/^/::error::/'
+            exit 1
+          }
 
   # 分组等 SQL 也要在 MySQL 方言下回归，SQLite 通过不代表 MySQL 可用。
   backend-mysql:
@@ -47,7 +53,13 @@ jobs:
         env:
           UPSTREAM_OPS_TEST_MYSQL_HOST: 127.0.0.1
           UPSTREAM_OPS_TEST_MYSQL_USER: root
-        run: go test ./backend/storage -run 'TestShopGoods' -count=1 -v
+        run: |
+          set -o pipefail
+          go test ./backend/storage -run 'TestShopGoods' -count=1 -v 2>&1 | tee /tmp/gotest.log || {
+            grep -E '^(=== RUN|--- FAIL|FAIL|panic:)' /tmp/gotest.log | tail -8 | sed 's/^/::error::/'
+            grep -E '_test\.go:[0-9]+:|Error [0-9]+' /tmp/gotest.log | head -8 | sed 's/^/::error::/'
+            exit 1
+          }
 
   frontend:
     runs-on: ubuntu-latest
