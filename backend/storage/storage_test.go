@@ -36,6 +36,42 @@ func openTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestCompactSQLiteReclaimsFreePages(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.Exec("CREATE TABLE compaction_test (payload BLOB NOT NULL)").Error; err != nil {
+		t.Fatalf("create compaction test table: %v", err)
+	}
+	if err := db.Exec("INSERT INTO compaction_test(payload) VALUES (zeroblob(?))", 2*1024*1024).Error; err != nil {
+		t.Fatalf("insert compaction payload: %v", err)
+	}
+	if err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
+		t.Fatalf("checkpoint test database: %v", err)
+	}
+	if err := db.Exec("DELETE FROM compaction_test").Error; err != nil {
+		t.Fatalf("delete compaction payload: %v", err)
+	}
+	var beforeStats struct {
+		FreelistCount int `gorm:"column:freelist_count"`
+	}
+	if err := db.Raw("SELECT (SELECT freelist_count FROM pragma_freelist_count) AS freelist_count").Scan(&beforeStats).Error; err != nil {
+		t.Fatalf("read database page statistics: %v", err)
+	}
+	if beforeStats.FreelistCount == 0 {
+		t.Fatal("test database has no free pages to compact")
+	}
+
+	result, err := CompactSQLite(db)
+	if err != nil {
+		t.Fatalf("compact SQLite database: %v", err)
+	}
+	if result.BeforeBytes <= result.AfterBytes {
+		t.Fatalf("database size before=%d, after=%d; expected compaction to shrink the file", result.BeforeBytes, result.AfterBytes)
+	}
+	if result.ReclaimedBytes != result.BeforeBytes-result.AfterBytes {
+		t.Fatalf("reclaimed bytes=%d, want %d", result.ReclaimedBytes, result.BeforeBytes-result.AfterBytes)
+	}
+}
+
 func TestAggregateBalanceTrend(t *testing.T) {
 	db := openTestDB(t)
 	rates := NewRates(db)

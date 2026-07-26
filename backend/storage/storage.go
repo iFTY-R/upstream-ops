@@ -1,11 +1,13 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	sqliteDriver "github.com/glebarez/sqlite"
@@ -20,6 +22,17 @@ const (
 	DBDriverSQLite DBDriver = "sqlite"
 	DBDriverMySQL  DBDriver = "mysql"
 )
+
+var ErrSQLiteCompactionUnsupported = errors.New("database compaction is available only for SQLite")
+
+var sqliteCompactionMu sync.Mutex
+
+// SQLiteCompactionResult reports the main database file size around VACUUM.
+type SQLiteCompactionResult struct {
+	BeforeBytes    int64 `json:"before_bytes"`
+	AfterBytes     int64 `json:"after_bytes"`
+	ReclaimedBytes int64 `json:"reclaimed_bytes"`
+}
 
 type DBConfig struct {
 	Driver       DBDriver
@@ -45,6 +58,71 @@ func (c DBConfig) MySQLDSN() string {
 		"%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
 		c.User, c.Password, c.Host, c.Port, c.Name,
 	)
+}
+
+// CompactSQLite checkpoints the WAL and rebuilds the database to return unused
+// pages to the filesystem. It is intentionally an explicit maintenance action.
+func CompactSQLite(db *gorm.DB) (SQLiteCompactionResult, error) {
+	if db == nil {
+		return SQLiteCompactionResult{}, errors.New("database is unavailable")
+	}
+	if db.Dialector.Name() != string(DBDriverSQLite) {
+		return SQLiteCompactionResult{}, ErrSQLiteCompactionUnsupported
+	}
+
+	sqliteCompactionMu.Lock()
+	defer sqliteCompactionMu.Unlock()
+
+	var databases []struct {
+		Name string `gorm:"column:name"`
+		File string `gorm:"column:file"`
+	}
+	if err := db.Raw("PRAGMA database_list").Scan(&databases).Error; err != nil {
+		return SQLiteCompactionResult{}, fmt.Errorf("find sqlite database path: %w", err)
+	}
+
+	var path string
+	for _, database := range databases {
+		if database.Name == "main" {
+			path = database.File
+			break
+		}
+	}
+	if path == "" {
+		return SQLiteCompactionResult{}, errors.New("main SQLite database path is unavailable")
+	}
+
+	if err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
+		return SQLiteCompactionResult{}, fmt.Errorf("checkpoint SQLite WAL: %w", err)
+	}
+	before, err := sqliteFileSize(path)
+	if err != nil {
+		return SQLiteCompactionResult{}, err
+	}
+	if err := db.Exec("VACUUM").Error; err != nil {
+		return SQLiteCompactionResult{}, fmt.Errorf("compact SQLite database: %w", err)
+	}
+	if err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
+		return SQLiteCompactionResult{}, fmt.Errorf("truncate SQLite WAL after compaction: %w", err)
+	}
+	after, err := sqliteFileSize(path)
+	if err != nil {
+		return SQLiteCompactionResult{}, err
+	}
+
+	result := SQLiteCompactionResult{BeforeBytes: before, AfterBytes: after}
+	if before > after {
+		result.ReclaimedBytes = before - after
+	}
+	return result, nil
+}
+
+func sqliteFileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("stat SQLite database: %w", err)
+	}
+	return info.Size(), nil
 }
 
 // newGormLogger 关掉 GORM 默认 logger 对 ErrRecordNotFound 的告警噪音。

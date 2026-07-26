@@ -675,6 +675,12 @@ export interface AppVersion {
   update_error?: string
 }
 
+export interface DatabaseCompactionResult {
+  before_bytes: number
+  after_bytes: number
+  reclaimed_bytes: number
+}
+
 export interface ApplyConfigResult {
   applied_sections: string[]
   message: string

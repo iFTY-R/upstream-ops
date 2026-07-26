@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import {
   Bell,
   Clock3,
+  HardDrive,
   MonitorCog,
   KeyRound,
   Network,
@@ -38,6 +39,7 @@ import type {
   AppVersion,
   ApplyConfigResult,
   CaptchaConfig,
+  DatabaseCompactionResult,
   NotificationChannel,
   NotificationChannelType,
   ShopRetentionResult,
@@ -63,6 +65,18 @@ function retentionCutoffLabel(days: number) {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - days);
   return `早于 ${cutoff.toLocaleDateString("zh-CN")}`;
+}
+
+function fileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes;
+  let index = -1;
+  do {
+    value /= 1024;
+    index += 1;
+  } while (value >= 1024 && index < units.length - 1);
+  return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
 }
 
 function normalizeSystemConfig(config: SystemConfig): SystemConfig {
@@ -134,6 +148,7 @@ export default function SettingsPage() {
   const [testingProxy, setTestingProxy] = useState(false);
   const [checkingVersion, setCheckingVersion] = useState(false);
   const [cleaningShopHistory, setCleaningShopHistory] = useState(false);
+  const [compactingDatabase, setCompactingDatabase] = useState(false);
   const [editingNotification, setEditingNotification] =
     useState<NotificationChannel | null>(null);
   const [notificationOpen, setNotificationOpen] = useState(false);
@@ -339,6 +354,36 @@ export default function SettingsPage() {
       toast.error(err instanceof Error ? err.message : "店铺历史清理失败");
     } finally {
       setCleaningShopHistory(false);
+    }
+  }
+
+  async function handleCompactDatabase() {
+    const ok = await confirm({
+      title: "压缩数据库？",
+      description:
+        "将重建 SQLite 数据文件和索引以释放已删除数据占用的磁盘空间。执行期间写入会暂时等待，不会删除任何记录。",
+      confirmLabel: "压缩数据库",
+      destructive: true,
+    });
+    if (!ok) return;
+
+    setCompactingDatabase(true);
+    try {
+      const result = await apiFetch<DatabaseCompactionResult>(
+        "/settings/database/compact",
+        { method: "POST" },
+      );
+      if (result.reclaimed_bytes > 0) {
+        toast.success(
+          `数据库压缩完成：${fileSize(result.before_bytes)} -> ${fileSize(result.after_bytes)}，释放 ${fileSize(result.reclaimed_bytes)}`,
+        );
+      } else {
+        toast.success(`数据库压缩完成，当前大小 ${fileSize(result.after_bytes)}`);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "数据库压缩失败");
+    } finally {
+      setCompactingDatabase(false);
     }
   }
 
@@ -1109,12 +1154,27 @@ export default function SettingsPage() {
                   />
                 </Field>
               </div>
-              <div className="mt-4 flex justify-end">
+              <div className="mt-4 flex flex-wrap justify-end gap-2">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={cleaningShopHistory}
+                  disabled={cleaningShopHistory || compactingDatabase}
+                  onClick={handleCompactDatabase}
+                >
+                  <HardDrive
+                    className={cn(
+                      "size-4",
+                      compactingDatabase ? "animate-pulse" : "",
+                    )}
+                  />
+                  {compactingDatabase ? "压缩中..." : "压缩数据库"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={cleaningShopHistory || compactingDatabase}
                   onClick={handleCleanupShopHistory}
                 >
                   <Trash2

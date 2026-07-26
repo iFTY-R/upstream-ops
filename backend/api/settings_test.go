@@ -196,6 +196,30 @@ func TestCleanupShopHistoryRunsWithSubmittedPolicy(t *testing.T) {
 	}
 }
 
+func TestCompactDatabase(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openTestDB(t)
+	router := gin.New()
+	registerSettings(router.Group("/api"), &Deps{DB: db})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/database/compact", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var response struct {
+		Data storage.SQLiteCompactionResult `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Data.BeforeBytes <= 0 || response.Data.AfterBytes <= 0 {
+		t.Fatalf("compaction result = %#v", response.Data)
+	}
+}
+
 func TestSaveSettingsPreservesEnvManagedBootstrapAndRedactedSecrets(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	t.Setenv("AUTH_ENABLED", "true")

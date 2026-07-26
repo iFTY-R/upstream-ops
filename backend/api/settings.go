@@ -1,11 +1,13 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/ifty-r/upstream-ops/backend/config"
+	"github.com/ifty-r/upstream-ops/backend/storage"
 )
 
 const redactedSecret = "********"
@@ -53,6 +55,7 @@ func registerSettings(g *gin.RouterGroup, d *Deps) {
 	gs.PUT("/config", func(c *gin.Context) { saveSettingsConfig(c, d) })
 	gs.POST("/apply", func(c *gin.Context) { applySettingsConfig(c, d) })
 	gs.POST("/retention/shop/cleanup", func(c *gin.Context) { cleanupShopHistory(c, d) })
+	gs.POST("/database/compact", func(c *gin.Context) { compactDatabase(c, d) })
 	gs.POST("/proxy/test", func(c *gin.Context) { testProxy(c) })
 }
 
@@ -167,6 +170,23 @@ func cleanupShopHistory(c *gin.Context, d *Deps) {
 	})
 	if err != nil {
 		fail(c, http.StatusServiceUnavailable, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+func compactDatabase(c *gin.Context, d *Deps) {
+	if d.DB == nil {
+		fail(c, http.StatusServiceUnavailable, errors.New("database is unavailable"))
+		return
+	}
+	result, err := storage.CompactSQLite(d.DB)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, storage.ErrSQLiteCompactionUnsupported) {
+			status = http.StatusBadRequest
+		}
+		fail(c, status, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": result})
