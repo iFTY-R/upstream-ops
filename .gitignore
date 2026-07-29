@@ -72,3 +72,5 @@ cmd/seed-demo/
 frontend/tsconfig.tsbuildinfo
 
 docs/md
+.superpowers
+.omx
