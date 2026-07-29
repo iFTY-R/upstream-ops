@@ -26,20 +26,29 @@ type SyncJobRunner struct {
 	jobs    *storage.ShopSyncJobs
 	log     *slog.Logger
 
-	mu     sync.Mutex
-	active map[uint]uint
-	slots  chan struct{}
+	mu           sync.Mutex
+	active       map[uint]uint
+	controls     map[uint]*syncJobControl
+	batchCancels map[uint]context.CancelFunc
+	slots        chan struct{}
 
 	requestStats sync.Map
 }
 
+type syncJobControl struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
 func NewSyncJobRunner(monitor *Service, jobs *storage.ShopSyncJobs, log *slog.Logger) *SyncJobRunner {
 	runner := &SyncJobRunner{
-		monitor: monitor,
-		jobs:    jobs,
-		log:     log,
-		active:  make(map[uint]uint),
-		slots:   make(chan struct{}, shopSyncJobConcurrency),
+		monitor:      monitor,
+		jobs:         jobs,
+		log:          log,
+		active:       make(map[uint]uint),
+		controls:     make(map[uint]*syncJobControl),
+		batchCancels: make(map[uint]context.CancelFunc),
+		slots:        make(chan struct{}, shopSyncJobConcurrency),
 	}
 	if jobs != nil {
 		if err := jobs.MarkInterrupted(); err != nil && log != nil {
@@ -81,8 +90,11 @@ func (r *SyncJobRunner) Start(targetID uint) (*storage.ShopSyncJob, bool, error)
 	if err := r.jobs.Create(job); err != nil {
 		return nil, false, err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), shopSyncJobTimeout)
+	control := &syncJobControl{ctx: ctx, cancel: cancel}
 	r.active[targetID] = job.ID
-	go r.run(job.ID, targetID)
+	r.controls[job.ID] = control
+	go r.run(job.ID, targetID, control)
 	return job, false, nil
 }
 
@@ -141,16 +153,30 @@ func (r *SyncJobRunner) SyncAllScheduled(ctx context.Context, concurrency int) *
 		}
 		return r.monitor.syncTargetsWithConcurrency(ctx, list, concurrency, nil)
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	r.mu.Lock()
+	r.batchCancels[batch.ID] = cancel
+	r.mu.Unlock()
+	defer func() {
+		cancel()
+		r.mu.Lock()
+		delete(r.batchCancels, batch.ID)
+		r.mu.Unlock()
+	}()
 
 	jobStartedAt := make([]time.Time, len(jobs))
 	stats := make([]*shopprovider.RequestStats, len(jobs))
 	hooks := &syncAllHooks{
-		beforeTarget: func(parent context.Context, index int, _ storage.ShopTarget) context.Context {
+		beforeTarget: func(_ context.Context, index int, _ storage.ShopTarget) context.Context {
 			jobStartedAt[index] = time.Now()
-			if err := r.jobs.MarkRunning(jobs[index].ID, jobStartedAt[index]); err != nil && r.log != nil {
+			marked, err := r.jobs.TryMarkRunning(jobs[index].ID, jobStartedAt[index])
+			if err != nil && r.log != nil {
 				r.log.Warn("mark scheduled shop sync running failed", "job_id", jobs[index].ID, "err", err)
 			}
-			observedCtx, requestStats := shopprovider.WithRequestStats(parent)
+			if !marked {
+				return runCtx
+			}
+			observedCtx, requestStats := shopprovider.WithRequestStats(runCtx)
 			stats[index] = requestStats
 			r.requestStats.Store(jobs[index].ID, requestStats)
 			return observedCtx
@@ -163,7 +189,10 @@ func (r *SyncJobRunner) SyncAllScheduled(ctx context.Context, concurrency int) *
 				errorMessage = syncErr.Error()
 				if skipped || isSkippedSyncError(syncErr) {
 					status = storage.ShopSyncJobSkipped
-				} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				} else if errors.Is(runCtx.Err(), context.Canceled) || errors.Is(syncErr, context.Canceled) {
+					status = storage.ShopSyncJobCancelled
+					errorMessage = "同步已停止"
+				} else if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 					status = storage.ShopSyncJobTimedOut
 				} else {
 					status = storage.ShopSyncJobFailed
@@ -176,7 +205,7 @@ func (r *SyncJobRunner) SyncAllScheduled(ctx context.Context, concurrency int) *
 				changedCount = result.ChangedCount
 				events = result.Events
 			}
-			metrics := stats[index].Snapshot()
+			metrics := requestStatsSnapshot(stats[index])
 			if err := r.jobs.CompleteWithMetrics(jobs[index].ID, status, goodsCount, changedCount, events, errorMessage, jobStartedAt[index], finishedAt, metrics.Count, metrics.DurationMS); err != nil && r.log != nil {
 				r.log.Warn("complete scheduled shop sync job failed", "job_id", jobs[index].ID, "target_id", target.ID, "err", err)
 			}
@@ -189,7 +218,7 @@ func (r *SyncJobRunner) SyncAllScheduled(ctx context.Context, concurrency int) *
 		},
 	}
 
-	result := r.monitor.syncTargetsWithConcurrency(ctx, list, concurrency, hooks)
+	result := r.monitor.syncTargetsWithConcurrency(runCtx, list, concurrency, hooks)
 	if _, err := r.refreshBatch(batch); err != nil && r.log != nil {
 		r.log.Warn("complete scheduled shop sync batch failed", "batch_id", batch.ID, "err", err)
 	}
@@ -311,6 +340,35 @@ func (r *SyncJobRunner) LatestBatch() (*storage.ShopSyncBatch, error) {
 	return r.refreshBatch(batch)
 }
 
+func (r *SyncJobRunner) CancelBatch(batchID uint) (*storage.ShopSyncBatch, error) {
+	if r == nil || r.jobs == nil {
+		return nil, fmt.Errorf("shop sync job runner is unavailable")
+	}
+	requestedAt := time.Now()
+	batch, err := r.jobs.RequestBatchCancel(batchID, requestedAt)
+	if err != nil || !isActiveBatchStatus(batch.Status) {
+		return batch, err
+	}
+	jobIDs, err := syncBatchJobIDs(batch)
+	if err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	if cancel := r.batchCancels[batchID]; cancel != nil {
+		cancel()
+	}
+	for _, jobID := range jobIDs {
+		if control := r.controls[jobID]; control != nil {
+			control.cancel()
+		}
+	}
+	r.mu.Unlock()
+	if err := r.jobs.Cancel(jobIDs, requestedAt); err != nil {
+		return nil, err
+	}
+	return r.refreshBatch(batch)
+}
+
 func (r *SyncJobRunner) trackBatch(batchID uint) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -324,7 +382,7 @@ func (r *SyncJobRunner) trackBatch(batchID uint) {
 			if r.log != nil {
 				r.log.Warn("refresh shop sync batch failed", "batch_id", batchID, "err", err)
 			}
-		} else if batch.Status != storage.ShopSyncBatchRunning {
+		} else if !isActiveBatchStatus(batch.Status) {
 			return
 		}
 		<-ticker.C
@@ -332,21 +390,19 @@ func (r *SyncJobRunner) trackBatch(batchID uint) {
 }
 
 func (r *SyncJobRunner) refreshBatch(batch *storage.ShopSyncBatch) (*storage.ShopSyncBatch, error) {
-	if batch.Status != storage.ShopSyncBatchRunning {
+	if !isActiveBatchStatus(batch.Status) {
 		return batch, nil
 	}
-	var jobIDs []uint
-	if batch.JobIDsJSON != "" {
-		if err := json.Unmarshal([]byte(batch.JobIDsJSON), &jobIDs); err != nil {
-			return nil, fmt.Errorf("decode shop sync batch %d jobs: %w", batch.ID, err)
-		}
+	jobIDs, err := syncBatchJobIDs(batch)
+	if err != nil {
+		return nil, err
 	}
 	jobs, err := r.jobs.FindByIDs(jobIDs)
 	if err != nil {
 		return nil, err
 	}
 
-	succeeded, failed, skipped := 0, batch.StartFailedCount, 0
+	succeeded, failed, skipped, cancelled := 0, batch.StartFailedCount, 0, 0
 	active := false
 	var finishedAt time.Time
 	for i := range jobs {
@@ -358,6 +414,8 @@ func (r *SyncJobRunner) refreshBatch(batch *storage.ShopSyncBatch) (*storage.Sho
 			succeeded++
 		case storage.ShopSyncJobSkipped:
 			skipped++
+		case storage.ShopSyncJobCancelled:
+			cancelled++
 		default:
 			failed++
 		}
@@ -374,6 +432,7 @@ func (r *SyncJobRunner) refreshBatch(batch *storage.ShopSyncBatch) (*storage.Sho
 	result.SucceededCount = succeeded
 	result.FailedCount = failed
 	result.SkippedCount = skipped
+	result.CancelledCount = cancelled
 	if active {
 		result.DurationMS = max(time.Since(batch.StartedAt).Milliseconds(), 0)
 		return &result, nil
@@ -381,13 +440,33 @@ func (r *SyncJobRunner) refreshBatch(batch *storage.ShopSyncBatch) (*storage.Sho
 	if finishedAt.IsZero() || missing > 0 {
 		finishedAt = time.Now()
 	}
-	result.Status = completedBatchStatus(result.TotalCount, succeeded, failed, skipped)
+	if batch.Status == storage.ShopSyncBatchCancelling {
+		result.Status = storage.ShopSyncBatchCancelled
+		result.CancelledAt = &finishedAt
+	} else {
+		result.Status = completedBatchStatus(result.TotalCount, succeeded, failed, skipped)
+	}
 	result.FinishedAt = &finishedAt
 	result.DurationMS = max(finishedAt.Sub(batch.StartedAt).Milliseconds(), 0)
 	if err := r.jobs.CompleteBatch(&result); err != nil {
 		return nil, err
 	}
 	return &result, nil
+}
+
+func syncBatchJobIDs(batch *storage.ShopSyncBatch) ([]uint, error) {
+	var jobIDs []uint
+	if batch.JobIDsJSON == "" {
+		return jobIDs, nil
+	}
+	if err := json.Unmarshal([]byte(batch.JobIDsJSON), &jobIDs); err != nil {
+		return nil, fmt.Errorf("decode shop sync batch %d jobs: %w", batch.ID, err)
+	}
+	return uniqueSyncJobIDs(jobIDs), nil
+}
+
+func isActiveBatchStatus(status storage.ShopSyncBatchStatus) bool {
+	return status == storage.ShopSyncBatchRunning || status == storage.ShopSyncBatchCancelling
 }
 
 func uniqueSyncJobIDs(ids []uint) []uint {
@@ -416,8 +495,14 @@ func completedBatchStatus(total, succeeded, failed, skipped int) storage.ShopSyn
 	return storage.ShopSyncBatchPartial
 }
 
-func (r *SyncJobRunner) run(jobID, targetID uint) {
-	r.slots <- struct{}{}
+func (r *SyncJobRunner) run(jobID, targetID uint, control *syncJobControl) {
+	select {
+	case r.slots <- struct{}{}:
+	case <-control.ctx.Done():
+		r.finishCancelledJob(jobID, time.Now())
+		r.cleanupJob(targetID, jobID, control)
+		return
+	}
 	defer func() { <-r.slots }()
 	startedAt := time.Now()
 	var requestStats *shopprovider.RequestStats
@@ -425,7 +510,7 @@ func (r *SyncJobRunner) run(jobID, targetID uint) {
 		if recovered := recover(); recovered != nil {
 			finishedAt := time.Now()
 			message := fmt.Sprintf("同步任务异常终止: %v", recovered)
-			metrics := requestStats.Snapshot()
+			metrics := requestStatsSnapshot(requestStats)
 			if err := r.jobs.CompleteWithMetrics(jobID, storage.ShopSyncJobFailed, 0, 0, map[string]int{}, message, startedAt, finishedAt, metrics.Count, metrics.DurationMS); err != nil && r.log != nil {
 				r.log.Error("record shop sync job panic failed", "job_id", jobID, "target_id", targetID, "err", err)
 			}
@@ -433,11 +518,14 @@ func (r *SyncJobRunner) run(jobID, targetID uint) {
 				r.log.Error("shop sync job panicked", "job_id", jobID, "target_id", targetID, "panic", recovered)
 			}
 		}
-		r.mu.Lock()
-		delete(r.active, targetID)
-		r.mu.Unlock()
+		r.cleanupJob(targetID, jobID, control)
 	}()
-	if err := r.jobs.MarkRunning(jobID, startedAt); err != nil {
+	if control.ctx.Err() != nil {
+		r.finishCancelledJob(jobID, startedAt)
+		return
+	}
+	marked, err := r.jobs.TryMarkRunning(jobID, startedAt)
+	if err != nil {
 		finishedAt := time.Now()
 		message := fmt.Sprintf("启动同步任务失败: %v", err)
 		if completeErr := r.jobs.Complete(jobID, storage.ShopSyncJobFailed, 0, 0, map[string]int{}, message, startedAt, finishedAt); completeErr != nil && r.log != nil {
@@ -448,10 +536,11 @@ func (r *SyncJobRunner) run(jobID, targetID uint) {
 		}
 		return
 	}
+	if !marked {
+		return
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), shopSyncJobTimeout)
-	defer cancel()
-	ctx, requestStats = shopprovider.WithRequestStats(ctx)
+	ctx, requestStats := shopprovider.WithRequestStats(control.ctx)
 	r.requestStats.Store(jobID, requestStats)
 	defer r.requestStats.Delete(jobID)
 	result, err := r.monitor.SyncByID(ctx, targetID)
@@ -459,13 +548,16 @@ func (r *SyncJobRunner) run(jobID, targetID uint) {
 	status := storage.ShopSyncJobSucceeded
 	errorMessage := ""
 	if err != nil {
-		if isSkippedSyncError(err) {
+		if errors.Is(control.ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
+			status = storage.ShopSyncJobCancelled
+			errorMessage = "同步已停止"
+		} else if isSkippedSyncError(err) {
 			status = storage.ShopSyncJobSkipped
 		} else {
 			status = storage.ShopSyncJobFailed
 		}
 		errorMessage = err.Error()
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		if errors.Is(control.ctx.Err(), context.DeadlineExceeded) {
 			status = storage.ShopSyncJobTimedOut
 			errorMessage = fmt.Sprintf("同步超过 %s", shopSyncJobTimeout)
 		}
@@ -482,4 +574,27 @@ func (r *SyncJobRunner) run(jobID, targetID uint) {
 	if err := r.jobs.CompleteWithMetrics(jobID, status, goodsCount, changedCount, events, errorMessage, startedAt, finishedAt, metrics.Count, metrics.DurationMS); err != nil && r.log != nil {
 		r.log.Error("complete shop sync job failed", "job_id", jobID, "target_id", targetID, "err", err)
 	}
+}
+
+func (r *SyncJobRunner) finishCancelledJob(jobID uint, finishedAt time.Time) {
+	if err := r.jobs.Cancel([]uint{jobID}, finishedAt); err != nil && r.log != nil {
+		r.log.Warn("record cancelled shop sync job failed", "job_id", jobID, "err", err)
+	}
+}
+
+func (r *SyncJobRunner) cleanupJob(targetID, jobID uint, control *syncJobControl) {
+	control.cancel()
+	r.mu.Lock()
+	if r.active[targetID] == jobID {
+		delete(r.active, targetID)
+	}
+	delete(r.controls, jobID)
+	r.mu.Unlock()
+}
+
+func requestStatsSnapshot(stats *shopprovider.RequestStats) shopprovider.RequestStatsSnapshot {
+	if stats == nil {
+		return shopprovider.RequestStatsSnapshot{}
+	}
+	return stats.Snapshot()
 }

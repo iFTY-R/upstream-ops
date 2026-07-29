@@ -232,7 +232,14 @@ func (c *Client) post(ctx context.Context, target shopprovider.Target, path stri
 		return nil, ldxpHTMLResponseError(path, resp)
 	}
 	if resp.IsError() {
-		return nil, fmt.Errorf("ldxp %s: http %d: %s", path, resp.StatusCode(), string(resp.Body()))
+		err := fmt.Errorf("ldxp %s: http %d: %s", path, resp.StatusCode(), string(resp.Body()))
+		// Rate limiting and gateway/origin failures are temporary upstream
+		// conditions. Marking them blocked activates the existing per-origin
+		// cooldown and prevents the rest of a batch from increasing pressure.
+		if resp.StatusCode() == http.StatusTooManyRequests || resp.StatusCode() >= http.StatusInternalServerError {
+			return nil, &shopprovider.UpstreamBlockedError{Err: err}
+		}
+		return nil, err
 	}
 	var wrapped envelope
 	if err := json.Unmarshal(resp.Body(), &wrapped); err != nil {

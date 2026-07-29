@@ -548,9 +548,9 @@ export interface ShopSyncAllResult {
   targets: ShopSyncAllTargetResult[]
 }
 
-export type ShopSyncJobStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "skipped"
+export type ShopSyncJobStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "skipped" | "cancelled"
 
-export type ShopSyncBatchStatus = "running" | "succeeded" | "partial" | "failed"
+export type ShopSyncBatchStatus = "running" | "cancelling" | "cancelled" | "succeeded" | "partial" | "failed"
 export type ShopSyncBatchSource = "manual" | "cron"
 
 export interface ShopSyncBatch {
@@ -564,8 +564,11 @@ export interface ShopSyncBatch {
   succeeded: number
   failed: number
   skipped: number
+  cancelled: number
   started_at: string
   finished_at?: string | null
+  cancel_requested_at?: string | null
+  cancelled_at?: string | null
   duration_ms: number
   created_at: string
   updated_at: string
@@ -812,6 +815,7 @@ export interface SystemSchedulerAutoGroupConfig {
 export interface SystemSchedulerConfig {
   balanceCron: string
   rateCron: string
+  shopEnabled: boolean
   shopCron: string
   priceAIFeedCron: string
   priceAIRiskCron: string

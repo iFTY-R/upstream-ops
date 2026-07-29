@@ -117,7 +117,7 @@ func (s *Scheduler) Start() error {
 			return err
 		}
 	}
-	if s.cfg.ShopCron != "" && s.shopMonitor != nil {
+	if s.cfg.ShopEnabled && s.cfg.ShopCron != "" && s.shopMonitor != nil {
 		if _, err := s.cron.AddFunc(s.cfg.ShopCron, s.runShops); err != nil {
 			return err
 		}
@@ -141,6 +141,7 @@ func (s *Scheduler) Start() error {
 	s.log.Info("scheduler started",
 		"balanceCron", s.cfg.BalanceCron,
 		"rateCron", s.cfg.RateCron,
+		"shopEnabled", s.cfg.ShopEnabled,
 		"shopCron", s.cfg.ShopCron,
 		"priceAIFeedCron", s.cfg.PriceAIFeedCron,
 		"priceAIRiskCron", s.cfg.PriceAIRiskCron,

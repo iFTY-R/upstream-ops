@@ -1230,13 +1230,36 @@ func (r *ShopSyncJobs) FindBatchItems(batchID uint) ([]ShopSyncBatchItem, error)
 
 func (r *ShopSyncJobs) CompleteBatch(batch *ShopSyncBatch) error {
 	return r.db.Model(&ShopSyncBatch{}).Where("id = ?", batch.ID).Updates(map[string]any{
-		"status":          batch.Status,
-		"succeeded_count": batch.SucceededCount,
-		"failed_count":    batch.FailedCount,
-		"skipped_count":   batch.SkippedCount,
-		"finished_at":     batch.FinishedAt,
-		"duration_ms":     batch.DurationMS,
+		"status":              batch.Status,
+		"succeeded_count":     batch.SucceededCount,
+		"failed_count":        batch.FailedCount,
+		"skipped_count":       batch.SkippedCount,
+		"cancelled_count":     batch.CancelledCount,
+		"cancel_requested_at": batch.CancelRequestedAt,
+		"cancelled_at":        batch.CancelledAt,
+		"finished_at":         batch.FinishedAt,
+		"duration_ms":         batch.DurationMS,
 	}).Error
+}
+
+func (r *ShopSyncJobs) RequestBatchCancel(id uint, requestedAt time.Time) (*ShopSyncBatch, error) {
+	var batch ShopSyncBatch
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&batch, id).Error; err != nil {
+			return err
+		}
+		if batch.Status != ShopSyncBatchRunning && batch.Status != ShopSyncBatchCancelling {
+			return nil
+		}
+		if batch.CancelRequestedAt == nil {
+			batch.CancelRequestedAt = &requestedAt
+		}
+		batch.Status = ShopSyncBatchCancelling
+		return tx.Model(&ShopSyncBatch{}).
+			Where("id = ? AND status IN ?", id, []ShopSyncBatchStatus{ShopSyncBatchRunning, ShopSyncBatchCancelling}).
+			Updates(map[string]any{"status": batch.Status, "cancel_requested_at": batch.CancelRequestedAt}).Error
+	})
+	return &batch, err
 }
 
 func (r *ShopSyncJobs) FindByTargetAndID(targetID, id uint) (*ShopSyncJob, error) {
@@ -1280,11 +1303,29 @@ func (r *ShopSyncJobs) FindActiveByTarget(targetID uint) (*ShopSyncJob, error) {
 	return &job, nil
 }
 
+func (r *ShopSyncJobs) TryMarkRunning(id uint, startedAt time.Time) (bool, error) {
+	result := r.db.Model(&ShopSyncJob{}).
+		Where("id = ? AND status = ?", id, ShopSyncJobQueued).
+		Updates(map[string]any{"status": ShopSyncJobRunning, "started_at": startedAt})
+	return result.RowsAffected > 0, result.Error
+}
+
 func (r *ShopSyncJobs) MarkRunning(id uint, startedAt time.Time) error {
-	return r.db.Model(&ShopSyncJob{}).Where("id = ?", id).Updates(map[string]any{
-		"status":     ShopSyncJobRunning,
-		"started_at": startedAt,
-	}).Error
+	_, err := r.TryMarkRunning(id, startedAt)
+	return err
+}
+
+func (r *ShopSyncJobs) Cancel(ids []uint, finishedAt time.Time) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return r.db.Model(&ShopSyncJob{}).
+		Where("id IN ? AND status IN ?", ids, []ShopSyncJobStatus{ShopSyncJobQueued, ShopSyncJobRunning}).
+		Updates(map[string]any{
+			"status":        ShopSyncJobCancelled,
+			"error_message": "同步已停止",
+			"finished_at":   finishedAt,
+		}).Error
 }
 
 func (r *ShopSyncJobs) Complete(id uint, status ShopSyncJobStatus, goodsCount, changedCount int, events map[string]int, errorMessage string, startedAt, finishedAt time.Time) error {
@@ -1305,18 +1346,48 @@ func (r *ShopSyncJobs) CompleteWithMetrics(id uint, status ShopSyncJobStatus, go
 	if encoded, err := json.Marshal(events); err == nil {
 		updates["events_json"] = string(encoded)
 	}
-	return r.db.Model(&ShopSyncJob{}).Where("id = ?", id).Updates(updates).Error
+	return r.db.Model(&ShopSyncJob{}).
+		Where("id = ? AND status IN ?", id, []ShopSyncJobStatus{ShopSyncJobQueued, ShopSyncJobRunning}).
+		Updates(updates).Error
 }
 
 func (r *ShopSyncJobs) MarkInterrupted() error {
 	now := time.Now()
-	return r.db.Model(&ShopSyncJob{}).
-		Where("status IN ?", []ShopSyncJobStatus{ShopSyncJobQueued, ShopSyncJobRunning}).
-		Updates(map[string]any{
-			"status":        ShopSyncJobFailed,
-			"error_message": "服务重启前同步未完成",
-			"finished_at":   now,
-		}).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var cancellingBatchIDs []uint
+		if err := tx.Model(&ShopSyncBatch{}).Where("status = ?", ShopSyncBatchCancelling).Pluck("id", &cancellingBatchIDs).Error; err != nil {
+			return err
+		}
+		if len(cancellingBatchIDs) > 0 {
+			var jobIDs []uint
+			if err := tx.Model(&ShopSyncBatchItem{}).
+				Where("batch_id IN ? AND job_id <> 0", cancellingBatchIDs).
+				Pluck("job_id", &jobIDs).Error; err != nil {
+				return err
+			}
+			if len(jobIDs) > 0 {
+				if err := tx.Model(&ShopSyncJob{}).
+					Where("id IN ? AND status IN ?", jobIDs, []ShopSyncJobStatus{ShopSyncJobQueued, ShopSyncJobRunning}).
+					Updates(map[string]any{"status": ShopSyncJobCancelled, "error_message": "同步已停止", "finished_at": now}).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Model(&ShopSyncBatch{}).Where("id IN ?", cancellingBatchIDs).Updates(map[string]any{
+				"status":       ShopSyncBatchCancelled,
+				"cancelled_at": now,
+				"finished_at":  now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Model(&ShopSyncJob{}).
+			Where("status IN ?", []ShopSyncJobStatus{ShopSyncJobQueued, ShopSyncJobRunning}).
+			Updates(map[string]any{
+				"status":        ShopSyncJobFailed,
+				"error_message": "服务重启前同步未完成",
+				"finished_at":   now,
+			}).Error
+	})
 }
 
 // DeleteFinishedBefore keeps queued and running jobs even if malformed data
@@ -1327,7 +1398,7 @@ func (r *ShopSyncJobs) DeleteFinishedBefore(cutoff time.Time) (int64, error) {
 		var expiredBatchIDs []uint
 		if err := tx.Model(&ShopSyncBatch{}).
 			Where("finished_at IS NOT NULL AND finished_at < ?", cutoff).
-			Where("status <> ?", ShopSyncBatchRunning).
+			Where("status NOT IN ?", []ShopSyncBatchStatus{ShopSyncBatchRunning, ShopSyncBatchCancelling}).
 			Pluck("id", &expiredBatchIDs).Error; err != nil {
 			return err
 		}
@@ -1338,7 +1409,7 @@ func (r *ShopSyncJobs) DeleteFinishedBefore(cutoff time.Time) (int64, error) {
 		}
 		if err := tx.
 			Where("finished_at IS NOT NULL AND finished_at < ?", cutoff).
-			Where("status <> ?", ShopSyncBatchRunning).
+			Where("status NOT IN ?", []ShopSyncBatchStatus{ShopSyncBatchRunning, ShopSyncBatchCancelling}).
 			Delete(&ShopSyncBatch{}).Error; err != nil {
 			return err
 		}

@@ -365,6 +365,9 @@ func syncAllUpstreamKey(target storage.ShopTarget) string {
 func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncResult, error) {
 	started := time.Now()
 	result := &SyncResult{Events: map[string]int{}}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	if target == nil {
 		return result, fmt.Errorf("shop target is nil")
 	}
@@ -374,6 +377,9 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 	defer s.activeSync.Delete(target.ID)
 	unlock := s.lockTarget(target.ID)
 	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	// The target may have been deleted while this caller waited for its lock.
 	currentTarget, err := s.targets.FindByID(target.ID)
 	if err != nil {
@@ -383,6 +389,9 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 	origin := s.originState(syncAllUpstreamKey(*target))
 	origin.mu.Lock()
 	defer origin.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	if time.Now().Before(origin.blockedUntil) {
 		return result, &shopOriginCooldownError{until: origin.blockedUntil, reason: origin.blockedReason}
 	}
@@ -399,6 +408,9 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 
 	info, infoRefreshedAt, err := s.shopInfoForSync(ctx, provider, starget, target)
 	if err != nil {
+		if isSyncCancellation(ctx, err) {
+			return result, context.Canceled
+		}
 		s.blockOrigin(origin, err)
 		s.recordFailure(target, started, err)
 		s.notifyFailure(ctx, target, err)
@@ -407,12 +419,18 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 
 	fetched, err := s.fetchGoods(ctx, provider, starget, target)
 	if err != nil {
+		if isSyncCancellation(ctx, err) {
+			return result, context.Canceled
+		}
 		s.blockOrigin(origin, err)
 		s.recordFailure(target, started, err)
 		s.notifyFailure(ctx, target, err)
 		return result, err
 	}
 	result.GoodsCount = len(fetched)
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 
 	changes, lowStockCount, err := s.diffAndSave(target, fetched, started)
 	if err != nil {
@@ -445,6 +463,10 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 		}
 	}
 	return result, nil
+}
+
+func isSyncCancellation(ctx context.Context, err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)
 }
 
 // DeleteTarget shares the per-target lock with sync and refresh operations.

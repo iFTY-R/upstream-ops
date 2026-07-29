@@ -801,6 +801,8 @@ type fakeShopSyncJobRunner struct {
 	batchItems []storage.ShopSyncBatchItem
 	reused     bool
 	started    []uint
+	cancelled  []uint
+	cancelErr  error
 }
 
 func (r *fakeShopSyncJobRunner) Start(targetID uint) (*storage.ShopSyncJob, bool, error) {
@@ -858,6 +860,24 @@ func (r *fakeShopSyncJobRunner) CreateBatchWithItems(total, queued, reused, star
 func (r *fakeShopSyncJobRunner) LatestBatch() (*storage.ShopSyncBatch, error) {
 	if r.batch == nil {
 		return nil, gorm.ErrRecordNotFound
+	}
+	return r.batch, nil
+}
+
+func (r *fakeShopSyncJobRunner) CancelBatch(batchID uint) (*storage.ShopSyncBatch, error) {
+	r.cancelled = append(r.cancelled, batchID)
+	if r.cancelErr != nil {
+		return nil, r.cancelErr
+	}
+	if r.batch == nil || r.batch.ID != batchID {
+		return nil, gorm.ErrRecordNotFound
+	}
+	if r.batch.Status == storage.ShopSyncBatchRunning || r.batch.Status == storage.ShopSyncBatchCancelling {
+		now := time.Now()
+		r.batch.Status = storage.ShopSyncBatchCancelled
+		r.batch.CancelRequestedAt = &now
+		r.batch.CancelledAt = &now
+		r.batch.FinishedAt = &now
 	}
 	return r.batch, nil
 }
@@ -1038,6 +1058,49 @@ func TestSyncAllShopTargetsQueuesBackgroundJobs(t *testing.T) {
 	}
 	if len(detailsResp.Data.Items) != 2 || detailsResp.Data.Items[0].TargetName != "shop-a" || detailsResp.Data.Items[1].TargetName != "shop-b" {
 		t.Fatalf("batch details = %#v", detailsResp.Data)
+	}
+}
+
+func TestCancelShopSyncBatchEndpointIsIdempotent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	targets := storage.NewShopTargets(openTestDB(t))
+	runner := &fakeShopSyncJobRunner{batch: &storage.ShopSyncBatch{
+		ID:        31,
+		Status:    storage.ShopSyncBatchRunning,
+		StartedAt: time.Now(),
+	}}
+	router := gin.New()
+	registerShopTargets(router.Group("/api"), &Deps{ShopTargets: targets, ShopSyncRunner: runner})
+
+	for attempt := 0; attempt < 2; attempt++ {
+		rec := performRequest(router, http.MethodPost, "/api/shop-targets/sync-batches/31/cancel")
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("attempt %d status = %d, body = %s", attempt+1, rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Data storage.ShopSyncBatch `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode attempt %d response: %v", attempt+1, err)
+		}
+		if body.Data.Status != storage.ShopSyncBatchCancelled {
+			t.Fatalf("attempt %d status = %q, want cancelled", attempt+1, body.Data.Status)
+		}
+	}
+	if len(runner.cancelled) != 2 {
+		t.Fatalf("cancel calls = %v, want two idempotent calls", runner.cancelled)
+	}
+}
+
+func TestCancelShopSyncBatchEndpointReturnsNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	targets := storage.NewShopTargets(openTestDB(t))
+	router := gin.New()
+	registerShopTargets(router.Group("/api"), &Deps{ShopTargets: targets, ShopSyncRunner: &fakeShopSyncJobRunner{}})
+
+	rec := performRequest(router, http.MethodPost, "/api/shop-targets/sync-batches/404/cancel")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
 

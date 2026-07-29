@@ -100,6 +100,7 @@ type Sub2APIEmbedConfig struct {
 type SchedulerConfig struct {
 	BalanceCron            string          `mapstructure:"balanceCron" yaml:"balanceCron" json:"balanceCron"`
 	RateCron               string          `mapstructure:"rateCron" yaml:"rateCron" json:"rateCron"`
+	ShopEnabled            bool            `mapstructure:"shopEnabled" yaml:"shopEnabled" json:"shopEnabled"`
 	ShopCron               string          `mapstructure:"shopCron" yaml:"shopCron" json:"shopCron"`
 	PriceAIFeedCron        string          `mapstructure:"priceAIFeedCron" yaml:"priceAIFeedCron" json:"priceAIFeedCron"`
 	PriceAIRiskCron        string          `mapstructure:"priceAIRiskCron" yaml:"priceAIRiskCron" json:"priceAIRiskCron"`
@@ -379,6 +380,7 @@ func load(path string, withEnv bool) (*Config, string, error) {
 		_ = v.BindEnv("database.name", "DATABASE_NAME")
 		_ = v.BindEnv("server.port", "SERVER_PORT")
 		_ = v.BindEnv("server.mode", "SERVER_MODE")
+		_ = v.BindEnv("scheduler.shopEnabled", "SCHEDULER_SHOP_ENABLED")
 		_ = v.BindEnv("scheduler.shopCron", "SCHEDULER_SHOPCRON")
 		_ = v.BindEnv("scheduler.priceAIFeedCron", "SCHEDULER_PRICEAI_FEED_CRON", "SCHEDULER_PRICEAIFEEDCRON")
 		_ = v.BindEnv("scheduler.priceAIRiskCron", "SCHEDULER_PRICEAI_RISK_CRON", "SCHEDULER_PRICEAIRISKCRON")
@@ -476,6 +478,7 @@ func setDefaults(v *viper.Viper) {
 	// CLAUDE.md 默认建议：余额 15 分钟，倍率 30 分钟。
 	v.SetDefault("scheduler.balanceCron", "37 */15 * * * *")
 	v.SetDefault("scheduler.rateCron", "13 */30 * * * *")
+	v.SetDefault("scheduler.shopEnabled", true)
 	v.SetDefault("scheduler.shopCron", "41 7,37 8-22 * * *")
 	v.SetDefault("scheduler.priceAIFeedCron", "23 */5 * * * *")
 	v.SetDefault("scheduler.priceAIRiskCron", "47 11 */6 * * *")

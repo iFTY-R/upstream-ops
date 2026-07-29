@@ -32,6 +32,9 @@ func TestLoadAppliesStaggeredShopCronDefault(t *testing.T) {
 	if cfg.Scheduler.ShopCron != "41 7,37 8-22 * * *" {
 		t.Fatalf("shop cron = %q", cfg.Scheduler.ShopCron)
 	}
+	if !cfg.Scheduler.ShopEnabled {
+		t.Fatal("shop scheduler should be enabled by default")
+	}
 	if cfg.Scheduler.PriceAIFeedCron != "23 */5 * * * *" {
 		t.Fatalf("priceai feed cron = %q", cfg.Scheduler.PriceAIFeedCron)
 	}

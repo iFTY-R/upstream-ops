@@ -60,6 +60,89 @@ func TestSyncBatchDurationCoversAllJobs(t *testing.T) {
 	}
 }
 
+func TestCancelBatchCancelsQueuedJobsAndConverges(t *testing.T) {
+	db := openShopMonitorTestDB(t)
+	jobs := storage.NewShopSyncJobs(db)
+	first := &storage.ShopSyncJob{TargetID: 1, Status: storage.ShopSyncJobQueued}
+	second := &storage.ShopSyncJob{TargetID: 2, Status: storage.ShopSyncJobQueued}
+	for _, job := range []*storage.ShopSyncJob{first, second} {
+		if err := jobs.Create(job); err != nil {
+			t.Fatalf("create job: %v", err)
+		}
+	}
+	runner := &SyncJobRunner{
+		jobs:         jobs,
+		controls:     make(map[uint]*syncJobControl),
+		batchCancels: make(map[uint]context.CancelFunc),
+	}
+	batch, err := runner.CreateBatch(2, 2, 0, 0, []uint{first.ID, second.ID}, time.Now())
+	if err != nil {
+		t.Fatalf("create batch: %v", err)
+	}
+	cancelled, err := runner.CancelBatch(batch.ID)
+	if err != nil {
+		t.Fatalf("cancel batch: %v", err)
+	}
+	if cancelled.Status != storage.ShopSyncBatchCancelled || cancelled.CancelledCount != 2 || cancelled.CancelledAt == nil {
+		t.Fatalf("cancelled batch = %#v", cancelled)
+	}
+	stored, err := jobs.FindByIDs([]uint{first.ID, second.ID})
+	if err != nil {
+		t.Fatalf("find jobs: %v", err)
+	}
+	for _, job := range stored {
+		if job.Status != storage.ShopSyncJobCancelled {
+			t.Fatalf("job %d status = %q", job.ID, job.Status)
+		}
+	}
+}
+
+func TestCancelBatchPreventsSlotBlockedJobFromCallingProvider(t *testing.T) {
+	platform := storage.ShopPlatform("cancel-slot-blocked-test")
+	provider := &countingShopProvider{}
+	shopprovider.Register(platform, func() shopprovider.Provider { return provider })
+
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	target := createRefreshTarget(t, targets, platform)
+	monitor := NewService(targets, storage.NewShopWatchRules(db), storage.NewShopGoods(db), nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	runner := NewSyncJobRunner(monitor, storage.NewShopSyncJobs(db), nil)
+	for i := 0; i < cap(runner.slots); i++ {
+		runner.slots <- struct{}{}
+	}
+	defer func() {
+		for i := 0; i < cap(runner.slots); i++ {
+			<-runner.slots
+		}
+	}()
+
+	job, reused, err := runner.Start(target.ID)
+	if err != nil || reused {
+		t.Fatalf("start job: reused=%v err=%v", reused, err)
+	}
+	batch, err := runner.CreateBatch(1, 1, 0, 0, []uint{job.ID}, time.Now())
+	if err != nil {
+		t.Fatalf("create batch: %v", err)
+	}
+	if _, err := runner.CancelBatch(batch.ID); err != nil {
+		t.Fatalf("cancel batch: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		stored, findErr := runner.Get(target.ID, job.ID)
+		if findErr == nil && stored.Status == storage.ShopSyncJobCancelled {
+			infoCalls, goodsCalls := provider.counts()
+			if infoCalls != 0 || goodsCalls != 0 {
+				t.Fatalf("provider calls after queued cancellation: info=%d goods=%d", infoCalls, goodsCalls)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("slot-blocked job did not become cancelled")
+}
+
 func TestScheduledSyncCreatesReadableCronBatch(t *testing.T) {
 	platform := storage.ShopPlatform("scheduled-sync-batch-test")
 	shopprovider.Register(platform, func() shopprovider.Provider {

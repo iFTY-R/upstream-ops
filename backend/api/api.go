@@ -60,6 +60,7 @@ type shopSyncJobRunner interface {
 	Latest(targetID uint) (*storage.ShopSyncJob, error)
 	CreateBatchWithItems(total, queued, reused, startFailed int, items []storage.ShopSyncBatchItem, startedAt time.Time) (*storage.ShopSyncBatch, error)
 	LatestBatch() (*storage.ShopSyncBatch, error)
+	CancelBatch(batchID uint) (*storage.ShopSyncBatch, error)
 	BatchDetails(batchID uint) (*shopmonitor.SyncBatchDetails, error)
 }
 

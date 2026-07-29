@@ -488,6 +488,7 @@ const (
 	ShopSyncJobFailed    ShopSyncJobStatus = "failed"
 	ShopSyncJobTimedOut  ShopSyncJobStatus = "timed_out"
 	ShopSyncJobSkipped   ShopSyncJobStatus = "skipped"
+	ShopSyncJobCancelled ShopSyncJobStatus = "cancelled"
 )
 
 // ShopSyncJob keeps manual shop synchronization independent from the request
@@ -515,10 +516,12 @@ type ShopSyncBatchStatus string
 type ShopSyncBatchSource string
 
 const (
-	ShopSyncBatchRunning   ShopSyncBatchStatus = "running"
-	ShopSyncBatchSucceeded ShopSyncBatchStatus = "succeeded"
-	ShopSyncBatchPartial   ShopSyncBatchStatus = "partial"
-	ShopSyncBatchFailed    ShopSyncBatchStatus = "failed"
+	ShopSyncBatchRunning    ShopSyncBatchStatus = "running"
+	ShopSyncBatchSucceeded  ShopSyncBatchStatus = "succeeded"
+	ShopSyncBatchPartial    ShopSyncBatchStatus = "partial"
+	ShopSyncBatchFailed     ShopSyncBatchStatus = "failed"
+	ShopSyncBatchCancelling ShopSyncBatchStatus = "cancelling"
+	ShopSyncBatchCancelled  ShopSyncBatchStatus = "cancelled"
 
 	ShopSyncBatchSourceManual ShopSyncBatchSource = "manual"
 	ShopSyncBatchSourceCron   ShopSyncBatchSource = "cron"
@@ -527,22 +530,25 @@ const (
 // ShopSyncBatch records one "sync all" operation. Job IDs are stored
 // separately from the aggregate counters so reused jobs can belong to a new batch.
 type ShopSyncBatch struct {
-	ID               uint                `gorm:"primaryKey" json:"id"`
-	Status           ShopSyncBatchStatus `gorm:"size:32;not null;index" json:"status"`
-	Source           ShopSyncBatchSource `gorm:"size:16;not null;default:manual;index" json:"source"`
-	TotalCount       int                 `json:"total"`
-	QueuedCount      int                 `json:"queued"`
-	ReusedCount      int                 `json:"reused"`
-	StartFailedCount int                 `json:"start_failed"`
-	SucceededCount   int                 `json:"succeeded"`
-	FailedCount      int                 `json:"failed"`
-	SkippedCount     int                 `json:"skipped"`
-	JobIDsJSON       string              `gorm:"type:text" json:"-"`
-	StartedAt        time.Time           `gorm:"not null;index" json:"started_at"`
-	FinishedAt       *time.Time          `json:"finished_at,omitempty"`
-	DurationMS       int64               `json:"duration_ms"`
-	CreatedAt        time.Time           `json:"created_at"`
-	UpdatedAt        time.Time           `json:"updated_at"`
+	ID                uint                `gorm:"primaryKey" json:"id"`
+	Status            ShopSyncBatchStatus `gorm:"size:32;not null;index" json:"status"`
+	Source            ShopSyncBatchSource `gorm:"size:16;not null;default:manual;index" json:"source"`
+	TotalCount        int                 `json:"total"`
+	QueuedCount       int                 `json:"queued"`
+	ReusedCount       int                 `json:"reused"`
+	StartFailedCount  int                 `json:"start_failed"`
+	SucceededCount    int                 `json:"succeeded"`
+	FailedCount       int                 `json:"failed"`
+	SkippedCount      int                 `json:"skipped"`
+	CancelledCount    int                 `json:"cancelled"`
+	JobIDsJSON        string              `gorm:"type:text" json:"-"`
+	StartedAt         time.Time           `gorm:"not null;index" json:"started_at"`
+	CancelRequestedAt *time.Time          `json:"cancel_requested_at,omitempty"`
+	CancelledAt       *time.Time          `json:"cancelled_at,omitempty"`
+	FinishedAt        *time.Time          `json:"finished_at,omitempty"`
+	DurationMS        int64               `json:"duration_ms"`
+	CreatedAt         time.Time           `json:"created_at"`
+	UpdatedAt         time.Time           `json:"updated_at"`
 }
 
 func (ShopSyncBatch) TableName() string { return "shop_sync_batches" }

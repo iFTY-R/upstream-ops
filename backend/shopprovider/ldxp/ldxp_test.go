@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -100,6 +101,39 @@ func TestClientRecordsActualHTTPRequests(t *testing.T) {
 	snapshot := stats.Snapshot()
 	if snapshot.Count != 1 {
 		t.Fatalf("request count = %d, want 1", snapshot.Count)
+	}
+}
+
+func TestClientClassifiesTemporaryHTTPFailuresAsUpstreamBlocked(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, 522} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte("temporary upstream failure"))
+			}))
+			defer server.Close()
+
+			_, err := New().Goods(context.Background(), shopprovider.Target{BaseURL: server.URL, Token: "TOKEN"}, shopprovider.GoodsRequest{GoodsType: "card"})
+			if err == nil || !shopprovider.IsUpstreamBlocked(err) {
+				t.Fatalf("status %d error = %v, want upstream blocked", status, err)
+			}
+			if !strings.Contains(err.Error(), fmt.Sprintf("http %d", status)) {
+				t.Fatalf("status %d error lost HTTP detail: %v", status, err)
+			}
+		})
+	}
+}
+
+func TestClientLeavesNonTemporaryHTTPFailureUnblocked(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("bad request"))
+	}))
+	defer server.Close()
+
+	_, err := New().Goods(context.Background(), shopprovider.Target{BaseURL: server.URL, Token: "TOKEN"}, shopprovider.GoodsRequest{GoodsType: "card"})
+	if err == nil || shopprovider.IsUpstreamBlocked(err) {
+		t.Fatalf("error = %v, want ordinary HTTP failure", err)
 	}
 }
 

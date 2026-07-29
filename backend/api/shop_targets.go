@@ -33,6 +33,7 @@ func registerShopTargets(g *gin.RouterGroup, d *Deps) {
 	gp.POST("/sync-all", func(c *gin.Context) { syncAllShopTargets(c, d) })
 	gp.POST("/sync-jobs/status", func(c *gin.Context) { getShopSyncJobsStatus(c, d) })
 	gp.GET("/sync-batches/latest", func(c *gin.Context) { getLatestShopSyncBatch(c, d) })
+	gp.POST("/sync-batches/:batch_id/cancel", func(c *gin.Context) { cancelShopSyncBatch(c, d) })
 	gp.GET("/sync-batches/:batch_id", func(c *gin.Context) { getShopSyncBatchDetails(c, d) })
 	gp.GET("/monitor-logs/latest", func(c *gin.Context) { getLatestShopMonitorLog(c, d) })
 	gp.POST("/reorder", func(c *gin.Context) { reorderShopTargets(c, d) })
@@ -587,6 +588,26 @@ func getLatestShopSyncBatch(c *gin.Context, d *Deps) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": batch})
+}
+
+func cancelShopSyncBatch(c *gin.Context, d *Deps) {
+	if !shopSyncRunnerReady(c, d) {
+		return
+	}
+	batchID, ok := parseUintParam(c, "batch_id")
+	if !ok {
+		return
+	}
+	batch, err := d.ShopSyncRunner.CancelBatch(batchID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		fail(c, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"data": batch})
 }
 
 func getShopSyncBatchDetails(c *gin.Context, d *Deps) {

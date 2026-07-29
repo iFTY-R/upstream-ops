@@ -92,6 +92,7 @@ function normalizeSystemConfig(config: SystemConfig): SystemConfig {
     },
     scheduler: {
       ...config.scheduler,
+      shopEnabled: config.scheduler.shopEnabled ?? true,
       shopCron: config.scheduler.shopCron ?? "",
       priceAIFeedCron: config.scheduler.priceAIFeedCron ?? "23 */5 * * * *",
       priceAIRiskCron: config.scheduler.priceAIRiskCron ?? "47 11 */6 * * *",
@@ -807,11 +808,35 @@ export default function SettingsPage() {
                 </Field>
                 <Field
                   label="店铺监控 Cron"
-                  description="控制店铺商品快照同步的执行周期，留空可暂停定时店铺监控。"
+                  description="控制店铺商品快照同步的执行周期。关闭定时同步不会影响手动同步，Cron 配置会保留。"
                 >
-                  <Input
-                    value={form.scheduler.shopCron ?? ""}
-                    onChange={(e) =>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-4 rounded-md border border-border px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium">启用定时店铺同步</div>
+                        <div className="text-xs text-muted-foreground">关闭后不再创建新的定时批次。</div>
+                      </div>
+                      <Switch
+                        checked={form.scheduler.shopEnabled}
+                        onCheckedChange={(checked) =>
+                          setForm((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  scheduler: {
+                                    ...prev.scheduler,
+                                    shopEnabled: checked,
+                                  },
+                                }
+                              : prev,
+                          )
+                        }
+                        aria-label="启用定时店铺同步"
+                      />
+                    </div>
+                    <Input
+                      value={form.scheduler.shopCron ?? ""}
+                      onChange={(e) =>
                       setForm((prev) =>
                         prev
                           ? {
@@ -823,8 +848,9 @@ export default function SettingsPage() {
                             }
                           : prev,
                       )
-                    }
-                  />
+                      }
+                    />
+                  </div>
                 </Field>
                 <Field
                   label="并发数"

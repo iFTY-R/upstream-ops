@@ -249,6 +249,50 @@ func TestShopSyncJobsLifecycle(t *testing.T) {
 	}
 }
 
+func TestShopSyncJobsCancellationWinsOnlyWhileActive(t *testing.T) {
+	db := openTestDB(t)
+	jobs := NewShopSyncJobs(db)
+	job := &ShopSyncJob{TargetID: 12, Status: ShopSyncJobQueued}
+	if err := jobs.Create(job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	batch := &ShopSyncBatch{
+		Status:     ShopSyncBatchRunning,
+		Source:     ShopSyncBatchSourceManual,
+		TotalCount: 1,
+		JobIDsJSON: fmt.Sprintf("[%d]", job.ID),
+		StartedAt:  time.Now(),
+	}
+	if err := jobs.CreateBatchWithItems(batch, []ShopSyncBatchItem{{TargetID: job.TargetID, TargetName: "cancel shop", JobID: job.ID}}); err != nil {
+		t.Fatalf("create batch: %v", err)
+	}
+
+	requestedAt := time.Now()
+	cancelling, err := jobs.RequestBatchCancel(batch.ID, requestedAt)
+	if err != nil {
+		t.Fatalf("request batch cancel: %v", err)
+	}
+	if cancelling.Status != ShopSyncBatchCancelling || cancelling.CancelRequestedAt == nil {
+		t.Fatalf("cancelling batch = %#v", cancelling)
+	}
+	if err := jobs.Cancel([]uint{job.ID}, requestedAt); err != nil {
+		t.Fatalf("cancel job: %v", err)
+	}
+	if marked, err := jobs.TryMarkRunning(job.ID, requestedAt); err != nil || marked {
+		t.Fatalf("mark cancelled job running = %v, err = %v", marked, err)
+	}
+	if err := jobs.Complete(job.ID, ShopSyncJobSucceeded, 1, 0, nil, "", requestedAt, requestedAt.Add(time.Second)); err != nil {
+		t.Fatalf("complete cancelled job: %v", err)
+	}
+	stored, err := jobs.FindByTargetAndID(job.TargetID, job.ID)
+	if err != nil {
+		t.Fatalf("find cancelled job: %v", err)
+	}
+	if stored.Status != ShopSyncJobCancelled {
+		t.Fatalf("cancelled job status = %q", stored.Status)
+	}
+}
+
 func TestSavedSearchConditionsMigrationAndUpsert(t *testing.T) {
 	db := openTestDB(t)
 	if !db.Migrator().HasTable(&SavedSearchCondition{}) {

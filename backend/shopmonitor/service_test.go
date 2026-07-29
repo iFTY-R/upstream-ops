@@ -124,6 +124,55 @@ func TestRefreshGoodsByKeyUpdatesOnlyOneSnapshot(t *testing.T) {
 	}
 }
 
+func TestSyncCancellationDoesNotRecordFailureSideEffects(t *testing.T) {
+	platform := storage.ShopPlatform("sync-cancellation-side-effects-test")
+	provider := &blockingShopProvider{started: make(chan struct{}), release: make(chan struct{})}
+	shopprovider.Register(platform, func() shopprovider.Provider { return provider })
+
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	target := createRefreshTarget(t, targets, platform)
+	target.LastError = "previous failure"
+	if err := db.Model(&storage.ShopTarget{}).Where("id = ?", target.ID).Update("last_error", target.LastError).Error; err != nil {
+		t.Fatalf("seed last error: %v", err)
+	}
+	service := NewService(targets, storage.NewShopWatchRules(db), goods, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.Sync(ctx, target)
+		done <- err
+	}()
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider request did not start")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("sync error = %v, want context canceled", err)
+	}
+
+	stored, err := targets.FindByID(target.ID)
+	if err != nil {
+		t.Fatalf("find target: %v", err)
+	}
+	if stored.LastError != "previous failure" {
+		t.Fatalf("last_error = %q, want previous value preserved", stored.LastError)
+	}
+	var monitorLogs, changeLogs int64
+	if err := db.Model(&storage.ShopMonitorLog{}).Where("target_id = ?", target.ID).Count(&monitorLogs).Error; err != nil {
+		t.Fatalf("count monitor logs: %v", err)
+	}
+	if err := db.Model(&storage.ShopGoodsChangeLog{}).Where("target_id = ?", target.ID).Count(&changeLogs).Error; err != nil {
+		t.Fatalf("count change logs: %v", err)
+	}
+	if monitorLogs != 0 || changeLogs != 0 {
+		t.Fatalf("cancellation wrote failure side effects: monitor_logs=%d change_logs=%d", monitorLogs, changeLogs)
+	}
+}
+
 func TestRefreshGoodsByKeyMarksMissingSnapshotRemoved(t *testing.T) {
 	platform := storage.ShopPlatform("refresh-missing-test")
 	shopprovider.Register(platform, func() shopprovider.Provider { return fakeShopProvider{} })
