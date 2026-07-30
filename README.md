@@ -345,6 +345,24 @@ AUTH_TOKEN_SECRET=
 
 ## Local Development
 
+Use the project scripts to start, stop, and restart both the backend and frontend:
+
+```powershell
+node .\scripts\dev-start.mjs
+```
+
+```powershell
+node .\scripts\dev-stop.mjs
+```
+
+```powershell
+node .\scripts\dev-restart.mjs
+```
+
+Defaults: `data/upstream-ops.db` for SQLite, `http://127.0.0.1:8418` for the backend, `http://127.0.0.1:3010` for the frontend, and `tmp/dev/` for PID state and logs.
+
+See `scripts/README.md` for options.
+
 Backend:
 
 ```bash

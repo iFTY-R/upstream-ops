@@ -796,13 +796,14 @@ func TestListAllShopGoodsSupportsNameGrouping(t *testing.T) {
 }
 
 type fakeShopSyncJobRunner struct {
-	job        *storage.ShopSyncJob
-	batch      *storage.ShopSyncBatch
-	batchItems []storage.ShopSyncBatchItem
-	reused     bool
-	started    []uint
-	cancelled  []uint
-	cancelErr  error
+	job           *storage.ShopSyncJob
+	batch         *storage.ShopSyncBatch
+	batchItems    []storage.ShopSyncBatchItem
+	reused        bool
+	started       []uint
+	cancelled     []uint
+	cancelledJobs []uint
+	cancelErr     error
 }
 
 func (r *fakeShopSyncJobRunner) Start(targetID uint) (*storage.ShopSyncJob, bool, error) {
@@ -818,6 +819,23 @@ func (r *fakeShopSyncJobRunner) Get(targetID, jobID uint) (*storage.ShopSyncJob,
 		return r.job, nil
 	}
 	return nil, gorm.ErrRecordNotFound
+}
+
+func (r *fakeShopSyncJobRunner) Cancel(targetID, jobID uint) (*storage.ShopSyncJob, error) {
+	r.cancelledJobs = append(r.cancelledJobs, jobID)
+	if r.cancelErr != nil {
+		return nil, r.cancelErr
+	}
+	if r.job == nil || r.job.TargetID != targetID || r.job.ID != jobID {
+		return nil, gorm.ErrRecordNotFound
+	}
+	now := time.Now()
+	next := *r.job
+	next.Status = storage.ShopSyncJobCancelled
+	next.ErrorMessage = "同步已停止"
+	next.FinishedAt = &now
+	r.job = &next
+	return &next, nil
 }
 
 func (r *fakeShopSyncJobRunner) Latest(targetID uint) (*storage.ShopSyncJob, error) {
@@ -948,6 +966,31 @@ func TestShopSyncJobEndpointsStartAndReadJob(t *testing.T) {
 	router.ServeHTTP(statusRec, statusReq)
 	if statusRec.Code != http.StatusOK {
 		t.Fatalf("batch status = %d, body = %s", statusRec.Code, statusRec.Body.String())
+	}
+}
+
+func TestCancelShopSyncJobEndpointStopsJob(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	targets := storage.NewShopTargets(openTestDB(t))
+	runner := &fakeShopSyncJobRunner{job: &storage.ShopSyncJob{ID: 12, TargetID: 9, Status: storage.ShopSyncJobRunning}}
+	router := gin.New()
+	registerShopTargets(router.Group("/api"), &Deps{ShopTargets: targets, ShopSyncRunner: runner})
+
+	rec := performRequest(router, http.MethodPost, "/api/shop-targets/9/sync-jobs/12/cancel")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data storage.ShopSyncJob `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Data.Status != storage.ShopSyncJobCancelled || body.Data.ErrorMessage != "同步已停止" {
+		t.Fatalf("cancelled job = %#v", body.Data)
+	}
+	if len(runner.cancelledJobs) != 1 || runner.cancelledJobs[0] != 12 {
+		t.Fatalf("cancel calls = %v", runner.cancelledJobs)
 	}
 }
 

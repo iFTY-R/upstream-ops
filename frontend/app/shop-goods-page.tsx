@@ -284,6 +284,19 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
       for (const job of updates) {
         nextJobs[job.target_id] = job
       }
+      const returnedJobIDs = new Set(updates.map((job) => job.id))
+      const missingJobs: ShopSyncJob[] = []
+      for (const job of activeSyncJobs) {
+        if (returnedJobIDs.has(job.id)) continue
+        const missing = {
+          ...job,
+          status: "failed" as const,
+          error_message: "同步任务状态不存在，已停止跟踪",
+          finished_at: new Date().toISOString(),
+        }
+        nextJobs[missing.target_id] = missing
+        missingJobs.push(missing)
+      }
       setSyncJobs(nextJobs)
 
       const bulkIDs = bulkSyncJobIDsRef.current
@@ -310,7 +323,7 @@ export default function ShopGoodsPage({ publicMode = false }: { publicMode?: boo
         return
       }
 
-      for (const job of updates) {
+      for (const job of [...updates, ...missingJobs]) {
         if (isActiveSyncJob(job)) continue
         if (job.status === "succeeded") {
           toast.success(`同步完成：${job.goods_count} 个商品，${job.changed_count} 个变化`)

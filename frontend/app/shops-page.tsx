@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Search,
   ShoppingCart,
+  Square,
   Star,
   Store,
   Trash2,
@@ -27,11 +28,12 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { useConfirm } from "@/components/ui/confirm-dialog"
 import { GlobalShopWatchRulesDrawer, type GlobalShopWatchSeed } from "@/components/monitor/shop-watch-rules-drawer"
 import { SearchHistoryInput } from "@/components/search-history-input"
 import { apiFetch } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
-import { useGlobalShopWatchRules, useSavedSearchConditions, useShopChangeLogs, useShopGoods, useShopMonitorLogs, useShopSnapshotCategories, useShopTargets } from "@/lib/queries"
+import { useGlobalShopWatchRules, useLatestShopSyncBatch, useSavedSearchConditions, useShopChangeLogs, useShopGoods, useShopMonitorLogs, useShopSnapshotCategories, useShopTargets } from "@/lib/queries"
 import { useTriggerRefresh } from "@/lib/refresh-context"
 import { money, relativeTime } from "@/lib/format"
 import {
@@ -57,6 +59,7 @@ import type {
   ShopScopeMode,
   ShopSnapshotCategory,
   ShopSyncAllResult,
+  ShopSyncBatch,
   ShopSyncJob,
   ShopSyncJobStartResult,
   ShopTarget,
@@ -127,6 +130,10 @@ type GoodsStatusFilter = ShopGoodsStatusFilter
 
 function isActiveSyncJob(job: ShopSyncJob) {
   return job.status === "queued" || job.status === "running"
+}
+
+function isActiveSyncBatch(batch: ShopSyncBatch | null | undefined) {
+  return batch?.status === "running" || batch?.status === "cancelling"
 }
 
 const goodsStatusLabels: Record<GoodsStatusFilter, string> = {
@@ -216,7 +223,9 @@ function normalizeListPositionInput(value: string, max: number) {
 
 export default function ShopsPage() {
   const auth = useAuth()
+  const { confirm, dialog: confirmDialog } = useConfirm()
   const targets = useShopTargets()
+  const latestSyncBatch = useLatestShopSyncBatch()
   const savedSearchConditions = useSavedSearchConditions(["keyword", "exclude_keyword"])
   const refresh = useTriggerRefresh()
   const [initialGoodsPreferences] = useState(readShopsGoodsPreferences)
@@ -295,6 +304,7 @@ export default function ShopsPage() {
     [syncJobs],
   )
   const activeSyncJobKey = activeSyncJobs.map((job) => `${job.id}:${job.status}`).join(",")
+  const latestSyncBatchStatus = latestSyncBatch.data?.status
   const canManageSearchConditions = auth.status === "authenticated" && !auth.authDisabled
   const savedKeywordConditions = useMemo(
     () => savedSearchConditionsForField(savedSearchConditions.data, "keyword"),
@@ -367,6 +377,12 @@ export default function ShopsPage() {
   }, [selectedID, syncJobs])
 
   useEffect(() => {
+    if (latestSyncBatchStatus !== "running" && latestSyncBatchStatus !== "cancelling") return
+    const timer = window.setInterval(() => latestSyncBatch.refetch(), 2000)
+    return () => window.clearInterval(timer)
+  }, [latestSyncBatchStatus])
+
+  useEffect(() => {
     if (activeSyncJobs.length === 0) return
     let cancelled = false
     const poll = async () => {
@@ -384,6 +400,19 @@ export default function ShopsPage() {
       for (const job of updates) {
         nextJobs[job.target_id] = job
       }
+      const returnedJobIDs = new Set(updates.map((job) => job.id))
+      const missingJobs: ShopSyncJob[] = []
+      for (const job of activeSyncJobs) {
+        if (returnedJobIDs.has(job.id)) continue
+        const missing = {
+          ...job,
+          status: "failed" as const,
+          error_message: "同步任务状态不存在，已停止跟踪",
+          finished_at: new Date().toISOString(),
+        }
+        nextJobs[missing.target_id] = missing
+        missingJobs.push(missing)
+      }
       setSyncJobs(nextJobs)
 
       const bulkIDs = bulkSyncJobIDsRef.current
@@ -393,10 +422,13 @@ export default function ShopsPage() {
         if (bulkFinished) {
           const succeeded = bulkJobs.filter((job) => job.status === "succeeded").length
           const skipped = bulkJobs.filter((job) => job.status === "skipped").length
-          const failed = bulkJobs.length - succeeded - skipped
+          const cancelledCount = bulkJobs.filter((job) => job.status === "cancelled").length
+          const failed = bulkJobs.length - succeeded - skipped - cancelledCount
           bulkSyncJobIDsRef.current = null
           refreshShopData()
-          if (failed > 0 || skipped > 0) {
+          if (cancelledCount > 0) {
+            toast.message(`批量同步已停止：成功 ${succeeded} 家，停止 ${cancelledCount} 家，失败 ${failed} 家，跳过 ${skipped} 家`)
+          } else if (failed > 0 || skipped > 0) {
             toast.warning(`批量同步结束：成功 ${succeeded} 家，失败 ${failed} 家，跳过 ${skipped} 家`)
           } else {
             toast.success(`批量同步完成：${succeeded} 家店铺已更新`)
@@ -405,14 +437,19 @@ export default function ShopsPage() {
         return
       }
 
-      for (const job of updates) {
+      for (const job of [...updates, ...missingJobs]) {
         if (job.status === "succeeded") {
           toast.success(`同步完成：${job.goods_count} 个商品，${job.changed_count} 个变化`)
           refreshShopData()
         } else if (job.status === "failed" || job.status === "timed_out") {
           toast.error(job.error_message || "同步失败")
+          refreshShopData()
         } else if (job.status === "skipped") {
           toast.message(job.error_message || "已有同步任务，已跳过")
+          refreshShopData()
+        } else if (job.status === "cancelled") {
+          toast.message(job.error_message || "同步已停止")
+          refreshShopData()
         }
       }
     }
@@ -667,10 +704,33 @@ export default function ShopsPage() {
     }
   }
 
+  async function cancelTargetSync(targetID: number) {
+    const job = syncJobs[targetID]
+    if (!job || !isActiveSyncJob(job)) return
+    const accepted = await confirm({
+      title: "停止店铺同步？",
+      description: "将取消正在进行的网络请求，已完成的商品数据会保留。",
+      confirmLabel: "停止同步",
+      destructive: true,
+    })
+    if (!accepted) return
+    setBusy(`cancel-sync:${targetID}`)
+    try {
+      const cancelled = await apiFetch<ShopSyncJob>(`/shop-targets/${targetID}/sync-jobs/${job.id}/cancel`, { method: "POST" })
+      setSyncJobs((current) => ({ ...current, [targetID]: cancelled }))
+      toast.message("店铺同步已停止")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "停止店铺同步失败")
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function syncAllTargets() {
     setBusy("sync-all")
     try {
       const result = await apiFetch<ShopSyncAllResult>("/shop-targets/sync-all", { method: "POST" })
+      latestSyncBatch.setData(result.batch)
       const jobs = result.targets.flatMap((item) => item.job ? [item.job] : [])
       if (jobs.length > 0) {
         setSyncJobs((current) => {
@@ -679,6 +739,8 @@ export default function ShopsPage() {
           return next
         })
         bulkSyncJobIDsRef.current = new Set(jobs.map((job) => job.id))
+      } else {
+        bulkSyncJobIDsRef.current = null
       }
       if (result.failed > 0) {
         toast.warning(`已加入同步队列：新建 ${result.queued} 家，复用 ${result.reused} 家，入队失败 ${result.failed} 家`)
@@ -687,6 +749,28 @@ export default function ShopsPage() {
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "同步全部失败")
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function cancelSyncBatch() {
+    const batch = latestSyncBatch.data
+    if (!batch || !isActiveSyncBatch(batch)) return
+    const accepted = await confirm({
+      title: "停止本次同步？",
+      description: "将取消正在进行的网络请求，并停止尚未开始的店铺任务。已完成的同步结果会保留。",
+      confirmLabel: "停止同步",
+      destructive: true,
+    })
+    if (!accepted) return
+    setBusy("cancel-sync-batch")
+    try {
+      const cancelledBatch = await apiFetch<ShopSyncBatch>(`/shop-targets/sync-batches/${batch.id}/cancel`, { method: "POST" })
+      latestSyncBatch.setData(cancelledBatch)
+      toast.message(cancelledBatch.status === "cancelled" ? "本次同步已停止" : "正在停止本次同步")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "停止同步失败")
     } finally {
       setBusy(null)
     }
@@ -818,6 +902,17 @@ export default function ShopsPage() {
               {busy === "sync-all" ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
               {"同步全部"}
             </Button>
+            {isActiveSyncBatch(latestSyncBatch.data) ? (
+              <Button
+                variant="outline"
+                onClick={cancelSyncBatch}
+                disabled={busy === "cancel-sync-batch" || latestSyncBatch.data?.status === "cancelling"}
+                className="gap-2 border-danger/30 text-danger hover:text-danger"
+              >
+                {busy === "cancel-sync-batch" ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-4" />}
+                {latestSyncBatch.data?.status === "cancelling" ? "停止中" : "停止同步"}
+              </Button>
+            ) : null}
             <Button onClick={openCreate} className="gap-2">
               <Plus className="size-4" />
               {"添加店铺"}
@@ -869,6 +964,7 @@ export default function ShopsPage() {
               onEdit={() => openEdit(selected)}
               onTest={() => testTarget(selected)}
               onSync={() => syncTarget(selected)}
+              onCancelSync={() => cancelTargetSync(selected.id)}
               onDelete={() => deleteTarget(selected)}
             />
           ) : null}
@@ -914,6 +1010,7 @@ export default function ShopsPage() {
                   onEdit={() => openEdit(target)}
                   onTest={() => testTarget(target)}
                   onSync={() => syncTarget(target)}
+                  onCancelSync={() => cancelTargetSync(target.id)}
                   onDelete={() => deleteTarget(target)}
                 />
               ))}
@@ -1118,6 +1215,7 @@ export default function ShopsPage() {
         legacyRuleCount={legacyWatchRuleCount}
         onRulesChanged={handleGlobalWatchRulesChanged}
       />
+      {confirmDialog}
     </section>
   )
 }
@@ -1144,6 +1242,7 @@ function ShopCard(props: {
   onEdit: () => void
   onTest: () => void
   onSync: () => void
+  onCancelSync: () => void
   onDelete: () => void
 }) {
   const { target, active, busy } = props
@@ -1189,9 +1288,22 @@ function ShopCard(props: {
           <Button variant="outline" size="icon" className="size-7" onClick={props.onMoveDown} disabled={!props.canMoveDown || busy === "reorder-shops"}>
             <ArrowDown className="size-3.5" />
           </Button>
-          <Button variant="outline" size="icon" className="size-7" onClick={props.onSync} disabled={busy === `sync:${target.id}` || syncing}>
-            {busy === `sync:${target.id}` || syncing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-          </Button>
+          {syncing ? (
+            <Button
+              variant="outline"
+              size="icon"
+              className="size-7 border-danger/30 text-danger hover:text-danger"
+              onClick={props.onCancelSync}
+              disabled={busy === `cancel-sync:${target.id}`}
+              title="停止同步"
+            >
+              {busy === `cancel-sync:${target.id}` ? <Loader2 className="size-3.5 animate-spin" /> : <Square className="size-3.5" />}
+            </Button>
+          ) : (
+            <Button variant="outline" size="icon" className="size-7" onClick={props.onSync} disabled={busy === `sync:${target.id}`}>
+              {busy === `sync:${target.id}` ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+            </Button>
+          )}
           <Button variant="outline" size="icon" className="size-7" onClick={props.onEdit}><Pencil className="size-3.5" /></Button>
           <Button variant="outline" size="icon" className="size-7" onClick={props.onDelete} disabled={busy === `delete:${target.id}`}><Trash2 className="size-3.5" /></Button>
         </div>

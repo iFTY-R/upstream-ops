@@ -48,6 +48,7 @@ func registerShopTargets(g *gin.RouterGroup, d *Deps) {
 	gp.DELETE("/:id/watch-rules/:rule_id", func(c *gin.Context) { deleteShopWatchRule(c, d) })
 	gp.POST("/:id/test", func(c *gin.Context) { testShopTarget(c, d) })
 	gp.POST("/:id/sync", func(c *gin.Context) { syncShopTarget(c, d) })
+	gp.POST("/:id/sync-jobs/:job_id/cancel", func(c *gin.Context) { cancelShopSyncJob(c, d) })
 	gp.GET("/:id/sync-jobs/latest", func(c *gin.Context) { getLatestShopSyncJob(c, d) })
 	gp.GET("/:id/sync-jobs/:job_id", func(c *gin.Context) { getShopSyncJob(c, d) })
 	gp.GET("/:id/categories", func(c *gin.Context) { shopTargetCategories(c, d) })
@@ -491,6 +492,30 @@ func getShopSyncJob(c *gin.Context, d *Deps) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": job})
+}
+
+func cancelShopSyncJob(c *gin.Context, d *Deps) {
+	if !shopSyncRunnerReady(c, d) {
+		return
+	}
+	targetID, ok := parseUintParam(c, "id")
+	if !ok {
+		return
+	}
+	jobID, ok := parseUintParam(c, "job_id")
+	if !ok {
+		return
+	}
+	job, err := d.ShopSyncRunner.Cancel(targetID, jobID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		fail(c, http.StatusNotFound, err)
+		return
+	}
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"data": job})
 }
 
 func getLatestShopSyncJob(c *gin.Context, d *Deps) {

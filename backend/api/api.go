@@ -56,6 +56,7 @@ type upstreamSubscriptionService interface {
 type shopSyncJobRunner interface {
 	Start(targetID uint) (*storage.ShopSyncJob, bool, error)
 	Get(targetID, jobID uint) (*storage.ShopSyncJob, error)
+	Cancel(targetID, jobID uint) (*storage.ShopSyncJob, error)
 	GetMany(jobIDs []uint) ([]storage.ShopSyncJob, error)
 	Latest(targetID uint) (*storage.ShopSyncJob, error)
 	CreateBatchWithItems(total, queued, reused, startFailed int, items []storage.ShopSyncBatchItem, startedAt time.Time) (*storage.ShopSyncBatch, error)

@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	shopSyncJobTimeout     = 2 * time.Minute
-	shopSyncJobConcurrency = 2
+	shopSyncJobConcurrency         = 2
+	scheduledShopSyncMinTimeout    = 15 * time.Minute
+	scheduledShopSyncMaxTimeout    = 2 * time.Hour
+	scheduledShopSyncTimeoutBuffer = time.Minute
 )
 
 // SyncJobRunner runs manual shop synchronizations after the HTTP request has
@@ -90,7 +92,7 @@ func (r *SyncJobRunner) Start(targetID uint) (*storage.ShopSyncJob, bool, error)
 	if err := r.jobs.Create(job); err != nil {
 		return nil, false, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), shopSyncJobTimeout)
+	ctx, cancel := context.WithCancel(context.Background())
 	control := &syncJobControl{ctx: ctx, cancel: cancel}
 	r.active[targetID] = job.ID
 	r.controls[job.ID] = control
@@ -101,6 +103,29 @@ func (r *SyncJobRunner) Start(targetID uint) (*storage.ShopSyncJob, bool, error)
 func (r *SyncJobRunner) Get(targetID, jobID uint) (*storage.ShopSyncJob, error) {
 	if r == nil || r.jobs == nil {
 		return nil, fmt.Errorf("shop sync job runner is unavailable")
+	}
+	return r.jobs.FindByTargetAndID(targetID, jobID)
+}
+
+// Cancel stops one manual shop sync job. The durable status changes before the
+// goroutine exits so the UI can stop polling immediately.
+func (r *SyncJobRunner) Cancel(targetID, jobID uint) (*storage.ShopSyncJob, error) {
+	if r == nil || r.jobs == nil {
+		return nil, fmt.Errorf("shop sync job runner is unavailable")
+	}
+	job, err := r.jobs.FindByTargetAndID(targetID, jobID)
+	if err != nil || !isActiveSyncJobStatus(job.Status) {
+		return job, err
+	}
+
+	r.mu.Lock()
+	if control := r.controls[jobID]; control != nil {
+		control.cancel()
+	}
+	r.mu.Unlock()
+
+	if err := r.jobs.Cancel([]uint{jobID}, time.Now()); err != nil {
+		return nil, err
 	}
 	return r.jobs.FindByTargetAndID(targetID, jobID)
 }
@@ -130,8 +155,11 @@ func (r *SyncJobRunner) SyncAllScheduled(ctx context.Context, concurrency int) *
 	if err != nil {
 		return r.monitor.syncAllListError(err)
 	}
+	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, scheduledShopSyncTimeout(len(list), concurrency))
+	defer cancelTimeout()
+
 	if r.jobs == nil {
-		return r.monitor.syncTargetsWithConcurrency(ctx, list, concurrency, nil)
+		return r.monitor.syncTargetsWithConcurrency(timeoutCtx, list, concurrency, nil)
 	}
 
 	startedAt := time.Now()
@@ -151,9 +179,9 @@ func (r *SyncJobRunner) SyncAllScheduled(ctx context.Context, concurrency int) *
 		if r.log != nil {
 			r.log.Warn("create scheduled shop sync batch failed", "err", err)
 		}
-		return r.monitor.syncTargetsWithConcurrency(ctx, list, concurrency, nil)
+		return r.monitor.syncTargetsWithConcurrency(timeoutCtx, list, concurrency, nil)
 	}
-	runCtx, cancel := context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(timeoutCtx)
 	r.mu.Lock()
 	r.batchCancels[batch.ID] = cancel
 	r.mu.Unlock()
@@ -174,9 +202,17 @@ func (r *SyncJobRunner) SyncAllScheduled(ctx context.Context, concurrency int) *
 				r.log.Warn("mark scheduled shop sync running failed", "job_id", jobs[index].ID, "err", err)
 			}
 			if !marked {
-				return runCtx
+				// The job may have been cancelled while it waited for a worker
+				// or for a same-origin queue. Prevent Sync from calling upstream.
+				cancelledCtx, cancel := context.WithCancel(runCtx)
+				cancel()
+				return cancelledCtx
 			}
-			observedCtx, requestStats := shopprovider.WithRequestStats(runCtx)
+			jobCtx, cancelJob := context.WithCancel(runCtx)
+			r.mu.Lock()
+			r.controls[jobs[index].ID] = &syncJobControl{ctx: jobCtx, cancel: cancelJob}
+			r.mu.Unlock()
+			observedCtx, requestStats := shopprovider.WithRequestStats(jobCtx)
 			stats[index] = requestStats
 			r.requestStats.Store(jobs[index].ID, requestStats)
 			return observedCtx
@@ -192,8 +228,9 @@ func (r *SyncJobRunner) SyncAllScheduled(ctx context.Context, concurrency int) *
 				} else if errors.Is(runCtx.Err(), context.Canceled) || errors.Is(syncErr, context.Canceled) {
 					status = storage.ShopSyncJobCancelled
 					errorMessage = "同步已停止"
-				} else if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+				} else if errors.Is(syncErr, context.DeadlineExceeded) || errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 					status = storage.ShopSyncJobTimedOut
+					errorMessage = syncTimeoutMessageFor(runCtx)
 				} else {
 					status = storage.ShopSyncJobFailed
 				}
@@ -211,6 +248,10 @@ func (r *SyncJobRunner) SyncAllScheduled(ctx context.Context, concurrency int) *
 			}
 			r.requestStats.Delete(jobs[index].ID)
 			r.mu.Lock()
+			if control := r.controls[jobs[index].ID]; control != nil {
+				control.cancel()
+				delete(r.controls, jobs[index].ID)
+			}
 			if r.active[target.ID] == jobs[index].ID {
 				delete(r.active, target.ID)
 			}
@@ -223,6 +264,27 @@ func (r *SyncJobRunner) SyncAllScheduled(ctx context.Context, concurrency int) *
 		r.log.Warn("complete scheduled shop sync batch failed", "batch_id", batch.ID, "err", err)
 	}
 	return result
+}
+
+// scheduledShopSyncTimeout keeps cron-triggered shop batches from inheriting a
+// fixed five-minute ceiling. The estimate scales with configured concurrency
+// while keeping a practical floor and ceiling for abnormal upstream behavior.
+func scheduledShopSyncTimeout(total, concurrency int) time.Duration {
+	if total <= 0 {
+		return shopSyncDefaultTimeout
+	}
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	waves := (total + concurrency - 1) / concurrency
+	timeout := time.Duration(waves)*shopSyncDefaultTimeout + scheduledShopSyncTimeoutBuffer
+	if timeout < scheduledShopSyncMinTimeout {
+		return scheduledShopSyncMinTimeout
+	}
+	if timeout > scheduledShopSyncMaxTimeout {
+		return scheduledShopSyncMaxTimeout
+	}
+	return timeout
 }
 
 func (r *SyncJobRunner) CreateBatch(total, queued, reused, startFailed int, jobIDs []uint, startedAt time.Time) (*storage.ShopSyncBatch, error) {
@@ -469,6 +531,10 @@ func isActiveBatchStatus(status storage.ShopSyncBatchStatus) bool {
 	return status == storage.ShopSyncBatchRunning || status == storage.ShopSyncBatchCancelling
 }
 
+func isActiveSyncJobStatus(status storage.ShopSyncJobStatus) bool {
+	return status == storage.ShopSyncJobQueued || status == storage.ShopSyncJobRunning
+}
+
 func uniqueSyncJobIDs(ids []uint) []uint {
 	seen := make(map[uint]struct{}, len(ids))
 	result := make([]uint, 0, len(ids))
@@ -548,18 +614,17 @@ func (r *SyncJobRunner) run(jobID, targetID uint, control *syncJobControl) {
 	status := storage.ShopSyncJobSucceeded
 	errorMessage := ""
 	if err != nil {
+		errorMessage = err.Error()
 		if errors.Is(control.ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
 			status = storage.ShopSyncJobCancelled
 			errorMessage = "同步已停止"
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			status = storage.ShopSyncJobTimedOut
+			errorMessage = syncTimeoutMessage()
 		} else if isSkippedSyncError(err) {
 			status = storage.ShopSyncJobSkipped
 		} else {
 			status = storage.ShopSyncJobFailed
-		}
-		errorMessage = err.Error()
-		if errors.Is(control.ctx.Err(), context.DeadlineExceeded) {
-			status = storage.ShopSyncJobTimedOut
-			errorMessage = fmt.Sprintf("同步超过 %s", shopSyncJobTimeout)
 		}
 	}
 
@@ -574,6 +639,17 @@ func (r *SyncJobRunner) run(jobID, targetID uint, control *syncJobControl) {
 	if err := r.jobs.CompleteWithMetrics(jobID, status, goodsCount, changedCount, events, errorMessage, startedAt, finishedAt, metrics.Count, metrics.DurationMS); err != nil && r.log != nil {
 		r.log.Error("complete shop sync job failed", "job_id", jobID, "target_id", targetID, "err", err)
 	}
+}
+
+func syncTimeoutMessage() string {
+	return fmt.Sprintf("同步超过 %s", shopSyncTimeout)
+}
+
+func syncTimeoutMessageFor(ctx context.Context) string {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "同步批次超过上级时限"
+	}
+	return syncTimeoutMessage()
 }
 
 func (r *SyncJobRunner) finishCancelledJob(jobID uint, finishedAt time.Time) {

@@ -197,16 +197,16 @@ func (s *Scheduler) runShops() {
 	if s.shopMonitor == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
 	concurrency := s.cfg.Concurrency
 	if concurrency <= 0 {
 		concurrency = 1
 	}
 	if s.shopSyncRunner != nil {
-		s.shopSyncRunner.SyncAllScheduled(ctx, concurrency)
+		s.shopSyncRunner.SyncAllScheduled(context.Background(), concurrency)
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 	s.shopMonitor.SyncAllWithConcurrency(ctx, concurrency)
 }
 

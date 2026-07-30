@@ -358,6 +358,24 @@ AUTH_TOKEN_SECRET=
 
 ## 本地开发
 
+推荐使用项目内置脚本统一启动、停止和重启后端与前端：
+
+```powershell
+node .\scripts\dev-start.mjs
+```
+
+```powershell
+node .\scripts\dev-stop.mjs
+```
+
+```powershell
+node .\scripts\dev-restart.mjs
+```
+
+默认使用 `data/upstream-ops.db`，后端地址为 `http://127.0.0.1:8418`，前端地址为 `http://127.0.0.1:3010`。运行时 PID 与日志写入 `tmp/dev/`。
+
+更多参数见 `scripts/README.md`。
+
 ### 后端
 
 ```bash

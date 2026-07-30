@@ -143,6 +143,96 @@ func TestCancelBatchPreventsSlotBlockedJobFromCallingProvider(t *testing.T) {
 	t.Fatal("slot-blocked job did not become cancelled")
 }
 
+func TestQueuedJobDoesNotInheritExecutionTimeout(t *testing.T) {
+	platform := storage.ShopPlatform("queued-job-timeout-test")
+	shopprovider.Register(platform, func() shopprovider.Provider { return fakeShopProvider{} })
+
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	target := createRefreshTarget(t, targets, platform)
+	monitor := NewService(targets, storage.NewShopWatchRules(db), storage.NewShopGoods(db), nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	runner := NewSyncJobRunner(monitor, storage.NewShopSyncJobs(db), nil)
+	for i := 0; i < cap(runner.slots); i++ {
+		runner.slots <- struct{}{}
+	}
+	defer func() {
+		for i := 0; i < cap(runner.slots); i++ {
+			<-runner.slots
+		}
+	}()
+
+	job, reused, err := runner.Start(target.ID)
+	if err != nil || reused {
+		t.Fatalf("start job: reused=%v err=%v", reused, err)
+	}
+
+	runner.mu.Lock()
+	control := runner.controls[job.ID]
+	runner.mu.Unlock()
+	if control == nil {
+		t.Fatal("queued job control was not registered")
+	}
+	if deadline, ok := control.ctx.Deadline(); ok {
+		t.Fatalf("queued job has execution deadline %v before acquiring a slot", deadline)
+	}
+
+	batch, err := runner.CreateBatch(1, 1, 0, 0, []uint{job.ID}, time.Now())
+	if err != nil {
+		t.Fatalf("create batch: %v", err)
+	}
+	if _, err := runner.CancelBatch(batch.ID); err != nil {
+		t.Fatalf("cancel batch: %v", err)
+	}
+}
+
+func TestCancelJobPreventsSlotBlockedJobFromCallingProvider(t *testing.T) {
+	platform := storage.ShopPlatform("cancel-job-slot-blocked-test")
+	provider := &countingShopProvider{}
+	shopprovider.Register(platform, func() shopprovider.Provider { return provider })
+
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	target := createRefreshTarget(t, targets, platform)
+	monitor := NewService(targets, storage.NewShopWatchRules(db), storage.NewShopGoods(db), nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	runner := NewSyncJobRunner(monitor, storage.NewShopSyncJobs(db), nil)
+	for i := 0; i < cap(runner.slots); i++ {
+		runner.slots <- struct{}{}
+	}
+	defer func() {
+		for i := 0; i < cap(runner.slots); i++ {
+			<-runner.slots
+		}
+	}()
+
+	job, reused, err := runner.Start(target.ID)
+	if err != nil || reused {
+		t.Fatalf("start job: reused=%v err=%v", reused, err)
+	}
+	cancelled, err := runner.Cancel(target.ID, job.ID)
+	if err != nil {
+		t.Fatalf("cancel job: %v", err)
+	}
+	if cancelled.Status != storage.ShopSyncJobCancelled {
+		t.Fatalf("cancelled status = %q, want %q", cancelled.Status, storage.ShopSyncJobCancelled)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		runner.mu.Lock()
+		_, active := runner.controls[job.ID]
+		runner.mu.Unlock()
+		if !active {
+			infoCalls, goodsCalls := provider.counts()
+			if infoCalls != 0 || goodsCalls != 0 {
+				t.Fatalf("provider calls after job cancellation: info=%d goods=%d", infoCalls, goodsCalls)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("slot-blocked job was not cleaned up after cancellation")
+}
+
 func TestScheduledSyncCreatesReadableCronBatch(t *testing.T) {
 	platform := storage.ShopPlatform("scheduled-sync-batch-test")
 	shopprovider.Register(platform, func() shopprovider.Provider {
@@ -175,6 +265,22 @@ func TestScheduledSyncCreatesReadableCronBatch(t *testing.T) {
 	}
 	if details.Items[0].Job.Status != storage.ShopSyncJobSucceeded {
 		t.Fatalf("scheduled job = %#v", details.Items[0].Job)
+	}
+}
+
+func TestScheduledShopSyncTimeoutScalesWithBatchSize(t *testing.T) {
+	if got := scheduledShopSyncTimeout(1, 4); got != scheduledShopSyncMinTimeout {
+		t.Fatalf("small batch timeout = %v, want %v", got, scheduledShopSyncMinTimeout)
+	}
+	got := scheduledShopSyncTimeout(65, 4)
+	if got <= 5*time.Minute {
+		t.Fatalf("large batch timeout = %v, want more than the old fixed 5m ceiling", got)
+	}
+	if got != 35*time.Minute {
+		t.Fatalf("large batch timeout = %v, want 35m", got)
+	}
+	if got := scheduledShopSyncTimeout(10000, 1); got != scheduledShopSyncMaxTimeout {
+		t.Fatalf("huge batch timeout = %v, want %v", got, scheduledShopSyncMaxTimeout)
 	}
 }
 

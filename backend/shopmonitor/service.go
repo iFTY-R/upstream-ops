@@ -40,7 +40,13 @@ const (
 	shopGoodsPageSize       = 50
 	maxShopGoodsPages       = 1000
 	shopOriginBlockCooldown = 15 * time.Minute
+	// shopSyncDefaultTimeout is the per-target upstream execution timeout. It is
+	// applied after target/origin locks are acquired so queueing does not consume
+	// the request budget for large batches.
+	shopSyncDefaultTimeout = 2 * time.Minute
 )
+
+var shopSyncTimeout = shopSyncDefaultTimeout
 
 // ErrShopSyncAlreadyRunning prevents queued, scheduled, and manual operations
 // from executing the same target again after waiting for its lock.
@@ -398,6 +404,9 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 	origin.blockedUntil = time.Time{}
 	origin.blockedReason = ""
 
+	execCtx, cancelExec := context.WithTimeout(ctx, shopSyncTimeout)
+	defer cancelExec()
+
 	provider, starget, err := s.providerFor(target)
 	if err != nil {
 		s.blockOrigin(origin, err)
@@ -406,9 +415,9 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 		return result, err
 	}
 
-	info, infoRefreshedAt, err := s.shopInfoForSync(ctx, provider, starget, target)
+	info, infoRefreshedAt, err := s.shopInfoForSync(execCtx, provider, starget, target)
 	if err != nil {
-		if isSyncCancellation(ctx, err) {
+		if isSyncCancellation(execCtx, err) {
 			return result, context.Canceled
 		}
 		s.blockOrigin(origin, err)
@@ -417,9 +426,9 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 		return result, err
 	}
 
-	fetched, err := s.fetchGoods(ctx, provider, starget, target)
+	fetched, err := s.fetchGoods(execCtx, provider, starget, target)
 	if err != nil {
-		if isSyncCancellation(ctx, err) {
+		if isSyncCancellation(execCtx, err) {
 			return result, context.Canceled
 		}
 		s.blockOrigin(origin, err)
@@ -428,7 +437,7 @@ func (s *Service) Sync(ctx context.Context, target *storage.ShopTarget) (*SyncRe
 		return result, err
 	}
 	result.GoodsCount = len(fetched)
-	if err := ctx.Err(); err != nil {
+	if err := execCtx.Err(); err != nil {
 		return result, err
 	}
 

@@ -603,6 +603,74 @@ func TestSyncAllReusesProviderAndCachedShopInfo(t *testing.T) {
 	}
 }
 
+func TestSyncExecutionTimeoutStartsAfterOriginLock(t *testing.T) {
+	previousTimeout := shopSyncTimeout
+	shopSyncTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { shopSyncTimeout = previousTimeout })
+
+	platform := storage.ShopPlatform("sync-origin-lock-timeout-test")
+	provider := &firstInfoBlockingShopProvider{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	shopprovider.Register(platform, func() shopprovider.Provider { return provider })
+
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	goods := storage.NewShopGoods(db)
+	targetIDs := make([]uint, 0, 2)
+	for _, name := range []string{"first", "second"} {
+		target := &storage.ShopTarget{
+			Name:           name,
+			Platform:       platform,
+			SiteURL:        "https://shared-origin.example/shop/" + name,
+			BaseURL:        "https://shared-origin.example",
+			Token:          name,
+			MonitorEnabled: true,
+			ScopeMode:      storage.ShopScopeAll,
+			GoodsTypesJSON: `["card"]`,
+		}
+		if err := targets.Create(target); err != nil {
+			t.Fatalf("create target %s: %v", name, err)
+		}
+		targetIDs = append(targetIDs, target.ID)
+	}
+
+	service := NewService(targets, storage.NewShopWatchRules(db), goods, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.SyncByID(context.Background(), targetIDs[0])
+		firstDone <- err
+	}()
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("first sync did not reach upstream")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := service.SyncByID(context.Background(), targetIDs[1])
+		secondDone <- err
+	}()
+	time.Sleep(2 * shopSyncTimeout)
+
+	if err := <-firstDone; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first sync error = %v, want context deadline exceeded", err)
+	}
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second sync should not consume execution timeout while waiting for origin lock: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second sync did not complete")
+	}
+	if provider.callCount() != 2 {
+		t.Fatalf("info calls = %d, want 2", provider.callCount())
+	}
+}
+
 func createRefreshTarget(t *testing.T, targets *storage.ShopTargets, platform storage.ShopPlatform) *storage.ShopTarget {
 	t.Helper()
 	target := &storage.ShopTarget{
@@ -650,6 +718,14 @@ type blockingShopProvider struct {
 type batchBlockingShopProvider struct {
 	mu        sync.Mutex
 	infoCalls map[string]int
+}
+
+type firstInfoBlockingShopProvider struct {
+	mu      sync.Mutex
+	started chan struct{}
+	release chan struct{}
+	calls   int
+	once    sync.Once
 }
 
 type countingShopProvider struct {
@@ -712,6 +788,40 @@ func (p *batchBlockingShopProvider) callCount(baseURL string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.infoCalls[baseURL]
+}
+
+func (p *firstInfoBlockingShopProvider) Info(ctx context.Context, target shopprovider.Target) (*shopprovider.ShopInfo, error) {
+	p.mu.Lock()
+	p.calls++
+	call := p.calls
+	p.mu.Unlock()
+	if call == 1 {
+		p.once.Do(func() { close(p.started) })
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-p.release:
+		}
+	}
+	return &shopprovider.ShopInfo{Name: target.Name}, nil
+}
+
+func (p *firstInfoBlockingShopProvider) Categories(context.Context, shopprovider.Target, shopprovider.CategoryRequest) ([]shopprovider.Category, error) {
+	return nil, nil
+}
+
+func (p *firstInfoBlockingShopProvider) Goods(context.Context, shopprovider.Target, shopprovider.GoodsRequest) (*shopprovider.GoodsPage, error) {
+	return &shopprovider.GoodsPage{}, nil
+}
+
+func (p *firstInfoBlockingShopProvider) Price(context.Context, shopprovider.Target, shopprovider.PriceRequest) (*shopprovider.PriceResult, error) {
+	return &shopprovider.PriceResult{}, nil
+}
+
+func (p *firstInfoBlockingShopProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
 }
 
 func (p *blockingShopProvider) Info(ctx context.Context, _ shopprovider.Target) (*shopprovider.ShopInfo, error) {
