@@ -11,7 +11,6 @@ import {
 } from "react"
 import {
   apiFetch,
-  getToken,
   setToken,
   setUnauthorizedHandler,
 } from "@/lib/api"
@@ -75,10 +74,6 @@ function isPublicShopGoodsURL() {
   return window.location.pathname.replace(/\/+$/, "") === "/shop-goods"
 }
 
-function startsInPublicMode() {
-  return isPublicShopGoodsURL() && !getToken() && !readEmbeddedLoginPayload()
-}
-
 function removeEmbeddedTokenFromURL() {
   if (typeof window === "undefined") return
   const url = new URL(window.location.href)
@@ -94,9 +89,10 @@ function embeddedLoginMessage(err?: unknown) {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  // The public goods page must not depend on a protected auth probe. Existing
-  // Ops or Sub2API credentials still enter the normal verification flow.
-  const [status, setStatus] = useState<AuthStatus>(() => startsInPublicMode() ? "anonymous" : "loading")
+  // Direct public-page visits still probe /auth/me once. This restores an
+  // existing Ops session and detects AUTH_ENABLED=false before choosing the
+  // management or read-only shop-goods experience.
+  const [status, setStatus] = useState<AuthStatus>("loading")
   const [username, setUsername] = useState<string | null>(null)
   const [authDisabled, setAuthDisabled] = useState(false)
   const [embeddedMode, setEmbeddedMode] = useState(() => isEmbeddedModeURL())
@@ -136,12 +132,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } finally {
           removeEmbeddedTokenFromURL()
         }
-      }
-
-      if (isPublicShopGoodsURL() && !getToken()) {
-        setUsername(null)
-        setStatus("anonymous")
-        return
       }
 
       try {
