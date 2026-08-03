@@ -143,6 +143,7 @@ func (s *Scheduler) Start() error {
 		"rateCron", s.cfg.RateCron,
 		"shopEnabled", s.cfg.ShopEnabled,
 		"shopCron", s.cfg.ShopCron,
+		"shopManualCooldownMinutes", s.cfg.ShopManualCooldownMinutes,
 		"priceAIFeedCron", s.cfg.PriceAIFeedCron,
 		"priceAIRiskCron", s.cfg.PriceAIRiskCron,
 		"autoGroupEnabled", s.cfg.AutoGroup.Enabled,
@@ -202,7 +203,8 @@ func (s *Scheduler) runShops() {
 		concurrency = 1
 	}
 	if s.shopSyncRunner != nil {
-		s.shopSyncRunner.SyncAllScheduled(context.Background(), concurrency)
+		cooldown := time.Duration(s.cfg.ShopManualCooldownMinutes) * time.Minute
+		s.shopSyncRunner.SyncAllScheduled(context.Background(), concurrency, cooldown)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)

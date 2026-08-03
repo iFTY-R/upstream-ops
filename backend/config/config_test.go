@@ -35,11 +35,23 @@ func TestLoadAppliesStaggeredShopCronDefault(t *testing.T) {
 	if !cfg.Scheduler.ShopEnabled {
 		t.Fatal("shop scheduler should be enabled by default")
 	}
+	if cfg.Scheduler.ShopManualCooldownMinutes != 15 {
+		t.Fatalf("shop manual cooldown minutes = %d", cfg.Scheduler.ShopManualCooldownMinutes)
+	}
 	if cfg.Scheduler.PriceAIFeedCron != "23 */5 * * * *" {
 		t.Fatalf("priceai feed cron = %q", cfg.Scheduler.PriceAIFeedCron)
 	}
 	if cfg.Scheduler.PriceAIRiskCron != "47 11 */6 * * *" {
 		t.Fatalf("priceai risk cron = %q", cfg.Scheduler.PriceAIRiskCron)
+	}
+}
+
+func TestValidateSchedulerConfigRejectsNegativeShopManualCooldown(t *testing.T) {
+	if err := ValidateSchedulerConfig(SchedulerConfig{ShopManualCooldownMinutes: -1}); err == nil {
+		t.Fatal("negative shop manual cooldown unexpectedly passed validation")
+	}
+	if err := ValidateSchedulerConfig(SchedulerConfig{ShopManualCooldownMinutes: 0}); err != nil {
+		t.Fatalf("disabled shop manual cooldown rejected: %v", err)
 	}
 }
 

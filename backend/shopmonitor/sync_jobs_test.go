@@ -245,7 +245,7 @@ func TestScheduledSyncCreatesReadableCronBatch(t *testing.T) {
 	monitor := NewService(targets, storage.NewShopWatchRules(db), storage.NewShopGoods(db), nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
 	runner := NewSyncJobRunner(monitor, storage.NewShopSyncJobs(db), nil)
 
-	result := runner.SyncAllScheduled(context.Background(), 1)
+	result := runner.SyncAllScheduled(context.Background(), 1, 15*time.Minute)
 	if result.Total != 1 || result.Success != 1 || result.Failed != 0 {
 		t.Fatalf("scheduled sync result = %#v", result)
 	}
@@ -266,6 +266,114 @@ func TestScheduledSyncCreatesReadableCronBatch(t *testing.T) {
 	if details.Items[0].Job.Status != storage.ShopSyncJobSucceeded {
 		t.Fatalf("scheduled job = %#v", details.Items[0].Job)
 	}
+}
+
+func TestManualSyncCompletionPersistsCooldownTimestamp(t *testing.T) {
+	platform := storage.ShopPlatform("manual-sync-cooldown-test")
+	shopprovider.Register(platform, func() shopprovider.Provider { return fakeShopProvider{} })
+
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	target := createRefreshTarget(t, targets, platform)
+	monitor := NewService(targets, storage.NewShopWatchRules(db), storage.NewShopGoods(db), nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	runner := NewSyncJobRunner(monitor, storage.NewShopSyncJobs(db), nil)
+
+	job, reused, err := runner.Start(target.ID)
+	if err != nil || reused {
+		t.Fatalf("start manual sync: reused=%v err=%v", reused, err)
+	}
+	waitForSyncJobTerminal(t, runner, target.ID, job.ID)
+	waitForManualSyncTimestamp(t, targets, target.ID)
+}
+
+func TestScheduledSyncSkipsOnlyTargetsInManualCooldown(t *testing.T) {
+	platform := storage.ShopPlatform("scheduled-manual-cooldown-test")
+	provider := &countingShopProvider{}
+	shopprovider.Register(platform, func() shopprovider.Provider { return provider })
+
+	db := openShopMonitorTestDB(t)
+	targets := storage.NewShopTargets(db)
+	recent := createCooldownTarget(t, targets, platform, "recent", time.Now().Add(-time.Minute))
+	ready := createCooldownTarget(t, targets, platform, "ready", time.Now().Add(-16*time.Minute))
+	monitor := NewService(targets, storage.NewShopWatchRules(db), storage.NewShopGoods(db), nil, nil, config.ProxyConfig{}, config.UpstreamConfig{})
+	runner := NewSyncJobRunner(monitor, storage.NewShopSyncJobs(db), nil)
+
+	result := runner.SyncAllScheduled(context.Background(), 1, 15*time.Minute)
+	if result.Total != 2 || result.Success != 1 || result.Skipped != 1 || result.Failed != 0 {
+		t.Fatalf("scheduled cooldown result = %#v", result)
+	}
+	infoCalls, goodsCalls := provider.counts()
+	if infoCalls != 1 || goodsCalls != 1 {
+		t.Fatalf("provider calls: info=%d goods=%d", infoCalls, goodsCalls)
+	}
+	batch, err := runner.LatestBatch()
+	if err != nil {
+		t.Fatalf("latest batch: %v", err)
+	}
+	details, err := runner.BatchDetails(batch.ID)
+	if err != nil {
+		t.Fatalf("batch details: %v", err)
+	}
+	if len(details.Items) != 1 || details.Items[0].TargetID != ready.ID || details.Items[0].TargetID == recent.ID {
+		t.Fatalf("scheduled batch items = %#v", details.Items)
+	}
+}
+
+func TestManualCooldownZeroKeepsAllScheduledTargets(t *testing.T) {
+	now := time.Now()
+	list := []storage.ShopTarget{{ID: 1, LastManualSyncAt: &now}}
+	ready, skipped := filterManualCooldownTargets(list, 0, now)
+	if len(ready) != 1 || len(skipped) != 0 {
+		t.Fatalf("disabled cooldown: ready=%d skipped=%d", len(ready), len(skipped))
+	}
+}
+
+func createCooldownTarget(t *testing.T, targets *storage.ShopTargets, platform storage.ShopPlatform, token string, lastManual time.Time) *storage.ShopTarget {
+	t.Helper()
+	target := &storage.ShopTarget{
+		Name:             token,
+		Platform:         platform,
+		SiteURL:          "https://example.invalid/shop/" + token,
+		BaseURL:          "https://example.invalid",
+		Token:            token,
+		MonitorEnabled:   true,
+		ScopeMode:        storage.ShopScopeAll,
+		GoodsTypesJSON:   `["card"]`,
+		LastManualSyncAt: &lastManual,
+	}
+	if err := targets.Create(target); err != nil {
+		t.Fatalf("create cooldown target: %v", err)
+	}
+	return target
+}
+
+func waitForSyncJobTerminal(t *testing.T, runner *SyncJobRunner, targetID, jobID uint) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		job, err := runner.Get(targetID, jobID)
+		if err == nil && !isActiveSyncJobStatus(job.Status) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("sync job did not reach a terminal state")
+}
+
+func waitForManualSyncTimestamp(t *testing.T, targets *storage.ShopTargets, targetID uint) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		target, err := targets.FindByID(targetID)
+		if err == nil && target.LastManualSyncAt != nil {
+			if time.Since(*target.LastManualSyncAt) > time.Second {
+				t.Fatalf("last manual sync at = %v", target.LastManualSyncAt)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("manual sync completion timestamp was not persisted")
 }
 
 func TestScheduledShopSyncTimeoutScalesWithBatchSize(t *testing.T) {

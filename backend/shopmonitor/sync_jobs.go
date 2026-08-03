@@ -147,7 +147,7 @@ func (r *SyncJobRunner) Latest(targetID uint) (*storage.ShopSyncJob, error) {
 // SyncAllScheduled records a cron-triggered sync with the same durable batch
 // details as a manual sync while retaining the scheduler's synchronous flow,
 // concurrency, and timeout context. Recording failures do not block the sync.
-func (r *SyncJobRunner) SyncAllScheduled(ctx context.Context, concurrency int) *SyncAllResult {
+func (r *SyncJobRunner) SyncAllScheduled(ctx context.Context, concurrency int, manualCooldown time.Duration) *SyncAllResult {
 	if r == nil || r.monitor == nil {
 		return &SyncAllResult{Failed: 1, Targets: []SyncAllTargetResult{{Error: "shop sync job runner is unavailable"}}}
 	}
@@ -155,11 +155,20 @@ func (r *SyncJobRunner) SyncAllScheduled(ctx context.Context, concurrency int) *
 	if err != nil {
 		return r.monitor.syncAllListError(err)
 	}
+	list, cooldownSkipped := filterManualCooldownTargets(list, manualCooldown, time.Now())
+	if len(cooldownSkipped) > 0 && r.log != nil {
+		r.log.Info("scheduled shop sync skipped recent manual targets", "count", len(cooldownSkipped), "cooldown", manualCooldown)
+	}
+	if len(list) == 0 {
+		return scheduledCooldownOnlyResult(cooldownSkipped)
+	}
 	timeoutCtx, cancelTimeout := context.WithTimeout(ctx, scheduledShopSyncTimeout(len(list), concurrency))
 	defer cancelTimeout()
 
 	if r.jobs == nil {
-		return r.monitor.syncTargetsWithConcurrency(timeoutCtx, list, concurrency, nil)
+		result := r.monitor.syncTargetsWithConcurrency(timeoutCtx, list, concurrency, nil)
+		appendScheduledCooldownSkips(result, cooldownSkipped)
+		return result
 	}
 
 	startedAt := time.Now()
@@ -260,10 +269,51 @@ func (r *SyncJobRunner) SyncAllScheduled(ctx context.Context, concurrency int) *
 	}
 
 	result := r.monitor.syncTargetsWithConcurrency(runCtx, list, concurrency, hooks)
+	appendScheduledCooldownSkips(result, cooldownSkipped)
 	if _, err := r.refreshBatch(batch); err != nil && r.log != nil {
 		r.log.Warn("complete scheduled shop sync batch failed", "batch_id", batch.ID, "err", err)
 	}
 	return result
+}
+
+// filterManualCooldownTargets applies cooldown per shop. Manual execution does
+// not call this path and therefore remains available during the cooldown.
+func filterManualCooldownTargets(list []storage.ShopTarget, cooldown time.Duration, now time.Time) ([]storage.ShopTarget, []storage.ShopTarget) {
+	if cooldown <= 0 {
+		return list, nil
+	}
+	ready := make([]storage.ShopTarget, 0, len(list))
+	skipped := make([]storage.ShopTarget, 0)
+	for i := range list {
+		lastManual := list[i].LastManualSyncAt
+		if lastManual != nil && now.Sub(*lastManual) < cooldown {
+			skipped = append(skipped, list[i])
+			continue
+		}
+		ready = append(ready, list[i])
+	}
+	return ready, skipped
+}
+
+func scheduledCooldownOnlyResult(skipped []storage.ShopTarget) *SyncAllResult {
+	result := &SyncAllResult{}
+	appendScheduledCooldownSkips(result, skipped)
+	return result
+}
+
+func appendScheduledCooldownSkips(result *SyncAllResult, skipped []storage.ShopTarget) {
+	if result == nil || len(skipped) == 0 {
+		return
+	}
+	result.Total += len(skipped)
+	result.Skipped += len(skipped)
+	for i := range skipped {
+		result.Targets = append(result.Targets, SyncAllTargetResult{
+			TargetID: skipped[i].ID,
+			Name:     skipped[i].Name,
+			Skipped:  true,
+		})
+	}
 }
 
 // scheduledShopSyncTimeout keeps cron-triggered shop batches from inheriting a
@@ -562,6 +612,13 @@ func completedBatchStatus(total, succeeded, failed, skipped int) storage.ShopSyn
 }
 
 func (r *SyncJobRunner) run(jobID, targetID uint, control *syncJobControl) {
+	// Every terminal manual result starts the cooldown, including failure or
+	// cancellation, so cron cannot immediately recreate upstream pressure.
+	defer func() {
+		if err := r.monitor.targets.SetLastManualSyncAt(targetID, time.Now()); err != nil && r.log != nil {
+			r.log.Warn("record manual shop sync completion failed", "job_id", jobID, "target_id", targetID, "err", err)
+		}
+	}()
 	select {
 	case r.slots <- struct{}{}:
 	case <-control.ctx.Done():

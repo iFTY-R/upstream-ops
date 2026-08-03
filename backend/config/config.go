@@ -98,17 +98,18 @@ type Sub2APIEmbedConfig struct {
 }
 
 type SchedulerConfig struct {
-	BalanceCron            string          `mapstructure:"balanceCron" yaml:"balanceCron" json:"balanceCron"`
-	RateCron               string          `mapstructure:"rateCron" yaml:"rateCron" json:"rateCron"`
-	ShopEnabled            bool            `mapstructure:"shopEnabled" yaml:"shopEnabled" json:"shopEnabled"`
-	ShopCron               string          `mapstructure:"shopCron" yaml:"shopCron" json:"shopCron"`
-	PriceAIFeedCron        string          `mapstructure:"priceAIFeedCron" yaml:"priceAIFeedCron" json:"priceAIFeedCron"`
-	PriceAIRiskCron        string          `mapstructure:"priceAIRiskCron" yaml:"priceAIRiskCron" json:"priceAIRiskCron"`
-	Concurrency            int             `mapstructure:"concurrency" yaml:"concurrency" json:"concurrency"`
-	PriceAIConcurrency     int             `mapstructure:"priceAIConcurrency" yaml:"priceAIConcurrency" json:"priceAIConcurrency"`
-	PriceAIRiskConcurrency int             `mapstructure:"priceAIRiskConcurrency" yaml:"priceAIRiskConcurrency" json:"priceAIRiskConcurrency"`
-	AutoGroup              AutoGroupConfig `mapstructure:"autoGroup" yaml:"autoGroup" json:"autoGroup"`
-	Retention              RetentionConfig `mapstructure:"retention" yaml:"retention" json:"retention"`
+	BalanceCron               string          `mapstructure:"balanceCron" yaml:"balanceCron" json:"balanceCron"`
+	RateCron                  string          `mapstructure:"rateCron" yaml:"rateCron" json:"rateCron"`
+	ShopEnabled               bool            `mapstructure:"shopEnabled" yaml:"shopEnabled" json:"shopEnabled"`
+	ShopCron                  string          `mapstructure:"shopCron" yaml:"shopCron" json:"shopCron"`
+	ShopManualCooldownMinutes int             `mapstructure:"shopManualCooldownMinutes" yaml:"shopManualCooldownMinutes" json:"shopManualCooldownMinutes"`
+	PriceAIFeedCron           string          `mapstructure:"priceAIFeedCron" yaml:"priceAIFeedCron" json:"priceAIFeedCron"`
+	PriceAIRiskCron           string          `mapstructure:"priceAIRiskCron" yaml:"priceAIRiskCron" json:"priceAIRiskCron"`
+	Concurrency               int             `mapstructure:"concurrency" yaml:"concurrency" json:"concurrency"`
+	PriceAIConcurrency        int             `mapstructure:"priceAIConcurrency" yaml:"priceAIConcurrency" json:"priceAIConcurrency"`
+	PriceAIRiskConcurrency    int             `mapstructure:"priceAIRiskConcurrency" yaml:"priceAIRiskConcurrency" json:"priceAIRiskConcurrency"`
+	AutoGroup                 AutoGroupConfig `mapstructure:"autoGroup" yaml:"autoGroup" json:"autoGroup"`
+	Retention                 RetentionConfig `mapstructure:"retention" yaml:"retention" json:"retention"`
 }
 
 type AutoGroupConfig struct {
@@ -382,6 +383,7 @@ func load(path string, withEnv bool) (*Config, string, error) {
 		_ = v.BindEnv("server.mode", "SERVER_MODE")
 		_ = v.BindEnv("scheduler.shopEnabled", "SCHEDULER_SHOP_ENABLED")
 		_ = v.BindEnv("scheduler.shopCron", "SCHEDULER_SHOPCRON")
+		_ = v.BindEnv("scheduler.shopManualCooldownMinutes", "SCHEDULER_SHOP_MANUAL_COOLDOWN_MINUTES")
 		_ = v.BindEnv("scheduler.priceAIFeedCron", "SCHEDULER_PRICEAI_FEED_CRON", "SCHEDULER_PRICEAIFEEDCRON")
 		_ = v.BindEnv("scheduler.priceAIRiskCron", "SCHEDULER_PRICEAI_RISK_CRON", "SCHEDULER_PRICEAIRISKCRON")
 		_ = v.BindEnv("log.level", "LOG_LEVEL")
@@ -480,6 +482,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("scheduler.rateCron", "13 */30 * * * *")
 	v.SetDefault("scheduler.shopEnabled", true)
 	v.SetDefault("scheduler.shopCron", "41 7,37 8-22 * * *")
+	v.SetDefault("scheduler.shopManualCooldownMinutes", 15)
 	v.SetDefault("scheduler.priceAIFeedCron", "23 */5 * * * *")
 	v.SetDefault("scheduler.priceAIRiskCron", "47 11 */6 * * *")
 	v.SetDefault("scheduler.concurrency", 4)

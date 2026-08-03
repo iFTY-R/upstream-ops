@@ -8,9 +8,12 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// ValidateSchedulerConfig keeps the documented PriceAI Feed cadence within
-// the public source's one-minute minimum attempt interval.
+// ValidateSchedulerConfig enforces scheduler-wide business limits before a
+// configuration is persisted or hot-reloaded.
 func ValidateSchedulerConfig(cfg SchedulerConfig) error {
+	if cfg.ShopManualCooldownMinutes < 0 {
+		return fmt.Errorf("shop manual sync cooldown minutes must not be negative")
+	}
 	return ValidatePriceAIFeedCron(cfg.PriceAIFeedCron)
 }
 

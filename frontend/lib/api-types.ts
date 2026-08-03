@@ -817,6 +817,7 @@ export interface SystemSchedulerConfig {
   rateCron: string
   shopEnabled: boolean
   shopCron: string
+  shopManualCooldownMinutes: number
   priceAIFeedCron: string
   priceAIRiskCron: string
   concurrency: number

@@ -94,6 +94,7 @@ function normalizeSystemConfig(config: SystemConfig): SystemConfig {
       ...config.scheduler,
       shopEnabled: config.scheduler.shopEnabled ?? true,
       shopCron: config.scheduler.shopCron ?? "",
+      shopManualCooldownMinutes: config.scheduler.shopManualCooldownMinutes ?? 15,
       priceAIFeedCron: config.scheduler.priceAIFeedCron ?? "23 */5 * * * *",
       priceAIRiskCron: config.scheduler.priceAIRiskCron ?? "47 11 */6 * * *",
       priceAIConcurrency: config.scheduler.priceAIConcurrency ?? 1,
@@ -851,6 +852,29 @@ export default function SettingsPage() {
                       }
                     />
                   </div>
+                </Field>
+                <Field
+                  label="手动同步冷却（分钟）"
+                  description="手动同步结束后，该店铺在此时间内不会被定时任务重复同步；设为 0 可关闭。"
+                >
+                  <Input
+                    type="number"
+                    min="0"
+                    value={String(form.scheduler.shopManualCooldownMinutes)}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                shopManualCooldownMinutes: Math.max(0, num(e.target.value)),
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
                 </Field>
                 <Field
                   label="并发数"

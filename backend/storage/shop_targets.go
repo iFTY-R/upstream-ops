@@ -189,6 +189,12 @@ func (r *ShopTargets) ListMonitorEnabled() ([]ShopTarget, error) {
 	return list, nil
 }
 
+// SetLastManualSyncAt records when a manual job reached a terminal state. The
+// scheduler uses this durable timestamp to avoid immediately syncing the same shop.
+func (r *ShopTargets) SetLastManualSyncAt(id uint, at time.Time) error {
+	return r.db.Model(&ShopTarget{}).Where("id = ?", id).Update("last_manual_sync_at", at).Error
+}
+
 func (r *ShopTargets) SetSyncResult(id uint, at *time.Time, lastErr string, shopName string, goodsCount, lowStockGoods, changedCount int) error {
 	return r.setSyncResult(id, at, nil, lastErr, shopName, goodsCount, lowStockGoods, changedCount)
 }
