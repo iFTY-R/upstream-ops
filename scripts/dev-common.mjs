@@ -21,7 +21,7 @@ export function parseCommonArgs(argv) {
     byPort: false,
     databasePath: "./data/upstream-ops.db",
     configPath: "./config.yaml",
-    appSecret: "upstream-ops-local-development-secret-2026",
+    appSecret: "KgYoAVXF/O1JRBTQnY05EWBzNDSWchWfsmBDI6EHZn6+WcYalPcWYud1uG8/mHNt",
     backendPort: 8418,
     frontendPort: 3010,
     frontendHost: "127.0.0.1",
