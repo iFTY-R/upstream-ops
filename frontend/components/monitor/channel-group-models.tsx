@@ -355,7 +355,9 @@ export function GroupModelsPanel({
   }
 
   return (
-    <div className="mt-1.5 overflow-hidden rounded-md border border-brand/30 bg-brand/[0.02]">
+    // 浮层样式：必须是不透明的 card 背景 + 阴影，否则会透出下方的按钮组和相邻卡片。
+    // max-h + overflow-auto 兜住极端情况（某分组几十个模型时内联区也不至于冲出屏幕）。
+    <div className="max-h-[min(60vh,26rem)] overflow-auto rounded-md border border-brand/40 bg-card shadow-lg ring-1 ring-black/5 dark:ring-white/10">
       {header}
       {flags}
       {body}

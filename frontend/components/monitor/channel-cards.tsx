@@ -354,7 +354,8 @@ function InlineRates({ channel }: { channel: Channel }) {
                     )}
                   >
                     <span className="font-medium">{v.name}</span>
-                    <span className="rounded bg-primary/10 px-1 font-semibold tabular-nums text-primary ring-1 ring-inset ring-primary/15">
+                    {/* whitespace-nowrap：0.0415 这类四位小数在窄 chip 里会被折成「0.041 / 5」 */}
+                    <span className="whitespace-nowrap rounded bg-primary/10 px-1 font-semibold tabular-nums text-primary ring-1 ring-inset ring-primary/15">
                       {ratioText}
                     </span>
                   </button>
@@ -386,18 +387,22 @@ function InlineRates({ channel }: { channel: Channel }) {
         {!expanded && hasOverflow ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-linear-to-t from-background to-transparent" />
         ) : null}
-      </div>
 
-      {selectedGroup ? (
-        <GroupModelsPanel
-          group={selectedGroup}
-          catalog={catalog}
-          loading={catalogLoading}
-          error={catalogError}
-          onOpenAll={() => setDialogOpen(true)}
-          onRetry={refetch}
-        />
-      ) : null}
+        {/* 模型面板做成绝对定位浮层：不参与卡片布局，避免撑高卡片、
+            打乱同一行卡片的高度对齐。anchor 是上面这块 relative 容器。 */}
+        {selectedGroup ? (
+          <div className="absolute inset-x-0 top-full z-30 mt-1">
+            <GroupModelsPanel
+              group={selectedGroup}
+              catalog={catalog}
+              loading={catalogLoading}
+              error={catalogError}
+              onOpenAll={() => setDialogOpen(true)}
+              onRetry={refetch}
+            />
+          </div>
+        ) : null}
+      </div>
 
       <GroupModelsDialog
         channel={channel}
